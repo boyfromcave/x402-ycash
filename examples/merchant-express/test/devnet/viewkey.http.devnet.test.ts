@@ -34,7 +34,7 @@ interface PaidLine {
 
 /**
  * Node A: a ycashd of the devnet's own binary, with node 1's consensus flags, its own datadir and
- * ports, connected to node 0 only. The devnet CLI cannot stop and start one node, so it runs here.
+ * ports, connected to nodes 0 and 1 only. The devnet CLI cannot stop and start one node, so it runs here.
  */
 class OfflineNode {
   readonly rpc: YcashRpc;
@@ -53,13 +53,13 @@ class OfflineNode {
     const node1 = ps.find((l) => l.includes(`-datadir=${devnetDir}/node1 `) || l.endsWith(`-datadir=${devnetDir}/node1`));
     if (!node1) throw new Error("devnet node 1 is not running");
     const flags = node1.split(/\s+/).slice(1).filter((a) => a.startsWith("-") && !a.startsWith("-datadir=") && !a.startsWith("-zmq"));
-    const conf = readFileSync(join(devnetDir, "node0", confName(devnetDir)), "utf8");
-    const node0Port = Number(/^port=(\d+)$/m.exec(conf)?.[1]);
+    // Two peers, nodes 0 and 1: with one, a 6.21.0 node A once stalled mid-catch-up for minutes.
+    const p2p = (n: number) => Number(/^port=(\d+)$/m.exec(readFileSync(join(devnetDir, `node${n}`, confName(devnetDir)), "utf8"))?.[1]);
     mkdirSync(datadir, { recursive: true });
     const user = "nodeA";
     const password = "rehearse-" + tx.bytesToHex(tx.randomPrivKey()).slice(0, 16);
     writeFileSync(join(datadir, confName(devnetDir)), `regtest=1\nrpcuser=${user}\nrpcpassword=${password}\nport=${p2pPort}\nrpcport=${rpcPort}\nlistenonion=0\n`);
-    this.args = [`-datadir=${datadir}`, ...flags, `-connect=127.0.0.1:${node0Port}`, "-listen=0"];
+    this.args = [`-datadir=${datadir}`, ...flags, `-connect=127.0.0.1:${p2p(0)}`, `-connect=127.0.0.1:${p2p(1)}`, "-listen=0"];
     this.rpc = new YcashRpc({ url: `http://127.0.0.1:${rpcPort}`, user, password });
   }
 
@@ -230,7 +230,7 @@ describeDevnet("the viewing-key merchant: offline issuer, viewing-key settlement
     const sweepTo = await d.wallet.getNewAddress();
     const opts: ZSendManyOptions = d.line === "v6" ? { minconf: 1, privacyPolicy: "AllowRevealedRecipients" } : { minconf: 1 };
     const sweeps: string[] = [];
-    for (const p of paid) sweeps.push(await nodeA.rpc.zSendManyAndWait(p.payTo, [{ address: sweepTo, amount: PRICE - 20_000n }], { ...opts, fee: 10_000n }));
+    for (const p of paid) sweeps.push(await nodeA.rpc.zSendManyAndWait(p.payTo, [{ address: sweepTo, amount: PRICE - 20_000n }], opts));
     await waitFor(async () => (await d.wallet.getRawMempool()).length >= sweeps.length, { timeoutMs: 60_000, what: "node A's sweeps in node 0's mempool" }).catch(() => undefined);
     await d.mine(1, d.stock);
     const got = BigInt(Math.round((await d.wallet.call<number>("getreceivedbyaddress", [sweepTo, 1])) * 1e8));

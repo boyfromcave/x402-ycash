@@ -120,6 +120,126 @@
           ]
         }
       ]
+    },
+    {
+      "line": "6",
+      "node": "/YcashCpp:6.21.0-rc1/",
+      "network": "ycash:regtest",
+      "viewingKey": "zxviewregtestsapling1q3jza5hwqqqqpqp3enn4plkge6dwvpxygdxt0qyrwlmyjq3zce6k4p3c2ek586llhlrrjkjcv9sm7y0gvjfr5h8c2uzydek8r774uk8ptqjh2qzyncvm8ya35skfwg5rxd6r0rlzyq77cx3hm35h9pdlzry2p75ehn4rmjugzmftzu7ned4vjychfj6dzh29pezxrl6drcwsc8ld7rkxxncla7h0s9gkzd3skcgh8nr5tnf7zkydqx88v36r7zdzzg0kkkm6pd58n9g6u8jz7",
+      "nodeAddresses": [
+        {
+          "rpc": "z_getnewaddress sapling",
+          "index": "2",
+          "address": "yregtestsapling13rllfjnp8xjl9vvrkyshm6gr60vdsqg6rlnd30dz626npna7n9rz287t90grw0l27cdwjkk7qr3"
+        },
+        {
+          "rpc": "z_getnewdiversifiedaddress",
+          "index": "3",
+          "address": "yregtestsapling18ecxzuknjzd3d6nd2cpymr9wkdutfjple0ydcanc22tfwzcu0vhfry6sdm80e8p64je9slgn0v4"
+        },
+        {
+          "rpc": "z_getnewdiversifiedaddress",
+          "index": "4",
+          "address": "yregtestsapling1w3zxcdslvp4ht5xs8ymy49n3uv7axn8swf8gawpgvtelzsd2yk2afqzq0945ddsljaaeuq3nnxm"
+        },
+        {
+          "rpc": "z_getnewdiversifiedaddress",
+          "index": "5",
+          "address": "yregtestsapling18vng5xpmlp4y969wreu24h2dlzwznpf9zwx07szwaqqx78gejlq7rvznv38y9eaddzvxx2djm2u"
+        }
+      ],
+      "rust": [
+        {
+          "start": "0",
+          "count": 12,
+          "addresses": [
+            {
+              "index": "2",
+              "address": "yregtestsapling13rllfjnp8xjl9vvrkyshm6gr60vdsqg6rlnd30dz626npna7n9rz287t90grw0l27cdwjkk7qr3"
+            },
+            {
+              "index": "3",
+              "address": "yregtestsapling18ecxzuknjzd3d6nd2cpymr9wkdutfjple0ydcanc22tfwzcu0vhfry6sdm80e8p64je9slgn0v4"
+            },
+            {
+              "index": "4",
+              "address": "yregtestsapling1w3zxcdslvp4ht5xs8ymy49n3uv7axn8swf8gawpgvtelzsd2yk2afqzq0945ddsljaaeuq3nnxm"
+            },
+            {
+              "index": "5",
+              "address": "yregtestsapling18vng5xpmlp4y969wreu24h2dlzwznpf9zwx07szwaqqx78gejlq7rvznv38y9eaddzvxx2djm2u"
+            },
+            {
+              "index": "6",
+              "address": "yregtestsapling1zlnqqur8d53awwc8sfqp3xhq2a2wldkupgavwlwpzu3k24y4wakl0f88snrnynq4zh4zstvvc40"
+            },
+            {
+              "index": "10",
+              "address": "yregtestsapling14cegn8f79hgvk92yw7jly955z562vke7e3pcplwh6quhxyfjvats4mzpmlhrhlfve6m6cx5d3h5"
+            },
+            {
+              "index": "13",
+              "address": "yregtestsapling1h68nfa04r9ncj36ujgjtcxqzey5s3aqqym4ppcczyewehe8w796nvtq32wshpszw6wvhyugvgt0"
+            },
+            {
+              "index": "14",
+              "address": "yregtestsapling1xydtt9y66kk3xuphr2lh49rak38vlx6ly749dyv4t4u7prxfl2nczlnln0rz4qectu2psfrx58k"
+            },
+            {
+              "index": "15",
+              "address": "yregtestsapling1f3puzx9qq6rshpmpcechueg8rl2xafq7nx5v4ft645duhfgmn3rgytd45n7r88hzwnm2zp4mj5r"
+            },
+            {
+              "index": "16",
+              "address": "yregtestsapling10a5pytu4ujjurnt3h6mj8qk39gfadqfy2l3jg4tjcuq0hxf793m685qec8hydv55th05ka2uu9w"
+            },
+            {
+              "index": "22",
+              "address": "yregtestsapling1t8ljknlwmewtz3q6p6vwrsfatk6jfsddz6r490pctqwf65hghjem0xvasqa0xwdwtzknc7k35ve"
+            },
+            {
+              "index": "26",
+              "address": "yregtestsapling1q7ucs5wyyv0ee0z4xqgsqemlduejrrx2ep9ch6af8vxqjwu2teq0d35yt6gag8turqrsyfc5uft"
+            }
+          ]
+        },
+        {
+          "start": "1099511627776",
+          "count": 4,
+          "addresses": [
+            {
+              "index": "1099511627777",
+              "address": "yregtestsapling1n6fewp6ndvzk5lkeu4kufegqh3ft5yrerdkwk0s088085fqre63874upmf0h6zk0hyvqye9359e"
+            },
+            {
+              "index": "1099511627778",
+              "address": "yregtestsapling1y59r3zmqa00pn5j28kccshxtcsh99euvg86f536uvhfwkprr0jn09h860j6390r4tqdpxl6zvc3"
+            },
+            {
+              "index": "1099511627779",
+              "address": "yregtestsapling186tnl0uzu70frehspqe3pps5s3rtehmkyxz6gsdfg0wtzcm0wgaequ9zgq4auywzfygxc43uh2l"
+            },
+            {
+              "index": "1099511627780",
+              "address": "yregtestsapling1mhppsl0vzlp09ez739dtc77863kwqw756thday0fdh293yw2kw7jyc8pr4vt7cde790zy80dfrq"
+            }
+          ]
+        },
+        {
+          "start": "9223372036854788153",
+          "count": 2,
+          "addresses": [
+            {
+              "index": "9223372036854788157",
+              "address": "yregtestsapling18gh296t72n4nxtk2yamu2wwrwwgw5hwkj63jncdtd8cn50fa3utytqsh4zvwlkvur82sk93y36u"
+            },
+            {
+              "index": "9223372036854788158",
+              "address": "yregtestsapling13wjv5zj0xhzu8aeq3c9tn5ufj4dr2ud4z7s7nzvlnvfp6uwk32trrulmx9udg6t0tr9g7utd7tz"
+            }
+          ]
+        }
+      ]
     }
   ],
   "mainnet": {
