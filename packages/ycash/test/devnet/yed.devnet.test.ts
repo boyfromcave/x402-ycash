@@ -280,6 +280,22 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
     return { payload, settle, v };
   }
 
+  /**
+   * The client's YED came home: the open's returnAddress is a Yellowback address of node 0's wallet
+   * (yed_getnewaddress), which lists the output at `txid:vout` with `cents`, and nothing sits at C.
+   */
+  async function yedHome(p: Party, channelId: string, txid: string, vout: number, cents: number): Promise<void> {
+    const rec = (await p.client.storage.get(channelId))!;
+    expect(rec.returnAddress).toMatch(/^yr/);
+    const c = T.hash160(T.pubkeyFromPriv(T.hexToBytes(rec.clientPrivKey)));
+    expect(await tokensOf(T.encodeAddress(NET, "yed", c))).toEqual([]);
+    expect(await tokensOf(rec.returnAddress!)).toMatchObject([{ txid, vout, cents }]);
+    await waitFor(async () => (await d.wallet.call<{ txid: string; vout: number; cents: number }[]>("yed_listunspent")).some((u) => u.txid === txid && u.vout === vout && u.cents === cents), {
+      timeoutMs: 15_000, what: `node 0's YED wallet to list ${txid}:${vout}`,
+    });
+    record(d.line, "X3 YED remainder home", { channelId, returnAddress: rec.returnAddress, txid, vout, cents });
+  }
+
   /** The open: refused below the funding depth (YED needs a block, X-F14), accepted once mined. */
   async function open(p: Party): Promise<{ channelId: string; first: string }> {
     const payload = wrap(p.req, (await p.client.createPaymentPayload(2, p.req)).payload);
@@ -347,6 +363,7 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
     const clientYr = T.encodeAddress(NET, "yed", T.p2pkhHash(T.hexToBytes(rec.clientScript))!);
     expect((await tokensOf(p.payTo.yr)).map((t) => t.cents)).toEqual([200]);
     expect((await tokensOf(clientYr)).map((t) => t.cents)).toEqual([100]);
+    await yedHome(p, channelId, p.closes[0]!.txid!, 1, 100);
     expect(await supply()).toBe(before);
   });
 
@@ -364,6 +381,7 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
     const clientYr = T.encodeAddress(NET, "yed", T.p2pkhHash(T.hexToBytes(rec.clientScript))!);
     expect((await tokensOf(p.payTo.yr)).map((t) => t.cents)).toEqual([100]);
     expect((await tokensOf(clientYr)).map((t) => t.cents)).toEqual([400]);
+    await yedHome(p, channelId, r.transaction, 1, 400);
     expect(await supply()).toBe(before);
   });
 
@@ -381,6 +399,7 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
     await mineOnPool(txid);
     const clientYr = T.encodeAddress(NET, "yed", T.p2pkhHash(T.hexToBytes(rec.clientScript))!);
     expect(await tokensOf(clientYr)).toMatchObject([{ txid, vout: 1, cents: 500 }]);
+    await yedHome(p, channelId, txid, 1, 500);
     expect(await tokensOf(p.payTo.yr)).toEqual([]);
     expect(await p.server.manager.close(channelId)).toBeUndefined(); // spent by the refund
     expect(await supply()).toBe(before);

@@ -95,6 +95,27 @@ describeDevnet("batch-settlement YEC channels on a live devnet", () => {
     return got;
   }
 
+  /**
+   * The client's remainder came home (the open's returnAddress, a node 0 wallet address): the
+   * spend's output to it holds `want`, node 0's wallet received it, and nothing pays the channel key C.
+   */
+  async function remainderHome(p: Party, channelId: string, txid: string, want: bigint): Promise<void> {
+    const rec = (await p.client.storage.get(channelId))!;
+    expect(rec.returnAddress).toBeDefined();
+    const home = T.addressToScript(rec.returnAddress!, NET);
+    const cScript = T.p2pkhScript(T.hash160(T.pubkeyFromPriv(T.hexToBytes(rec.clientPrivKey))));
+    const tx = T.parseTx(await d.stock.call<string>("getrawtransaction", [txid]));
+    expect(tx.vout.some((o) => T.equalBytes(o.scriptPubKey, cScript))).toBe(false);
+    expect(tx.vout.filter((o) => T.equalBytes(o.scriptPubKey, home)).reduce((s, o) => s + o.value, 0n)).toBe(want);
+    let got = -1n;
+    await waitFor(async () => {
+      got = BigInt(Math.round((await d.wallet.call<number>("getreceivedbyaddress", [rec.returnAddress, 1])) * 1e8));
+      return got === want;
+    }, { timeoutMs: 15_000, what: `the client's wallet to receive ${want} at ${rec.returnAddress}` }).catch(() => undefined);
+    expect(got).toBe(want);
+    record(d.line, "X2 remainder home", { channelId, returnAddress: rec.returnAddress, txid, remainderZat: want.toString() });
+  }
+
   /** Mines n blocks in batches: the harness reads every new block at once, and a big batch overflows the RPC work queue. */
   async function mineMany(n: number): Promise<void> {
     for (let left = n; left > 0; left -= 8) await d.mine(Math.min(8, left));
@@ -115,6 +136,7 @@ describeDevnet("batch-settlement YEC channels on a live devnet", () => {
     expect(await received(p.payTo, BigInt(N * 1000))).toBe(BigInt(N * 1000));
     const closeOut = await d.stock.getTxOut(closeTxid, 0, false);
     expect(closeOut?.value).toBe(Number(zatToYecString(N * 1000)));
+    await remainderHome(p, channelId, closeTxid, 1_100_000n - BigInt(N * 1000));
     // chain cost: two transactions against N exact payments
     const fundingTxid = channelId.split(":")[0]!;
     const sizes = await Promise.all([fundingTxid, closeTxid].map(async (id) => (await d.stock.call<string>("getrawtransaction", [id])).length / 2));
@@ -143,6 +165,7 @@ describeDevnet("batch-settlement YEC channels on a live devnet", () => {
     const r = await p.server.manager.settle(v, 0n);
     await mineOnStock(r.transaction);
     expect(await received(p.payTo, total)).toBe(total);
+    await remainderHome(p, channelId, r.transaction, 200_000n - total);
     record(d.line, "X2 dynamic pricing", { charges: charges.map(String), charged: total.toString(), highestVoucher: state.signedCumulative, closePaid: total.toString() });
   });
 
@@ -176,6 +199,7 @@ describeDevnet("batch-settlement YEC channels on a live devnet", () => {
     await mineOnStock(txid);
     expect(await d.tip()).toBeLessThan(rec.refundHeight);
     expect(await received(p.payTo, 2000n)).toBe(2000n);
+    await remainderHome(p, channelId, txid, 48_000n);
     record(d.line, "X2 margin close", { refundHeight: rec.refundHeight, closedAt: await d.tip(), margin: MARGIN });
   });
 
@@ -198,6 +222,8 @@ describeDevnet("batch-settlement YEC channels on a live devnet", () => {
     const out = await d.stock.getTxOut(txid, 0, false);
     expect(out).not.toBeNull();
     expect(await received(p.payTo, 0n)).toBe(0n);
+    // the refund goes to the return address by default: node 0's wallet gets it all back
+    await remainderHome(p, channelId, txid, T.parseTx(await d.stock.call<string>("getrawtransaction", [txid])).vout[0]!.value);
     // the server's close finds the channel spent by the refund
     expect(await p.server.manager.close(channelId)).toBeUndefined();
     record(d.line, "X2 refund", { refundHeight: rec.refundHeight, earlyRefusal: (err as SendRawTransactionError).message, refundZat: T.parseTx(T.serializeTxHex(early)).vout[0]!.value.toString() });

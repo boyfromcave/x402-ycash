@@ -5,7 +5,7 @@
 // supply is the same at the end as at the start (no case here burns).
 //
 //   scripts/devnet.sh up dd 231 && X402_DEVNET_JSON=…/dd-231/devnet.json npm run test:devnet:http
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
@@ -50,6 +50,14 @@ describeDevnet("YED over HTTP: exact at ≥ $1 and YED channels through the merc
   }
 
   /** The YED token records paying `address`, from node 0's index. */
+  /** Nothing ever sits at the channel key C: its key hash holds no token record. */
+  async function nothingAtC(storePath: string, channelId: string): Promise<{ returnAddress: string }> {
+    const rec = (JSON.parse(readFileSync(storePath, "utf8")) as { channels: Record<string, { returnAddress: string; clientPrivKey: string }> }).channels[channelId]!;
+    expect(rec.returnAddress).toBeDefined();
+    expect(await tokensOf(tx.encodeAddress(NETWORK, "yed", tx.hash160(tx.pubkeyFromPriv(tx.hexToBytes(rec.clientPrivKey)))))).toEqual([]);
+    return rec;
+  }
+
   async function tokensOf(address: string): Promise<{ txid: string; vout: number; cents: number }[]> {
     await d.syncBlocks();
     return d.wallet.call("yed_listtokens", [[address]]);
@@ -241,6 +249,11 @@ describeDevnet("YED over HTTP: exact at ≥ $1 and YED channels through the merc
     await mineOnPool(closed.transaction);
     expect((await d.wallet.yedDecodePayload(closeHex)).assignments).toEqual([{ vout: 0, cents: 150 }, { vout: 1, cents: 350 }]);
     expect((await tokensOf(merchantYed)).reduce((s, t) => s + t.cents, 0) - received).toBe(150);
+    // the client's $3.50 came home to node 0's YED wallet (the open's returnAddress), not to C
+    const home = await nothingAtC(store, channelId);
+    expect(await tokensOf(home.returnAddress)).toMatchObject([{ txid: closed.transaction, vout: 1, cents: 350 }]);
+    await waitFor(async () => (await d.wallet.call<{ txid: string; vout: number; cents: number }[]>("yed_listunspent")).some((u) => u.txid === closed.transaction && u.vout === 1 && u.cents === 350), { timeoutMs: 20_000, what: "node 0's YED wallet to list the remainder" });
+    record(d.line, "HTTP YED remainder home", { channelId, returnAddress: home.returnAddress, closeTxid: closed.transaction, cents: 350, wallet: "node 0 (yed_listunspent)" });
     const after = await runCli(["channel", "status", channelId, ...cliNode(store)]);
     expect(after.lines[0]).toMatchObject({ status: "closed", unspent: false, closeTxid: closed.transaction });
     expect(await supply()).toBe(before);
@@ -270,6 +283,10 @@ describeDevnet("YED over HTTP: exact at ≥ $1 and YED channels through the merc
     await mineOnPool(closed.transaction);
     expect((await d.wallet.yedDecodePayload(await d.wallet.call<string>("getrawtransaction", [closed.transaction]))).assignments).toEqual([{ vout: 0, cents: 100 }, { vout: 1, cents: 200 }]);
     expect((await tokensOf(merchantYed)).reduce((s, t) => s + t.cents, 0) - received).toBe(100);
+    // the client's $2.00 came home to the WIF key's own ye… address, not to C
+    const home = await nothingAtC(store, last.channelId);
+    expect(home.returnAddress).toBe(wifYed);
+    expect(await tokensOf(wifYed)).toMatchObject([{ txid: closed.transaction, vout: 1, cents: 200 }]);
     expect(await supply()).toBe(before);
     record(d.line, "HTTP YED WIF channel", { channelId: last.channelId, charged: 5, serverReceived: 100, clientRemainder: 200, closeTxid: closed.transaction });
   });
@@ -305,6 +322,7 @@ describeDevnet("YED over HTTP: exact at ≥ $1 and YED channels through the merc
     // the default destination is node 0's own YED wallet, which now holds the refund
     const walletYed = await d.wallet.call<{ txid: string; vout: number }[]>("yed_listunspent");
     expect(walletYed).toContainEqual(expect.objectContaining({ txid: out.transaction, vout: 1 }));
+    expect((await nothingAtC(store, ch.channelId)).returnAddress).toBe(out.to); // the open's returnAddress
     const status = await runCli(["channel", "status", ch.channelId, ...cliNode(store)]);
     expect(status.lines[0]).toMatchObject({ asset: "YED", status: "refunded", unspent: false, refundTxid: out.transaction });
     expect(await supply()).toBe(before);
