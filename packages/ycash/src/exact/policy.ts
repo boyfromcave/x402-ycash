@@ -1,7 +1,18 @@
 // The pure rules of the exact binding: networks, confirmation policy, the expiry window, the
 // requirement forms. Shared by client, server and facilitator so the three never disagree.
 import type { PaymentRequirements } from "@x402/core/types";
-import { ASSET_YEC, BLOCK_SECONDS, TX_EXPIRING_SOON_THRESHOLD, YCASH_NETWORKS, YCASH_MAINNET, YCASH_TESTNET, type YcashNetwork } from "../constants.js";
+import {
+  ASSET_YEC,
+  ASSET_YED,
+  BLOCK_SECONDS,
+  TX_EXPIRING_SOON_THRESHOLD,
+  YCASH_NETWORKS,
+  YCASH_MAINNET,
+  YCASH_TESTNET,
+  YED_MAX_OUTPUT_CENTS,
+  YED_MIN_OUTPUT_CENTS,
+  type YcashNetwork,
+} from "../constants.js";
 import { decodeAddress } from "../tx/index.js";
 import { ATM_SAPLING_PROOF, ATM_SAPLING_RESERVED, ATM_TRANSPARENT, FLOW_AUTHORIZATION, type ConfirmationPolicy } from "./types.js";
 
@@ -91,6 +102,33 @@ export function checkTransparentYecRequirements(req: PaymentRequirements): strin
     return `invalid payTo: ${(e as Error).message}`;
   }
   return null;
+}
+
+/**
+ * The form checks of a `transparent` YED requirement (Assets and Amounts): `amount` in cents in
+ * [100, 10,000,000] (XFER-1: a smaller YED output burns, ycash-dd/src/yellowback/params.cpp:18-19)
+ * and a Yellowback `payTo` of the requirements' network. A reason, or null.
+ */
+export function checkTransparentYedRequirements(req: PaymentRequirements): string | null {
+  if (!isYcashNetwork(req.network)) return `unsupported network ${req.network}`;
+  if (req.asset !== ASSET_YED) return `asset must be ${ASSET_YED}`;
+  if (typeof req.amount !== "string" || !CANONICAL_AMOUNT.test(req.amount)) return "amount must be a positive canonical integer";
+  const cents = BigInt(req.amount);
+  if (cents < BigInt(YED_MIN_OUTPUT_CENTS) || cents > BigInt(YED_MAX_OUTPUT_CENTS)) {
+    return `a YED amount must be ${YED_MIN_OUTPUT_CENTS}..${YED_MAX_OUTPUT_CENTS} cents ($1.00 to $100,000): a smaller output burns`;
+  }
+  if (!Number.isSafeInteger(req.maxTimeoutSeconds) || req.maxTimeoutSeconds <= 0) return "maxTimeoutSeconds must be a positive integer";
+  try {
+    if (decodeAddress(req.payTo, req.network).kind !== "yed") return "a YED payTo must be a Yellowback (ye…/yt…/yr…) address";
+  } catch (e) {
+    return `invalid payTo: ${(e as Error).message}`;
+  }
+  return null;
+}
+
+/** The form checks of a `transparent` requirement of either asset. */
+export function checkTransparentRequirements(req: PaymentRequirements): string | null {
+  return req.asset === ASSET_YED ? checkTransparentYedRequirements(req) : checkTransparentYecRequirements(req);
 }
 
 /** Method and flow checks shared by every `transparent` party: a reason, or null. */

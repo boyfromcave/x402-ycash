@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { exact } from "../../../src/index.js";
 import { InMemorySettlementStore, txidKey } from "../../../src/store/index.js";
-import { addressToScript, hexToBytes, parseTx, serializeTxHex, SIGHASH, txid } from "../../../src/tx/index.js";
+import { addressToScript, encodeAddress, hash160, hexToBytes, parseTx, pubkeyFromPriv, serializeTxHex, SIGHASH, txid } from "../../../src/tx/index.js";
 import { buildSigned, standardPayment } from "./build.js";
 import { FakeNode, NETWORK, paymentPayload, requirements, testKey } from "./fakeNode.js";
 
@@ -83,8 +83,8 @@ describe("rule 1: envelope and requirement forms", () => {
     facilitator = new exact.ExactYcashFacilitatorScheme(node, { acceptMempool: false });
     expect(await reason(verify(hex))).toBe(exact.ERR_REQUIREMENTS_MISMATCH);
   });
-  it("YED is not served here", async () => {
-    const req = { ...requirements(merchant.address), asset: "YED" };
+  it("YED on a stock node: yed_node_required, before anything else", async () => {
+    const req = { ...requirements(encodeAddress(NETWORK, "yed", hash160(pubkeyFromPriv(merchant.priv))), "250"), asset: "YED" };
     expect(await reason(verify(hex, req))).toBe(exact.ERR_YED_NODE_REQUIRED);
   });
   it("amount below dust, non-canonical, or a YED payTo is refused", async () => {

@@ -6,7 +6,8 @@ import { ASSET_YED, type YcashNetwork } from "../../constants.js";
 import { yecToZat, type YcashRpc } from "../../node/index.js";
 import type { SettlementStore } from "../../store/index.js";
 import { txidKey } from "../../store/index.js";
-import { addressToScript, equalBytes, feeFloor, hasShielded, hexToBytes, parseTx, txFee, txid as txidOf, type Tx } from "../../tx/index.js";
+import { addressToScript, encodeAddress, equalBytes, feeFloor, hasShielded, hexToBytes, p2pkhHash, parseTx, txFee, txid as txidOf, type Tx } from "../../tx/index.js";
+import { checkTransferVerdict, decodedTransferOf, findPayload, isFindPayloadFailure, sameAssignments, validateTransferAssignments, type Assignment } from "../../yed/index.js";
 import {
   ERR_AMOUNT_MISMATCH,
   ERR_ASSET_TRANSFER_METHOD,
@@ -24,12 +25,16 @@ import {
   ERR_TRANSACTION,
   ERR_YED_INPUT,
   ERR_YED_NODE_REQUIRED,
+  ERR_YED_PAYLOAD,
+  ERR_YED_UNCONFIRMED_INPUT,
+  ERR_YED_VERDICT,
 } from "../errors.js";
 import {
   assetTransferMethodOf,
   chainOfNetwork,
   checkTransparentMethod,
-  checkTransparentYecRequirements,
+  checkTransparentRequirements,
+  DUST_ZAT,
   expiryWindow,
   resolveConfirmationPolicy,
 } from "../policy.js";
@@ -39,7 +44,7 @@ import { SCHEME_EXACT, type ExactYcashTransparentPayload } from "../types.js";
 /** The RPCs the facilitator reads (and, in settle, `sendrawtransaction`). Any `YcashRpc` fits. */
 export type ExactFacilitatorRpc = Pick<
   YcashRpc,
-  "getBlockchainInfo" | "getBlockCount" | "getTxOut" | "verifyScripts" | "sendRawTransaction" | "capabilities" | "yedValidateRawTransaction"
+  "getBlockchainInfo" | "getBlockCount" | "getTxOut" | "verifyScripts" | "sendRawTransaction" | "capabilities" | "yedValidateRawTransaction" | "yedDecodePayload"
 >;
 
 export interface VerifyLimits {
@@ -68,6 +73,8 @@ export interface ResolvedPayment {
   /** Index of the `payTo` output (rule 4). */
   payToVout: number;
   required: number;
+  /** A YED payment: its TRANSFER as decoded locally (rule 4Y's pure half). */
+  yed?: { opReturnIndex: number; assignments: Assignment[] };
 }
 
 export interface VerifiedPayment extends ResolvedPayment {
@@ -96,8 +103,7 @@ export function resolvePayment(payload: PaymentPayload, req: PaymentRequirements
   }
   const method = checkTransparentMethod(req.extra);
   if (method) return fail(method.reason === "method" ? ERR_ASSET_TRANSFER_METHOD : method.reason === "flow" ? ERR_PAYMENT_FLOW : ERR_REQUIREMENTS_MISMATCH, method.message);
-  if (req.asset === ASSET_YED) return fail(ERR_YED_NODE_REQUIRED, "YED exact payments are not served by this facilitator (plan X3)");
-  const form = checkTransparentYecRequirements(req);
+  const form = checkTransparentRequirements(req);
   if (form) return fail(ERR_REQUIREMENTS_MISMATCH, form);
   const network = req.network as YcashNetwork;
   const policy = resolveConfirmationPolicy(req.extra, limits.defaultConfirmations);
@@ -121,12 +127,19 @@ export function resolvePayment(payload: PaymentPayload, req: PaymentRequirements
   if (tx.vin.length === 0 || tx.vout.length === 0) return fail(ERR_TRANSACTION, "transaction has no inputs or no outputs");
   if (tx.vin.length > limits.maxInputs) return fail(ERR_TRANSACTION, `more than ${limits.maxInputs} inputs`);
 
-  // Rule 4: recipient and amount.
+  // Rule 4 (YEC) or 4Y's pure half (YED): recipient and amount.
   const payToScript = addressToScript(req.payTo, network);
   const hits = tx.vout.flatMap((o, n) => (equalBytes(o.scriptPubKey, payToScript) ? [n] : []));
   if (hits.length !== 1) return fail(ERR_RECIPIENT_MISMATCH, `${hits.length} outputs pay payTo; exactly one must`);
   const payToVout = hits[0] as number;
-  if (tx.vout[payToVout]?.value !== BigInt(req.amount)) return fail(ERR_AMOUNT_MISMATCH, `the payTo output is not exactly ${req.amount} zatoshis`);
+  let yed: ResolvedPayment["yed"];
+  if (req.asset === ASSET_YED) {
+    const r = resolveYedTransfer(tx, payToVout, Number(req.amount));
+    if (!r.ok) return r;
+    yed = r.transfer;
+  } else if (tx.vout[payToVout]?.value !== BigInt(req.amount)) {
+    return fail(ERR_AMOUNT_MISMATCH, `the payTo output is not exactly ${req.amount} zatoshis`);
+  }
 
   // Rule 5: signature hash types.
   for (const [i, input] of tx.vin.entries()) {
@@ -134,7 +147,26 @@ export function resolvePayment(payload: PaymentPayload, req: PaymentRequirements
     if (bad) return fail(ERR_SIGHASH, `input ${i}: ${bad}`);
   }
   const id = txidOf(hexToBytes(hex));
-  return { ok: true, state: { network, hex, tx, txid: id, key: txidKey(network, id), payToVout, required: policy.confirmations } };
+  return { ok: true, state: { network, hex, tx, txid: id, key: txidKey(network, id), payToVout, required: policy.confirmations, ...(yed ? { yed } : {}) } };
+}
+
+/**
+ * Rule 4Y without the node: the payTo output is above dust, the transaction's one OP_RETURN is a
+ * TRANSFER whose assignments the overlay would register (vouts exist, distinct, not the OP_RETURN,
+ * each in [100, 10,000,000]), and exactly one assignment names the payTo output, for `amount`.
+ */
+function resolveYedTransfer(tx: Tx, payToVout: number, amountCents: number): { ok: true; transfer: NonNullable<ResolvedPayment["yed"]> } | Failure {
+  if ((tx.vout[payToVout]?.value ?? 0n) < DUST_ZAT) return fail(ERR_RECIPIENT_MISMATCH, `the payTo output is below the ${DUST_ZAT}-zatoshi dust threshold`);
+  const found = findPayload(tx.vout);
+  if (!found) return fail(ERR_YED_PAYLOAD, "no OP_RETURN: the transaction carries no TRANSFER");
+  if (isFindPayloadFailure(found)) return fail(ERR_YED_PAYLOAD, `no Yellowback payload (${found.error})`);
+  if (found.payload.type !== "transfer") return fail(ERR_YED_PAYLOAD, `a ${found.payload.type} payload, not a transfer`);
+  const assignments = [...found.payload.assignments];
+  const check = validateTransferAssignments(assignments, tx.vout.length, found.index);
+  if (!check.valid) return fail(ERR_YED_PAYLOAD, `assignment ${check.assignment ?? ""} ${check.error}`.replace("  ", " "));
+  const toPayTo = assignments.filter((a) => a.vout === payToVout);
+  if (toPayTo.length !== 1 || toPayTo[0]?.cents !== amountCents) return fail(ERR_AMOUNT_MISMATCH, `payTo is not assigned exactly ${amountCents} cents`);
+  return { ok: true, transfer: { opReturnIndex: found.index, assignments } };
 }
 
 /** Rule 2. */
@@ -156,6 +188,9 @@ export async function verifyTransparent(
   req: PaymentRequirements,
   limits: VerifyLimits,
 ): Promise<{ ok: true; state: VerifiedPayment } | Failure> {
+  // A YED payment needs the overlay's RPCs (rules 4Y, 9Y): refuse it first on a stock node.
+  const yellowback = (await rpc.capabilities()).yellowback;
+  if (req.asset === ASSET_YED && !yellowback) return fail(ERR_YED_NODE_REQUIRED, "a YED payment needs a facilitator node run with -experimentalfeatures -yellowback");
   const resolved = resolvePayment(payload, req, limits);
   if (!resolved.ok) return resolved;
   const s = resolved.state;
@@ -175,7 +210,16 @@ export async function verifyTransparent(
     if (!confirmed) return fail(ERR_INPUT_SPENT, `input ${i} (${txid}:${vout}) is unknown, unconfirmed or spent`);
     if (!(await rpc.getTxOut(txid, vout, true))) return fail(ERR_INPUT_SPENT, `input ${i} (${txid}:${vout}) is spent by a mempool transaction`);
     values.push(yecToZat(confirmed.value));
-    if (i === 0) payer = addressOfScript(hexToBytes(confirmed.scriptPubKey.hex), s.network);
+    if (i === 0) payer = payerOf(hexToBytes(confirmed.scriptPubKey.hex), s);
+  }
+
+  // Rule 4Y, the node's half: the overlay decodes the same TRANSFER (plan Y-9).
+  if (s.yed) {
+    const decoded = decodedTransferOf(await rpc.yedDecodePayload(s.hex));
+    if (!decoded) return fail(ERR_YED_PAYLOAD, "yed_decodepayload finds no TRANSFER", payer);
+    if (decoded.opReturnIndex !== s.yed.opReturnIndex || !sameAssignments(decoded.assignments, s.yed.assignments)) {
+      return fail(ERR_YED_PAYLOAD, "yed_decodepayload disagrees with the transaction's TRANSFER", payer);
+    }
   }
 
   // Rule 7: fee floor (SDK and facilitator policy, X-F3) and sanity cap.
@@ -195,13 +239,25 @@ export async function verifyTransparent(
     return fail(ERR_SCRIPT, scripts.errors.map((x) => `${x.txid}:${x.vout} ${x.error}`).join("; ") || "incomplete", payer);
   }
 
-  // Rule 9Y: on a Yellowback node, a YEC payment must not spend a YED-bearing coin (plan Y-4).
-  if ((await rpc.capabilities()).yellowback) {
-    const yed = await rpc.yedValidateRawTransaction(s.hex);
-    if (yed.yedIn !== 0) return fail(ERR_YED_INPUT, `the transaction spends ${yed.yedIn} YED cents, which a YEC payment would burn`, payer);
+  // Rule 9Y. YEC: on a Yellowback node, it must not spend a YED-bearing coin (plan Y-4). YED: the
+  // overlay's verdict is ok and nothing burns, every token input confirmed (plan Y-5, Y-7).
+  if (yellowback) {
+    const v = await rpc.yedValidateRawTransaction(s.hex);
+    if (s.yed) {
+      const problem = checkTransferVerdict(v);
+      if (problem) return fail(problem.problem === "unconfirmed_input" ? ERR_YED_UNCONFIRMED_INPUT : ERR_YED_VERDICT, problem.message, payer);
+    } else if (v.yedIn !== 0) {
+      return fail(ERR_YED_INPUT, `the transaction spends ${v.yedIn} YED cents, which a YEC payment would burn`, payer);
+    }
   }
 
   // Rule 10: not claimed (re-read: the claim may have landed while the lookups ran).
   if (await store.isClaimed(s.key)) return fail(ERR_DUPLICATE_SETTLEMENT, `${s.txid} is already claimed`, payer);
   return { ok: true, state: { ...s, payer, feeZat: fee } };
+}
+
+/** The response's `payer`: input 0's address, in the `ye…` form for a YED payment from a P2PKH coin. */
+export function payerOf(spk: Uint8Array, s: Pick<ResolvedPayment, "network" | "yed">): string {
+  const pkh = s.yed ? p2pkhHash(spk) : null;
+  return pkh ? encodeAddress(s.network, "yed", pkh) : addressOfScript(spk, s.network);
 }

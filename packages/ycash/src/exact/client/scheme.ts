@@ -2,10 +2,11 @@
 // "Transaction Construction"), signed but never broadcast, as Cardano's client does.
 import type { DefaultAsset, PaymentPayloadContext, PaymentPayloadResult, PaymentRequirements, SchemeNetworkClient } from "@x402/core/types";
 import { ASSET_YEC, ASSET_YED, type YcashNetwork } from "../../constants.js";
-import { addressToScript, equalBytes, parseTx } from "../../tx/index.js";
-import { chainOfNetwork, isYcashNetwork, checkTransparentMethod, checkTransparentYecRequirements, clientExpiryHeight, resolveConfirmationPolicy } from "../policy.js";
+import { addressToScript, equalBytes, parseTx, type Tx } from "../../tx/index.js";
+import { findPayload, isFindPayloadFailure, validateTransferAssignments } from "../../yed/index.js";
+import { chainOfNetwork, isYcashNetwork, checkTransparentMethod, checkTransparentRequirements, clientExpiryHeight, DUST_ZAT, resolveConfirmationPolicy } from "../policy.js";
 import { SCHEME_EXACT, type ExactYcashTransparentPayload } from "../types.js";
-import type { YcashClientSigner } from "./signer.js";
+import type { SignedPayment, YcashClientSigner } from "./signer.js";
 
 /**
  * YED is a dollar (cents, 2 decimals), so core's USD spend cap applies to it as to any default
@@ -36,27 +37,54 @@ export class ExactYcashScheme implements SchemeNetworkClient {
     // Refuse a 402 the facilitator would reject, before touching the wallet.
     const method = checkTransparentMethod(requirements.extra);
     if (method) throw new Error(method.message);
-    const form = checkTransparentYecRequirements(requirements);
+    const form = checkTransparentRequirements(requirements);
     if (form) throw new Error(form);
     if (!resolveConfirmationPolicy(requirements.extra, 1)) throw new Error("invalid confirmationPolicy");
     const network = requirements.network as YcashNetwork;
+    const yed = requirements.asset === ASSET_YED;
+    if (yed && !this.signer.signYedPayment) throw new Error("this signer cannot pay YED");
 
     // The network comes from the requirements and is checked against the client's own node.
     const chain = await this.signer.chainState();
     if (chain.chain !== chainOfNetwork(network)) throw new Error(`the signer's node runs ${chain.chain}, the requirements name ${network}`);
 
-    const amount = BigInt(requirements.amount);
     const expiryHeight = clientExpiryHeight(chain.height, requirements.maxTimeoutSeconds);
-    const signed = await this.signer.signPayment({ network, payTo: requirements.payTo, amount, expiryHeight, tip: chain.height, branchId: chain.branchId });
+    const base = { network, payTo: requirements.payTo, expiryHeight, tip: chain.height, branchId: chain.branchId };
+    let signed: SignedPayment;
+    if (yed) signed = await this.signer.signYedPayment!({ ...base, amountCents: Number(requirements.amount) }); // checked above
+    else signed = await this.signer.signPayment({ ...base, amount: BigInt(requirements.amount) });
 
     // A signer is pluggable: check its tx has the shape the facilitator will demand.
     const tx = parseTx(signed.hex);
     const payTo = addressToScript(requirements.payTo, network);
-    const hits = tx.vout.filter((o) => equalBytes(o.scriptPubKey, payTo));
-    if (hits.length !== 1 || hits[0]?.value !== amount) throw new Error("signer built a transaction that does not pay exactly amount to payTo");
+    const hits = tx.vout.flatMap((o, n) => (equalBytes(o.scriptPubKey, payTo) ? [n] : []));
+    if (hits.length !== 1) throw new Error("signer built a transaction that does not pay payTo exactly once");
+    const payToVout = hits[0] as number;
+    if (yed) {
+      const problem = yedShapeProblem(tx, payToVout, Number(requirements.amount));
+      if (problem) throw new Error(`signer built a YED transaction that ${problem}`);
+    } else if (tx.vout[payToVout]?.value !== BigInt(requirements.amount)) {
+      throw new Error("signer built a transaction that does not pay exactly amount to payTo");
+    }
     if (tx.lockTime !== 0 || tx.expiryHeight !== expiryHeight) throw new Error("signer built a transaction with the wrong nLockTime or nExpiryHeight");
 
     const payload: ExactYcashTransparentPayload = { transaction: signed.hex };
     return { x402Version, payload: { ...payload } };
   }
+}
+
+/**
+ * Rule 4Y as the client can check it without a node: one TRANSFER, exactly one assignment to the
+ * payTo vout of `amountCents`, every assignment encodable and in range, the payTo output above dust.
+ */
+function yedShapeProblem(tx: Tx, payToVout: number, amountCents: number): string | null {
+  if ((tx.vout[payToVout]?.value ?? 0n) < DUST_ZAT) return "puts dust on the payTo output";
+  const found = findPayload(tx.vout);
+  if (!found || isFindPayloadFailure(found) || found.payload.type !== "transfer") return "carries no TRANSFER payload";
+  const { assignments } = found.payload;
+  const check = validateTransferAssignments(assignments, tx.vout.length, found.index);
+  if (!check.valid) return `has an invalid assignment (${check.error})`;
+  const toPayTo = assignments.filter((a) => a.vout === payToVout);
+  if (toPayTo.length !== 1 || toPayTo[0]?.cents !== amountCents) return "does not assign exactly amount to payTo";
+  return null;
 }
