@@ -15,3 +15,4 @@ export * from "./saplingFacilitator.js";
 export * from "./saplingHandler.js";
 export * from "./builder.js";
 export * from "./saplingClient.js";
+export * from "./light.js";

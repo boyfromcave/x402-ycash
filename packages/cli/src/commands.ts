@@ -9,6 +9,12 @@ export type Out = (record: Record<string, unknown>) => void;
 
 const BATCH = "batch-settlement";
 
+/** The channel client; absent for a light-client-only CLI, which pays shielded methods only. */
+function batchOf(c: PayingClient): NonNullable<PayingClient["batch"]> {
+  if (!c.batch) throw new UsageError("channels need a transparent payer (--wif or a node wallet): with only --sapling-builder the CLI pays shielded methods");
+  return c.batch;
+}
+
 async function bodyOf(res: Response): Promise<unknown> {
   const text = await res.text();
   try {
@@ -63,7 +69,7 @@ export async function channelOpen(c: PayingClient, config: CliConfig, url: strin
     out({ msg: "no live channel for this route after the request" });
     return 1;
   }
-  out({ msg: "channel", ...(await c.batch.status(rec.channelId)) });
+  out({ msg: "channel", ...(await batchOf(c).status(rec.channelId)) });
   return code;
 }
 
@@ -73,7 +79,7 @@ export async function channelStatus(c: PayingClient, channelId: string | undefin
   for (const id of ids) {
     const rec = await c.storage.get(id);
     if (!rec) throw new UsageError(`no channel ${id} in the store`);
-    out({ ...(await c.batch.status(id)), asset: rec.asset, payTo: rec.payTo, ...(rec.closeTxid ? { closeTxid: rec.closeTxid } : {}), ...(rec.refundTxid ? { refundTxid: rec.refundTxid } : {}) });
+    out({ ...(await batchOf(c).status(id)), asset: rec.asset, payTo: rec.payTo, ...(rec.closeTxid ? { closeTxid: rec.closeTxid } : {}), ...(rec.refundTxid ? { refundTxid: rec.refundTxid } : {}) });
   }
   if (ids.length === 0) out({ msg: "no channels in the store" });
   return 0;
@@ -90,7 +96,7 @@ export async function channelClose(c: PayingClient, url: string, channelId: stri
   const rec = channelId ? await c.storage.get(channelId) : await c.storage.findLive(offerOf(accept));
   if (!rec) throw new UsageError(channelId ? `no channel ${channelId} in the store` : `no live channel for ${url}`);
   if (rec.offerKey !== offerOf(accept)) throw new UsageError(`channel ${rec.channelId} is not a channel of ${url}'s offer`);
-  const close = await c.batch.closePayload(rec.channelId);
+  const close = await batchOf(c).closePayload(rec.channelId);
   const payload: PaymentPayload = { x402Version: 2, ...(pr.resource ? { resource: pr.resource } : {}), accepted: accept, payload: close.payload };
   const res = await baseFetch(url, { headers: c.http.encodePaymentSignatureHeader(payload) });
   const settlement = settlementOf(res);
@@ -99,7 +105,7 @@ export async function channelClose(c: PayingClient, url: string, channelId: stri
     out({ msg: "close refused", status: res.status, ...(settlement ? { settlement } : {}), body });
     return 1;
   }
-  await c.batch.markClosed(rec.channelId, settlement.transaction);
+  await batchOf(c).markClosed(rec.channelId, settlement.transaction);
   // The close voucher's cumulative: the charged total, or $1.00 for a YED channel charged less (X-F41).
   out({ msg: "closed", channelId: rec.channelId, asset: rec.asset, charged: rec.charged, cumulative: String(close.payload.cumulative), transaction: settlement.transaction, settlement });
   return 0;
@@ -138,7 +144,7 @@ export async function channelRefund(c: PayingClient, config: CliConfig, channelI
     : rec.returnAddress
       ? tx.hexToBytes(rec.clientScript)
       : await legacyRefundScript(config, isYed);
-  const txid = await c.batch.refund(channelId, { toScript });
+  const txid = await batchOf(c).refund(channelId, { toScript });
   const record: Record<string, unknown> = { msg: "refunded", channelId, asset: rec.asset, transaction: txid };
   if (isYed) {
     // The TRANSFER as broadcast (vout 1 is the refund output): proof the YED came back, nothing burned.

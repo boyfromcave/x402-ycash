@@ -1,14 +1,15 @@
 // Run: RESOURCE_URL=http://127.0.0.1:4021/exact/quote AGENT_DEVNET_JSON=…/devnet.json REQUESTS=10 npm start -w x402-ycash-example-agent-client
 // (AGENT_WIF for a local key, AGENT_LWD_URL with AGENT_WIF for no node at all, AGENT_SHIELDED_FROM
-// for sapling-proof, AGENT_SAPLING_BUILDER for sapling; see the README's quick start).
+// for sapling-proof, AGENT_SAPLING_BUILDER for sapling; AGENT_SAPLING_BUILDER=http://… (x402-light serve)
+// alone for a private agent with no node at all; see the README's quick start and "Private agents").
 import { createAgent } from "./agent.js";
 import { loadAgentConfig } from "./config.js";
 
 const config = loadAgentConfig();
 const agent = createAgent(config);
-const who = config.signer.kind === "wif" ? `wif ${config.signer.address}` : `node wallet ${config.node?.url}`;
-const chain = config.lwd ? `lightwalletd ${config.lwd.url}` : `node ${config.node?.url}`;
-console.log(JSON.stringify({ msg: "agent", url: config.url, requests: config.requests, network: config.network, signer: who, chain, schemes: agent.schemes, maxPaymentZat: config.maxPaymentZat, maxPaymentYedCents: config.maxPaymentYedCents }));
+const who = config.signer.kind === "wif" ? `wif ${config.signer.address}` : config.signer.kind === "none" ? `light client ${config.light?.url} (shielded only)` : `node wallet ${config.node?.url}`;
+const chain = config.lwd ? `lightwalletd ${config.lwd.url}` : config.node ? `node ${config.node.url}` : `light client ${config.light?.url}`;
+console.log(JSON.stringify({ msg: "agent", url: config.url, requests: config.requests, network: config.network, signer: who, chain, nodeRpc: config.node?.url ?? null, schemes: agent.schemes, maxPaymentZat: config.maxPaymentZat, maxPaymentYedCents: config.maxPaymentYedCents }));
 
 let paid = 0;
 for (let i = 1; i <= config.requests; i++) {

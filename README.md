@@ -220,9 +220,9 @@ The server must be lightwalletd-dd (`packages/ycash/proto/` is vendored from it)
 cannot be told apart from plain coins, as on a stock node. Its node needs `-insightexplorer` and
 `-txindex` (the devnet sets both on node 0). Three things differ from a node:
 
-- **Shielded payments still need a node wallet.** `sapling-proof` pays with `z_sendmany`;
-  lightwalletd holds no wallet, and this SDK has no Sapling builder, so `AGENT_SHIELDED_FROM` and
-  `--shielded-from` need `AGENT_DEVNET_JSON`/`AGENT_RPC_*` or `--devnet`/`--rpc-url`.
+- **Shielded payments need a Sapling wallet.** lightwalletd holds none: `AGENT_SHIELDED_FROM` and
+  `--shielded-from` (`z_sendmany`) need `AGENT_DEVNET_JSON`/`AGENT_RPC_*` or `--devnet`/`--rpc-url`,
+  or the agent uses the Rust light client instead ([Private agents](#private-agents-a-sapling-key-and-lightwalletd)).
 - **Mempool spends are invisible.** `GetAddressUtxos` and `GetAddressTokens` read the node's
   indexes, which hold confirmed outputs and are not updated by mempool spends, and `GetMempoolTx`
   sends only transactions with Sapling parts. The agent's reservation file is what keeps it off a
@@ -230,6 +230,43 @@ cannot be told apart from plain coins, as on a stock node. Its node needs `-insi
   broadcast refusal. Change of an unconfirmed payment is spendable once it is mined.
 - **The branch id is the tip's.** `GetLightdInfo` reports `consensus.chaintip`, not `nextblock`, so
   on the one block before a network upgrade activates a payment signed now would be refused.
+
+### Private agents: a Sapling key and lightwalletd
+
+An agent that pays only shielded YEC needs no node, no WIF and no wallet of its own beyond one
+Sapling spending key: the Rust light client [`light/`](light/README.md) (`x402-light`) syncs its notes
+from lightwalletd-dd, builds, proves and signs. Point the agent (`AGENT_SAPLING_BUILDER`) or the CLI
+(`--sapling-builder`) at `x402-light serve` and nothing else:
+
+```
+cd light && cargo build --release && cd ..        # needs protoc; proving parameters as in light/README.md
+# start x402-light against lightwalletd-dd and import the key (from z_exportkey, or a BIP-39 phrase);
+# it prints AGENT_SAPLING_BUILDER=http://127.0.0.1:PORT and keeps syncing in the background
+X402_LIGHT_KEY=secret-extended-key-regtest1… scripts/light-agent.sh start --data ~/.x402-light \
+  --lwd 127.0.0.1:9067 --network regtest --birthday <height>
+RESOURCE_URL=http://127.0.0.1:4021/shielded/private-report AGENT_SAPLING_BUILDER=http://127.0.0.1:PORT \
+  MAX_PAYMENT_ZAT=5000000 npm start -w x402-ycash-example-agent-client
+npm start -s -w x402-ycash-cli -- pay http://127.0.0.1:4021/shielded/report --sapling-builder http://127.0.0.1:PORT
+scripts/light-agent.sh stop --data ~/.x402-light
+```
+
+- **`sapling`** (authorization flow): the light client's `build` returns a signed transaction it does
+  not broadcast; the agent sets nExpiryHeight to tip + 3 + ⌈maxTimeoutSeconds/75⌉ from the light
+  client's lightwalletd tip. The facilitator verifies it, the resource runs, then settle broadcasts it.
+- **`sapling-proof`** (upfront): the light client's `send` pays the per-request address with the
+  memo through lightwalletd, and the agent presents the txid (`LightClientShieldedPayer`).
+- With only `AGENT_SAPLING_BUILDER=http://…` the agent is **private-only**: `exact` with
+  `sapling-proof` and `sapling`; transparent and channel routes are refused. Add a node or a WIF key
+  (with `AGENT_LWD_URL`) to pay those too; the light client then still pays both shielded methods
+  unless `AGENT_SHIELDED_FROM` names a node wallet source. A command builder (not `http(s)://`) is
+  only a `sapling` builder and needs a node for the tip.
+- Fees: the light client pays the ZIP-317 conventional fee (10,000 zat for one spend and two
+  outputs) and refuses a fixed `fee` below the facilitator's floor max(1000, 500 · max(2, logical
+  actions)). Spendable notes need one confirmation; change of a payment is spendable once mined.
+- Proven end to end on both node lines (`examples/merchant-express/test/devnet/light.http.devnet.test.ts`,
+  run with `X402_LWD_URL` and `X402_LIGHT_BIN`): build + prove ≈ 2.3–2.7 s, a paid request ≈ 3.5–4.8 s.
+  `sapling` stays opt-in on the facilitator (`X402_SHIELDED_METHODS`) and gated on mainnet
+  (`X402_SAPLING_MAINNET_OK=1`) until it has run on mainnet ([runbook](docs/mainnet-runbook.md)).
 
 ## CLI
 

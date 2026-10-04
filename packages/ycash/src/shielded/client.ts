@@ -94,27 +94,41 @@ export class ShieldedExactClient {
   }
 
   /**
-   * The requirement is one this client can pay, on the chain its node is on, before any money moves:
-   * an unexpired `exact` YEC `sapling-proof` upfront offer with a well-formed memo and a Sapling payTo.
+   * The requirement is one this client can pay, on the chain its node is on, before any money moves.
    *
    * @param requirements - The requirement to pay.
    * @returns The network and the source's privacy tier.
    * @throws Error naming the first check that fails.
    */
   private async check(requirements: PaymentRequirements): Promise<{ network: YcashNetwork; tier: PrivacyTier }> {
-    const network = requirements.network as YcashNetwork;
-    if (!YCASH_NETWORKS.includes(network)) throw new Error(`not a Ycash network: ${requirements.network}`);
-    if (requirements.scheme !== SCHEME_EXACT || requirements.asset !== ASSET_YEC) throw new Error("not an exact YEC requirement");
-    const extra = requirements.extra ?? {};
-    if (extra.assetTransferMethod !== ASSET_TRANSFER_METHOD_SAPLING_PROOF) throw new Error("not a sapling-proof requirement");
-    if (extra.paymentFlow !== PAYMENT_FLOW_UPFRONT) throw new Error("sapling-proof requires paymentFlow upfront");
-    if (typeof extra.memo !== "string" || !MEMO_REGEX.test(extra.memo)) throw new Error("extra.memo is missing or malformed");
-    if (!/^[1-9]\d*$/.test(requirements.amount)) throw new Error(`bad amount ${requirements.amount}`);
-    if (!requirements.payTo.startsWith(SAPLING_HRP[network] + "1")) throw new Error(`payTo is not a ${network} Sapling address`);
-    const now = this.config.now ? this.config.now() : Math.floor(Date.now() / 1000);
-    if (typeof extra.expiresAt !== "number" || extra.expiresAt <= now) throw new Error("the requirement has expired");
+    const network = checkSaplingProofRequirement(requirements, this.config.now);
     const chain = (await this.config.rpc.getBlockchainInfo()).chain;
     if (chain !== CHAIN_OF[network]) throw new Error(`the payer node is on ${chain}, not ${network}`);
     return { network, tier: tierOf(this.config.from, network) };
   }
+}
+
+/**
+ * The checks of a `sapling-proof` requirement that need no wallet: an unexpired `exact` YEC
+ * `sapling-proof` upfront offer with a well-formed memo and a Sapling payTo of its network. Shared by
+ * every sapling-proof payer (node wallet or light client).
+ *
+ * @param requirements - The requirement to pay.
+ * @param now - Unix seconds; injectable for tests.
+ * @returns The network.
+ * @throws Error naming the first check that fails.
+ */
+export function checkSaplingProofRequirement(requirements: PaymentRequirements, now?: () => number): YcashNetwork {
+  const network = requirements.network as YcashNetwork;
+  if (!YCASH_NETWORKS.includes(network)) throw new Error(`not a Ycash network: ${requirements.network}`);
+  if (requirements.scheme !== SCHEME_EXACT || requirements.asset !== ASSET_YEC) throw new Error("not an exact YEC requirement");
+  const extra = requirements.extra ?? {};
+  if (extra.assetTransferMethod !== ASSET_TRANSFER_METHOD_SAPLING_PROOF) throw new Error("not a sapling-proof requirement");
+  if (extra.paymentFlow !== PAYMENT_FLOW_UPFRONT) throw new Error("sapling-proof requires paymentFlow upfront");
+  if (typeof extra.memo !== "string" || !MEMO_REGEX.test(extra.memo)) throw new Error("extra.memo is missing or malformed");
+  if (!/^[1-9]\d*$/.test(requirements.amount)) throw new Error(`bad amount ${requirements.amount}`);
+  if (!requirements.payTo.startsWith(SAPLING_HRP[network] + "1")) throw new Error(`payTo is not a ${network} Sapling address`);
+  const t = now ? now() : Math.floor(Date.now() / 1000);
+  if (typeof extra.expiresAt !== "number" || extra.expiresAt <= t) throw new Error("the requirement has expired");
+  return network;
 }

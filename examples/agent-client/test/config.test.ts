@@ -54,7 +54,7 @@ describe("loadAgentConfig", () => {
   it("requires a signer and sane numbers", () => {
     expect(() => loadAgentConfig({})).toThrow(/needs its node/);
     expect(() => loadAgentConfig({ AGENT_WIF: wifRegtest })).toThrow(/needs its node/);
-    expect(() => loadAgentConfig({ ...node, AGENT_SIGNER: "hsm" })).toThrow(/"wif" or "node"/);
+    expect(() => loadAgentConfig({ ...node, AGENT_SIGNER: "hsm" })).toThrow(/"wif", "node" or "none"/);
     expect(() => loadAgentConfig({ ...node, AGENT_WIF: wifRegtest, REQUESTS: "0" })).toThrow(/REQUESTS/);
     expect(() => loadAgentConfig({ ...node, AGENT_WIF: wifRegtest, MAX_PAYMENT_ZAT: "$1" })).toThrow(/MAX_PAYMENT_ZAT/);
     expect(() => loadAgentConfig({ ...node, AGENT_WIF: wifRegtest, X402_NETWORK: "ycash:devnet" })).toThrow(/X402_NETWORK/);
@@ -77,6 +77,30 @@ describe("createAgent", () => {
   });
 });
 
+describe("a private agent: the light client alone (AGENT_SAPLING_BUILDER=http://… x402-light serve)", () => {
+  it("needs no node, no lightwalletd client and no WIF; registers only the shielded methods", () => {
+    const c = loadAgentConfig({ AGENT_SAPLING_BUILDER: "http://127.0.0.1:1/" });
+    expect(c.signer).toEqual({ kind: "none" });
+    expect(c.node).toBeUndefined();
+    expect(c.lwd).toBeUndefined();
+    expect(c.light?.url).toBe("http://127.0.0.1:1/");
+    expect(c.reservationsPath).toMatch(/x402-ycash-reservations-light-[0-9a-f]{16}\.json$/);
+    expect(createAgent(c).schemes).toEqual(["exact (sapling-proof, sapling)"]);
+  });
+
+  it("refuses a command builder alone (no tip, no sapling-proof payer) and AGENT_SIGNER=none without the light client", () => {
+    expect(() => loadAgentConfig({ AGENT_SAPLING_BUILDER: "x402-light build" })).toThrow(/needs its node/);
+    expect(() => loadAgentConfig({ ...node, AGENT_SIGNER: "none" })).toThrow(/AGENT_SAPLING_BUILDER/);
+  });
+
+  it("refuses a transparent 402: there is no transparent payer", async () => {
+    const pr = { x402Version: 2, resource: { url: "http://shop/exact/quote", description: "", mimeType: "" }, accepts: [{ scheme: "exact", network: "ycash:regtest", asset: "YEC", amount: "1000", payTo: "sm1x", maxTimeoutSeconds: 60, extra: { assetTransferMethod: "transparent", areFeesSponsored: false } }] };
+    const res = new Response("{}", { status: 402, headers: { "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(pr)).toString("base64") } });
+    const a = createAgent(loadAgentConfig({ AGENT_SAPLING_BUILDER: "http://127.0.0.1:1/" }), undefined, async () => res.clone());
+    await expect(a.call("http://shop/exact/quote")).rejects.toThrow(/shielded methods only/);
+  });
+});
+
 describe("sapling (AGENT_SAPLING_BUILDER)", () => {
   const MEMO = "x402:" + "d4".repeat(32);
   const offer = (payTo: string) => ({
@@ -92,7 +116,9 @@ describe("sapling (AGENT_SAPLING_BUILDER)", () => {
 
   it("reads the builder, joins sapling to exact, and refuses sapling routes cleanly without one", async () => {
     expect(loadAgentConfig({ ...node, AGENT_SAPLING_BUILDER: "x402-light build" }).saplingBuilder).toBe("x402-light build");
-    expect(createAgent(loadAgentConfig({ ...node, AGENT_SAPLING_BUILDER: "http://127.0.0.1:1/" })).schemes).toEqual(["exact (transparent, sapling)", "batch-settlement"]);
+    // An http(s) builder is x402-light serve: it pays sapling-proof too (send), unless a node source is named.
+    expect(createAgent(loadAgentConfig({ ...node, AGENT_SAPLING_BUILDER: "http://127.0.0.1:1/" })).schemes).toEqual(["exact (transparent, sapling-proof, sapling)", "batch-settlement"]);
+    expect(createAgent(loadAgentConfig({ ...node, AGENT_SAPLING_BUILDER: "x402-light build" })).schemes).toEqual(["exact (transparent, sapling)", "batch-settlement"]);
     const pr = required("yregtestsapling1x");
     const res = new Response("{}", { status: 402, headers: { "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(pr)).toString("base64") } });
     const a = createAgent(loadAgentConfig({ ...node, MAX_PAYMENT_ZAT: "5000000" }), undefined, async () => res.clone());

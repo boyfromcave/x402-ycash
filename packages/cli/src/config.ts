@@ -4,7 +4,7 @@
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
-import { ASSET_YEC, ASSET_YED, LwdClient, tx, YCASH_NETWORKS, YcashRpc, type YcashAsset, type YcashNetwork } from "x402-ycash-mechanism";
+import { ASSET_YEC, ASSET_YED, LightClient, LwdClient, tx, YCASH_NETWORKS, YcashRpc, type YcashAsset, type YcashNetwork } from "x402-ycash-mechanism";
 
 export interface CliConfig {
   network: YcashNetwork;
@@ -21,6 +21,12 @@ export interface CliConfig {
   shieldedFrom?: string;
   /** sapling: the Sapling transaction builder, an http(s) JSON-RPC URL or a shell command (shielded/builder.ts). */
   saplingBuilder?: string;
+  /**
+   * The light client behind an http(s) --sapling-builder (`x402-light serve`): it builds `sapling`
+   * payments, gives the tip when there is no node, and pays `sapling-proof` unless --shielded-from is set.
+   * Alone (no node, no --lwd, no --wif) the CLI pays shielded methods only.
+   */
+  light?: LightClient;
   /** Channel records, with their keys: a wallet file. */
   channelStorePath: string;
   maxPaymentZat: bigint;
@@ -69,7 +75,9 @@ payer:               --wif / X402_WIF (a local key; default: the node's wallet s
                      --shielded-from / X402_SHIELDED_FROM (pays sapling-proof routes from this address)
                      --sapling-builder / X402_SAPLING_BUILDER (pays sapling routes with transactions from this
                      builder: an http(s) URL of x402-light serve, or a shell command; build {to, amountZat,
-                     memoHex, expiryHeight?} -> {txHex, txid}; without it sapling routes are refused)
+                     memoHex, expiryHeight?} -> {txHex, txid}; without it sapling routes are refused). An http(s)
+                     URL is x402-light serve: it also pays sapling-proof (send) unless --shielded-from is set,
+                     and alone (no node, --lwd or --wif) it is a private payer: shielded methods only, no channels
 other:               --network / X402_NETWORK (default ycash:regtest), --channels FILE / X402_CHANNEL_STORE
                      (default ~/.x402-ycash/channels.json), --max-payment ZAT / X402_MAX_PAYMENT_ZAT (default 1000000),
                      --max-deposit ZAT / X402_MAX_DEPOSIT_ZAT (default 100000000, 1 YEC), --reservations FILE /
@@ -213,7 +221,8 @@ export function loadCliConfig(args: ParsedArgs, env: Env = process.env, node?: Y
   const channelStorePath = f.channels ?? env.X402_CHANNEL_STORE ?? join(homedir(), ".x402-ycash", "channels.json");
   const rpc = node ?? nodeOf(f, env);
   const lwd = lwdOf(f, env);
-  if (!rpc && !lwd) throw new UsageError("no node: pass --devnet devnet.json, --rpc-url with credentials, or --lwd host:port (or set X402_DEVNET_JSON / X402_RPC_URL / X402_LWD_URL)");
+  const light = saplingBuilder && /^https?:\/\//.test(saplingBuilder) ? new LightClient(saplingBuilder) : undefined;
+  if (!rpc && !lwd && !(light && !wif)) throw new UsageError("no node: pass --devnet devnet.json, --rpc-url with credentials, or --lwd host:port (or set X402_DEVNET_JSON / X402_RPC_URL / X402_LWD_URL); or --sapling-builder http://… (x402-light serve) alone for shielded payments");
   if (lwd && !wif) throw new UsageError("--lwd needs --wif: lightwalletd holds no wallet, so a local key pays");
   if (shieldedFrom && !rpc) throw new UsageError("--shielded-from needs a node wallet (--devnet or --rpc-url): lightwalletd cannot pay sapling-proof");
   return {
@@ -231,6 +240,7 @@ export function loadCliConfig(args: ParsedArgs, env: Env = process.env, node?: Y
     ...(wif ? { wif } : {}),
     ...(shieldedFrom ? { shieldedFrom } : {}),
     ...(saplingBuilder ? { saplingBuilder } : {}),
+    ...(light ? { light } : {}),
     ...(depositZat !== undefined ? { depositZat } : {}),
     ...(maxDepositZat !== undefined ? { maxDepositZat } : {}),
     ...(maxCloseFeeZat !== undefined ? { maxCloseFeeZat } : {}),

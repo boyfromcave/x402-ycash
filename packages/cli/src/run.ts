@@ -38,6 +38,7 @@ export async function run(argv: string[], env: Record<string, string | undefined
     const f = deps.fetch ?? fetch;
     if (cmd === "pay") return await pay(client, config, need(sub, "<url>"), io.out, f);
     if (cmd === "channel") {
+      if (!client.batch) throw new UsageError("channels need a transparent payer (--wif or a node wallet): with only --sapling-builder the CLI pays shielded methods");
       switch (sub) {
         case "open":
           return await channelOpen(client, config, need(a1, "<url>"), io.out, f);

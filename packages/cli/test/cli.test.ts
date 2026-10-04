@@ -20,6 +20,22 @@ describe("configuration", () => {
     await expect(none.client.createPaymentPayload({ x402Version: 2, accepts: [req], resource: { url: "x", description: "", mimeType: "" } } as never)).rejects.toThrow(/no Sapling transaction builder/);
   });
 
+  it("--sapling-builder http://… alone is a private payer: no node, shielded methods only, channels refused", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "x402-cli-light-"));
+    const c = loadCliConfig(parseCli(["pay", "x", "--sapling-builder", "http://127.0.0.1:9/", "--channels", join(dir, "c.json")]), {});
+    expect(c.node).toBeUndefined();
+    expect(c.light?.url).toBe("http://127.0.0.1:9/");
+    const p = buildClient(c);
+    expect(p.batch).toBeUndefined();
+    const transparent = { scheme: "exact", network: NET, asset: "YEC", amount: "1", payTo: "sm1x", maxTimeoutSeconds: 60, extra: { assetTransferMethod: "transparent" } };
+    await expect(p.client.createPaymentPayload({ x402Version: 2, accepts: [transparent], resource: { url: "x", description: "", mimeType: "" } } as never)).rejects.toThrow(/shielded methods only/);
+    expect(() => loadCliConfig(parseCli(["pay", "x", "--sapling-builder", "x402-light build"]), {})).toThrow(/no node/);
+    const errs: string[] = [];
+    const code = await run(["channel", "status", "--sapling-builder", "http://127.0.0.1:9/", "--channels", join(dir, "c.json")], {}, { out: () => undefined, err: (l) => errs.push(l) });
+    expect(code).toBe(2);
+    expect(errs.join("")).toMatch(/channels need a transparent payer/);
+  });
+
   it("takes flags over the environment, with defaults", () => {
     const c = loadCliConfig(parseCli(["pay", "http://x", "--count", "3", "--network", "ycash:testnet", "--channels", "/c.json"]), { ...devnetEnv, X402_NETWORK: "ycash:mainnet", X402_CHANNEL_STORE: "/env.json" });
     expect(c).toMatchObject({ network: "ycash:testnet", count: 3, channelStorePath: "/c.json", maxPaymentZat: 1_000_000n });

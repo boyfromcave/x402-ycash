@@ -274,6 +274,15 @@ Order of runs:
 5. **X4a** (shielded): one `sapling-proof` payment from a Sapling address of the agent's wallet
    (`X402_SHIELDED_FROM=ys1…`, `x402-ycash pay <merchant>/shielded/report`), in the viewing-key
    layout of [Keys](#4-keys), then one sweep from node A.
+6. **X4b** (`sapling`, facilitator-submitted): **stays gated on mainnet until this run.** The
+   facilitator refuses to start with `sapling` in `X402_SHIELDED_METHODS` on `ycash:mainnet` unless
+   `X402_SAPLING_MAINNET_OK=1` is set, and the merchant offers
+   `/shielded/private-report` only when `/supported` lists it. The run: a private agent with only a
+   Sapling key and a mainnet lightwalletd-dd (`scripts/light-agent.sh start --network mainnet`,
+   README "Private agents") pays `/shielded/private-report` once (`sapling`) and `/shielded/report`
+   once (`sapling-proof`), on each node line, with the receipts verified. Proven on regtest on both
+   lines (x402 plan X4b, chunk `lighte2e`); do not set `X402_SAPLING_MAINNET_OK` for production
+   before this step has passed and the plan's status records it.
 
 ## 6. What to check
 
