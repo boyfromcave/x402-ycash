@@ -6,7 +6,7 @@ tests, e2e, examples, a changeset and a publishing workflow, and PR 3 adds other
 repository is where the Ycash bindings are built and proved. The upstream contribution is
 **generated** from it, so it can be refreshed after every change here.
 
-**Status (2026-10-04): staged locally, not published.** No issue, PR or package has been opened or
+**Status (2026-10-04, chunk `final2`): staged locally, not published.** No issue, PR or package has been opened or
 pushed. The owner decides when (plan X-9). The staged branches, the upstream checks that pass and
 fail, the drafted PR bodies and the owner's open decisions are in
 `wt/scratch/x402-upstream-prep/PUBLISHING.md` in the Yellowback workspace.
@@ -87,31 +87,63 @@ When `fork.patch` no longer applies (upstream moved): stage onto the older base,
 branch onto the new upstream, resolve the conflicts there, and regenerate the patch:
 `git -C <fork> diff main ycash-binding -- .github e2e examples typescript/.changeset typescript/README.md typescript/package.json > tools/upstream/fork.patch`.
 
-## Upstream checks (2026-10-04)
+## Upstream checks (2026-10-04, chunk `final2`)
 
-Restaged from `x402/final` (`47db56e`, on `main` at `add0578`) into the fork: `ycash-spec` at
-`c93dcb49`, `ycash-binding` at `778e1e24`. Node 24.13.0, pnpm 11.1.1.
+Restaged from `x402/final2` (`ec52b4e`, on `main` at `d4db4c3`) into the fork: `ycash-spec`
+at `0c6053b3` (now with the `sapling` method), `ycash-binding` at `dd720929` on it (now
+with the shielded `sapling` facilitator, server half, `ShieldedMethodRouter`, and the
+`builder.ts`/`light.ts` client side). Node 24.13.0, pnpm 11.1.1. The ten checks of
+`stage.sh --check`:
 
 | Check | Result |
 |---|---|
-| install, build (tsup ESM/CJS/d.ts), `tsc --noEmit`, `format:check`, `verify:exports` | pass |
-| `lint:check` (upstream's eslint config, JSDoc and member-ordering rules included) | pass: 0 errors, 0 warnings |
-| `test` (608 tests in 40 files; coverage 94.2% lines, 89.6% branches, 95.1% functions; thresholds 80%) | pass |
-| `test:integration` (5 in-process flow tests; the 6 devnet suites, 53 tests, skip without `X402_DEVNET_JSON`) | pass |
-| `test:integration` on a ycash-dd (4.5.0) regtest devnet | 57 pass, 1 skipped (the stratum-pool case needs this workspace), 138 s |
-| `test:integration` on a ycash6 (6.21.0) regtest devnet | 57 pass, 1 skipped, 298 s |
+| `install` (pnpm, with `minimum-release-age-strict=false`) | pass |
+| `format`, `format-2` (prettier, twice) | pass |
+| `build` (tsup ESM/CJS/d.ts) | pass |
+| `typecheck` (`tsc --noEmit`) | pass |
+| `format-check` | pass |
+| `lint-check` (upstream's eslint config, JSDoc and member-ordering rules included) | pass: 0 errors, 0 warnings |
+| `test` (702 tests in 44 files; coverage 94.3% lines, 88.9% branches, 95.3% functions; thresholds 80%) | pass |
+| `test-integration` (5 in-process flow tests; the 6 devnet suites, 53 tests, skip without `X402_DEVNET_JSON`) | pass |
+| `verify-exports` | pass |
+| `test:integration` on a ycash-dd (4.5.0) regtest devnet | 57 pass, 1 skipped (the stratum-pool case needs this workspace), 158 s (seed 397) |
+| `test:integration` on a ycash6 (6.21.0) regtest devnet | 57 pass, 1 skipped, 274 s (seed 399) |
+
+The first staged devnet runs (seeds 391 and 393) were not green. On 6.21.0, `exact_yec`'s
+YED-bearing-input test failed with `mintpol-no-price`: upstream's alphabetical file order runs it
+after `channel_yec`, whose stock-mined blocks empty the price window; its mint now retries on a
+pool as `yed`'s `ensureYed` does (`ec52b4e`). On 4.5.0, three `channel_yec` and three `exact_yec`
+tests timed out waiting for tips to agree: from 10:55:36 something outside the run mined on pools
+2, 3 and 4 round-robin about once a second (the cadence of the devnet CLI's own `up`/`mine`),
+racing the tests' blocks into equal-height forks (two blocks at height 367, 7 ms apart, on node 2
+and node 1). No suite mines that way; the cause was not found, and the same suites passed on a
+fresh devnet at seed 397. Treat it as interference, like the seed-371 collision recorded in
+`docs/regression.md`.
+
+Three staging fixes this round, all in `tools/upstream/`: the overlay lists `@noble/ciphers`
+(`sapling`'s note decryption; without it build and typecheck fail), `transform.mjs` also rewrites
+vector paths in template literals (`decrypt.test.ts` loads `vectors/sapling/${name}`), and the
+spec transform matches the new `sapling` text (the old `(sapling, plan X4b)` anchors are gone; it
+drops the plan's finding ids and its N rows, which have no Appendix A row, and names the builder
+generically). The staged package README describes `sapling` and names the Rust light client in
+`boyfromcave/x402-ycash` as the reference builder; comments that cite `light/schema.json` become
+`x402-ycash light/schema.json`. The Rust light client (`light/`) is not staged: upstream SDKs are
+per language, and it builds only against the Ycash-patched librustzcash fork (owner decision 11 in
+`PUBLISHING.md`).
 
 The staged package carries no plan reference: a grep of `src/`, `test/` and `README.md` for
-`plan `, `X-F`, phase and decision ids and `docs/plans` finds none, and the remaining ids (`R-n`,
-`S-n`, `Y-n`, `Z-3`, `G-2`) are rows of the specs' Appendix A or Yellowback rule ids cited with the
-node file (`XFER-1`, `MINT-3`, `IN-3`, `ACT-4`). Two leftovers the transform prints are code, not
-prose: a devnet test that picks the node checkout to drive, and a vector check of the `line` field.
+`plan `, `X-F`, phase ids (`X4b`), the N rows and `docs/plans` finds none, and the remaining ids
+(`R-n`, `S-n`, `Y-n`, `Z-n`, `G-n`) are rows of the specs' Appendix A or Yellowback rule ids cited
+with the node file (`XFER-1`, `MINT-3`, `IN-3`, `ACT-4`). Two leftovers the transform prints are
+code, not prose: a devnet test that picks the node checkout to drive, and a vector check of the
+`line` field.
 
-**Since the lwd and rehearse merges** the package needs `@grpc/grpc-js`, `@grpc/proto-loader` (the
-lightwalletd adapter, `src/lwd`) and `@noble/curves` 2.x (the offline Sapling issuer). The overlay
-lists them, `stage.sh` copies `proto/` into the package (and `files` ships it), and the tsup config
-shims `import.meta.url` in the CJS build, which `src/lwd` uses to find the protos. Upstream's
-lockfile already has `@noble/curves` 1.x (for `extensions`); 2.x is a second major there.
+The package's dependencies beyond `@x402/core`: `@noble/secp256k1` 3.x, `@noble/hashes` 2.x,
+`@noble/curves` 2.x (the offline Sapling issuer and trial decryption; upstream's lockfile has 1.x
+for `extensions`, so 2.x is a second major there), `@noble/ciphers` 1.3 (already in upstream's
+lockfile), `@grpc/grpc-js` and `@grpc/proto-loader` (the lightwalletd adapter, `src/lwd`).
+`stage.sh` copies `proto/` into the package (and `files` ships it), and the tsup config shims
+`import.meta.url` in the CJS build, which `src/lwd` uses to find the protos.
 
 ## Differences from upstream conventions, kept on purpose
 
