@@ -11,6 +11,7 @@ describe("sendrawtransaction error kinds", () => {
   });
   it("maps missing inputs, expiry and other rejections", () => {
     expect(classifySendError(-25, "Missing inputs")).toBe("missing-inputs");
+    expect(classifySendError(-26, "18: bad-txns-inputs-spent")).toBe("missing-inputs");
     expect(classifySendError(-26, "tx-expiring-soon: expiryheight is 5 but should be at least 8")).toBe("expiring-soon");
     expect(classifySendError(-26, "tx-overwinter-expired")).toBe("expiring-soon");
     expect(classifySendError(-26, "mandatory-script-verify-flag-failed")).toBe("rejected");

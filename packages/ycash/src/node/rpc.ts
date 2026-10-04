@@ -166,8 +166,18 @@ export class YcashRpc {
 
   // ------------------------------------------------------------------ shielded
 
-  zGetNewDiversifiedAddress(): Promise<string> {
-    return this.call("z_getnewdiversifiedaddress");
+  /** A new Sapling address (`yregtestsapling1…` on regtest); both lines take the "sapling" type. */
+  zGetNewAddress(): Promise<string> {
+    return this.call("z_getnewaddress", ["sapling"]);
+  }
+
+  /**
+   * A new diversified address of an existing wallet Sapling address: same viewing key, unlinkable
+   * address, one per request (plan Z-3). Both lines require the base address
+   * (`ycash-dd/src/wallet/rpcdump.cpp:835-860`, `ycash6/src/wallet/rpcdump.cpp:1391-1421`).
+   */
+  zGetNewDiversifiedAddress(base: string): Promise<string> {
+    return this.call("z_getnewdiversifiedaddress", [base]);
   }
 
   /** minconf 0 includes the mempool (plan Z-3). */

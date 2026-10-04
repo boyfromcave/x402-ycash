@@ -12,7 +12,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --dir test/unit",
-    "test:devnet": "vitest run --dir test/devnet --passWithNoTests"
+    "test:devnet": "vitest run --dir test/devnet --passWithNoTests --no-file-parallelism --testTimeout=300000 --hookTimeout=300000"
   },
   "dependencies": {
     "@noble/hashes": "^2.0.0",

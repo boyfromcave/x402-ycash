@@ -31,7 +31,7 @@ export type SendRawTransactionErrorKind =
   | "already-in-chain"
   /** An input is already spent by another mempool transaction: no replace-by-fee on either line. */
   | "mempool-conflict"
-  /** -25 "Missing inputs": an input is unknown or spent in the chain (also a mined tx whose outputs were all spent). */
+  /** -25 "Missing inputs" or -26 "bad-txns-inputs-spent": an input is unknown or already spent in the chain. */
   | "missing-inputs"
   /** -26 "tx-expiring-soon" or an expired tx: nExpiryHeight is below next + 3. */
   | "expiring-soon"
@@ -67,6 +67,7 @@ export function classifySendError(code: number, reason: string): SendRawTransact
   if (/txn-mempool-conflict/.test(reason)) return "mempool-conflict";
   if (code === RPC_VERIFY_ERROR && reason === "") return "mempool-conflict";
   if (code === RPC_VERIFY_ERROR && /^Missing inputs$/i.test(reason)) return "missing-inputs";
+  if (/bad-txns-inputs-spent/.test(reason)) return "missing-inputs";
   if (/tx-expiring-soon|tx-overwinter-expired|expired/i.test(reason)) return "expiring-soon";
   if (code === RPC_VERIFY_REJECTED) return "rejected";
   return "failed";
