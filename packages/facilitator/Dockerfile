@@ -10,6 +10,7 @@ WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages/ycash/package.json packages/ycash/
 COPY packages/facilitator/package.json packages/facilitator/
+COPY packages/cli/package.json packages/cli/
 COPY examples/merchant-express/package.json examples/merchant-express/
 COPY examples/agent-client/package.json examples/agent-client/
 
@@ -26,7 +27,8 @@ FROM node:22-slim
 ENV NODE_ENV=production \
     X402_HOST=0.0.0.0 \
     X402_PORT=4022 \
-    X402_SETTLEMENT_STORE=/data/settlements.json
+    X402_SETTLEMENT_STORE=/data/settlements.json \
+    X402_CHANNEL_STORE=/data/channels.json
 WORKDIR /app
 COPY --from=deps /app/node_modules node_modules
 COPY --from=build /app/packages/ycash/package.json packages/ycash/
