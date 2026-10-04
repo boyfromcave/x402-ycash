@@ -2,11 +2,11 @@
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { x402Facilitator } from "@x402/core/facilitator";
-import { FileChannelStore, FileIssuedAddressRegistry, FileSettlementStore } from "x402-ycash-mechanism";
+import { FileChannelStore, FileIssuedAddressRegistry, FileSettlementStore, shielded } from "x402-ycash-mechanism";
 import { createApp } from "./app.js";
 import { redactConfig, type FacilitatorConfig } from "./config.js";
 import { createLogger, type Logger } from "./logger.js";
-import { createRpc, waitForNode } from "./node.js";
+import { assertViewingKeyNode, createRpc, waitForNode } from "./node.js";
 import { registerSchemes, type SchemeDeps } from "./schemes.js";
 
 export interface RunningFacilitator {
@@ -37,6 +37,9 @@ export async function startFacilitator(config: FacilitatorConfig, opts: StartOpt
   const settlementStore = new FileSettlementStore(config.settlementStorePath);
   const facilitator = new x402Facilitator();
   const sp = config.saplingProof;
+  const oi = sp?.offlineIssuer;
+  const issuer = oi ? new shielded.OfflineAddressIssuer({ viewingKey: oi.viewingKey, network: config.network, startIndex: oi.startIndex, indexPath: oi.indexPath }) : undefined;
+  if (issuer) await assertViewingKeyNode(rpc, issuer.defaultAddress(), logger);
   const deps: SchemeDeps = {
     network: config.network,
     rpc,
@@ -46,7 +49,7 @@ export async function startFacilitator(config: FacilitatorConfig, opts: StartOpt
     logger,
     channelStore: new FileChannelStore(config.channelStorePath),
     ...(sp
-      ? { saplingProof: { receiptKey: sp.receiptKey, registry: new FileIssuedAddressRegistry(sp.registryPath), ...(sp.baseAddress ? { baseAddress: sp.baseAddress } : {}), ...(sp.noteWaitMs !== undefined ? { noteWaitMs: sp.noteWaitMs } : {}) } }
+      ? { saplingProof: { receiptKey: sp.receiptKey, registry: new FileIssuedAddressRegistry(sp.registryPath), ...(sp.baseAddress ? { baseAddress: sp.baseAddress } : {}), ...(sp.noteWaitMs !== undefined ? { noteWaitMs: sp.noteWaitMs } : {}), ...(issuer ? { issuer } : {}) } }
       : {}),
   };
   const registered = (opts.register ?? registerSchemes)(facilitator, deps);

@@ -29,6 +29,21 @@ export interface SaplingProofConfig {
   registryPath: string;
   /** How long settle waits for a just-sent note to reach the wallet (default 10 s). */
   noteWaitMs?: number;
+  /**
+   * Set for the viewing-key setup: the merchant's server issues addresses offline from this key,
+   * and the node holds only the key (`z_importviewingkey`), which startup checks.
+   */
+  offlineIssuer?: OfflineIssuerConfig;
+}
+
+/** The offline issuer (OfflineAddressIssuer): the viewing key, its first index and its index file. */
+export interface OfflineIssuerConfig {
+  /** The merchant's `zxview…` key, of the configured network. */
+  viewingKey: string;
+  /** The first diversifier index when the index file is new (default 2^40). */
+  startIndex: bigint;
+  /** Where the next index is kept. */
+  indexPath: string;
 }
 
 export interface FacilitatorConfig {
@@ -88,6 +103,10 @@ const fileSchema = z
     receiptKey: z.string().regex(/^[0-9a-fA-F]{64}$/, "must be 64 hex characters"),
     issuedAddressRegistryPath: z.string().min(1),
     saplingNoteWaitMs: z.number().int().min(0).max(60_000),
+    saplingIssuer: z.enum(["node-wallet", "offline"]),
+    saplingViewingKey: z.string().min(1),
+    saplingStartIndex: z.string().regex(/^\d{1,27}$/, "must be a decimal diversifier index"),
+    saplingIndexPath: z.string().min(1),
     confirmations: confirmationsSchema,
     bodyLimit: z.string().regex(/^\d+(b|kb|mb)$/),
     logLevel: z.enum(LOG_LEVELS as [LogLevel, ...LogLevel[]]),
@@ -207,7 +226,7 @@ function resolveSaplingProof(file: z.output<typeof fileSchema>, env: Env, networ
   const receiptKey = strEnv(env, "X402_RECEIPT_KEY") ?? file.receiptKey;
   const registryPath = strEnv(env, "X402_ISSUED_REGISTRY") ?? file.issuedAddressRegistryPath;
   const baseAddress = strEnv(env, "X402_SAPLING_BASE_ADDRESS") ?? file.saplingBaseAddress;
-  if (!receiptKey && !registryPath && !baseAddress) return undefined;
+  if (!receiptKey && !registryPath && !baseAddress && !strEnv(env, "X402_SAPLING_VIEWING_KEY") && !file.saplingViewingKey) return undefined;
   if (!receiptKey || !registryPath) {
     throw new ConfigError("sapling-proof needs both X402_RECEIPT_KEY (receiptKey) and X402_ISSUED_REGISTRY (issuedAddressRegistryPath)");
   }
@@ -219,7 +238,50 @@ function resolveSaplingProof(file: z.output<typeof fileSchema>, env: Env, networ
   if (baseAddress && !baseAddress.startsWith(hrp)) throw new ConfigError(`X402_SAPLING_BASE_ADDRESS must be a ${network} Sapling address (${hrp}…)`);
   const noteWaitMs = intEnv(env, "X402_SAPLING_NOTE_WAIT_MS") ?? file.saplingNoteWaitMs;
   if (noteWaitMs !== undefined && (noteWaitMs < 0 || noteWaitMs > 60_000)) throw new ConfigError("X402_SAPLING_NOTE_WAIT_MS must be 0..60000");
-  return { receiptKey: receiptKey.toLowerCase(), registryPath, ...(baseAddress ? { baseAddress } : {}), ...(noteWaitMs !== undefined ? { noteWaitMs } : {}) };
+  const offlineIssuer = resolveOfflineIssuer(file, env, network);
+  if (offlineIssuer && baseAddress) throw new ConfigError("X402_SAPLING_BASE_ADDRESS is for the node-wallet issuer; the offline issuer derives from X402_SAPLING_VIEWING_KEY");
+  return {
+    receiptKey: receiptKey.toLowerCase(),
+    registryPath,
+    ...(baseAddress ? { baseAddress } : {}),
+    ...(noteWaitMs !== undefined ? { noteWaitMs } : {}),
+    ...(offlineIssuer ? { offlineIssuer } : {}),
+  };
+}
+
+/** Default index file of the offline issuer. */
+export const DEFAULT_SAPLING_INDEX_PATH = "x402-ycash-sapling-index.json";
+
+/**
+ * The offline issuer's settings, when X402_SAPLING_ISSUER (saplingIssuer) is "offline".
+ *
+ * @param file - The parsed config file.
+ * @param env - The environment, which overrides the file key by key.
+ * @param network - The configured network; the viewing key must be of it.
+ * @returns The offline issuer's config, or undefined for the node-wallet issuer.
+ * @throws {ConfigError} On a missing or invalid viewing key or start index.
+ */
+function resolveOfflineIssuer(file: z.output<typeof fileSchema>, env: Env, network: YcashNetwork): OfflineIssuerConfig | undefined {
+  const kind = strEnv(env, "X402_SAPLING_ISSUER") ?? file.saplingIssuer ?? "node-wallet";
+  if (kind !== "node-wallet" && kind !== "offline") throw new ConfigError(`X402_SAPLING_ISSUER must be "node-wallet" or "offline", got ${JSON.stringify(kind)}`);
+  const viewingKey = strEnv(env, "X402_SAPLING_VIEWING_KEY") ?? file.saplingViewingKey;
+  if (kind === "node-wallet") {
+    if (viewingKey) throw new ConfigError('X402_SAPLING_VIEWING_KEY needs X402_SAPLING_ISSUER="offline"');
+    return undefined;
+  }
+  if (!viewingKey) throw new ConfigError("the offline issuer needs X402_SAPLING_VIEWING_KEY (saplingViewingKey), the merchant's zxview… key");
+  const rawStart = strEnv(env, "X402_SAPLING_START_INDEX") ?? file.saplingStartIndex;
+  if (rawStart !== undefined && !/^\d{1,27}$/.test(rawStart)) throw new ConfigError("X402_SAPLING_START_INDEX must be a decimal diversifier index");
+  const startIndex = rawStart === undefined ? shielded.OFFLINE_ISSUER_DEFAULT_START : BigInt(rawStart);
+  if (startIndex < shielded.OFFLINE_ISSUER_MIN_START || startIndex > shielded.MAX_DIVERSIFIER_INDEX) {
+    throw new ConfigError("X402_SAPLING_START_INDEX must be in [2^32, 2^88): the node wallets walk the low indices");
+  }
+  try {
+    shielded.decodeSaplingViewingKey(viewingKey, network);
+  } catch (e) {
+    throw new ConfigError(`X402_SAPLING_VIEWING_KEY: ${(e as Error).message}`);
+  }
+  return { viewingKey, startIndex, indexPath: strEnv(env, "X402_SAPLING_INDEX_FILE") ?? file.saplingIndexPath ?? DEFAULT_SAPLING_INDEX_PATH };
 }
 
 function resolveRpc(file: z.output<typeof fileSchema>, env: Env): RpcSource {
@@ -263,6 +325,13 @@ export function redactConfig(c: FacilitatorConfig): Record<string, unknown> {
     ...rest,
     rpc,
     apiKey: apiKey ? "(set)" : "(unset)",
-    saplingProof: saplingProof ? { baseAddress: saplingProof.baseAddress ?? "(wallet)", registryPath: saplingProof.registryPath, noteWaitMs: saplingProof.noteWaitMs, receiptKey: "(set)" } : "(off)",
+    saplingProof: saplingProof
+      ? {
+          issuer: saplingProof.offlineIssuer ? { kind: "offline", startIndex: saplingProof.offlineIssuer.startIndex.toString(), indexPath: saplingProof.offlineIssuer.indexPath, viewingKey: "(set)" } : { kind: "node-wallet", baseAddress: saplingProof.baseAddress ?? "(wallet)" },
+          registryPath: saplingProof.registryPath,
+          noteWaitMs: saplingProof.noteWaitMs,
+          receiptKey: "(set)",
+        }
+      : "(off)",
   };
 }

@@ -68,3 +68,27 @@ export async function waitForNode(
     }
   }
 }
+
+/** The node calls the viewing-key check makes. `YcashRpc` satisfies it. */
+export type ViewingKeyProbe = Pick<YcashRpc, "zListReceivedByAddress" | "call">;
+
+/**
+ * Checks, at startup, that the settlement node holds the merchant's viewing key: with the offline
+ * issuer the node never saw the addresses, and it finds their notes only through the imported key.
+ * Both lines refuse `z_listreceivedbyaddress` for an address whose key they lack. A node that also
+ * holds the spending key works, but it is not the recommended setup, so it is logged.
+ *
+ * @param rpc - The settlement node.
+ * @param defaultAddress - The viewing key's default address (index 0, what `z_getnewaddress` gave).
+ * @param log - Where the spending-key warning goes.
+ * @throws {Error} When the node holds no key for the address.
+ */
+export async function assertViewingKeyNode(rpc: ViewingKeyProbe, defaultAddress: string, log: Logger): Promise<void> {
+  try {
+    await rpc.zListReceivedByAddress(defaultAddress, 0);
+  } catch (e) {
+    throw new Error(`the settlement node does not hold the merchant's viewing key (run z_importviewingkey on it): ${(e as Error).message}`);
+  }
+  const v = await rpc.call<{ ismine?: boolean }>("z_validateaddress", [defaultAddress]).catch(() => undefined);
+  if (v?.ismine) log.warn("the settlement node also holds the merchant's spending key; the recommended setup keeps only the viewing key on it");
+}

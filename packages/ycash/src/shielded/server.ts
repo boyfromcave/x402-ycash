@@ -56,11 +56,22 @@ export interface ShieldedExactServerConfig {
 /** A requirement template may carry `extra.priceUsd` instead of an amount; the server quotes it. */
 export const EXTRA_PRICE_USD = "priceUsd";
 
+/**
+ * The `sapling-proof` resource server: for each request it issues a fresh diversified address (from
+ * its AddressIssuer), records the request in the registry the facilitator reads, and returns the
+ * requirements with the memo commitment, expiry and confirmation policy.
+ */
 export class ShieldedExactServer {
   readonly registry: IssuedAddressRegistry;
   readonly issuer: AddressIssuer;
   private readonly config: ShieldedExactServerConfig;
 
+  /**
+   * Creates a server; with no `issuer`, addresses come from the wallet behind `rpc`.
+   *
+   * @param config - The issuer or wallet, registry, defaults and limits.
+   * @throws {Error} When neither an issuer nor an rpc is given.
+   */
   constructor(config: ShieldedExactServerConfig) {
     this.config = config;
     this.registry = config.registry ?? new InMemoryIssuedAddressRegistry();
@@ -69,23 +80,18 @@ export class ShieldedExactServer {
     else throw new Error("a sapling-proof server needs an address issuer, or the merchant wallet's rpc");
   }
 
-  private now(): number {
-    return this.config.now ? this.config.now() : Math.floor(Date.now() / 1000);
-  }
-
-  /** The quote from the node's `yed_getprice`, or the configured fallback when there is no node. */
-  private quote(): Promise<PriceQuote> {
-    const fallback = this.config.fallbackPriceMicroUsd;
-    if (this.config.rpc) return currentPrice(this.config.rpc, fallback);
-    if (fallback !== undefined) return Promise.resolve({ priceMicroUsd: fallback, source: "configured" });
-    return Promise.reject(new Error("no YEC price: no merchant node and no fallback price is configured"));
-  }
-
   /**
    * Turns a route's `sapling-proof` template into the requirements of one request: a fresh payTo,
    * extra.memo, extra.expiresAt, paymentFlow "upfront" and the confirmation policy. The record is
    * kept in the registry before the requirements are returned, so a 402 never names an address
    * the facilitator would not recognise.
+   *
+   * @param requirements - The route's template: exact, YEC, `sapling-proof`, with an amount in
+   *   zatoshis or `extra.priceUsd`.
+   * @param resource - The resource (or its URL); the URL is part of the request hash.
+   * @returns The requirements of one request.
+   * @throws {Error} On a template this method cannot serve, a policy outside the operator's range,
+   *   the issuance limit, or an issuer fault.
    */
   async enhanceRequirements(requirements: PaymentRequirements, resource: ResourceInfo | string): Promise<PaymentRequirements> {
     const resourceUrl = typeof resource === "string" ? resource : resource.url;
@@ -156,15 +162,46 @@ export class ShieldedExactServer {
     };
   }
 
-  /** The request record behind an issued address (the spec lets the server expose it to the client). */
+  /**
+   * The request record behind an issued address (the spec lets the server expose it to the client).
+   *
+   * @param payTo - An issued address.
+   * @returns The record while it is held.
+   */
   async requestRecord(payTo: string): Promise<RequestRecord | undefined> {
     return (await this.registry.get(payTo))?.record;
+  }
+
+  /**
+   * The current time, or the injected clock's.
+   *
+   * @returns Unix seconds.
+   */
+  private now(): number {
+    return this.config.now ? this.config.now() : Math.floor(Date.now() / 1000);
+  }
+
+  /**
+   * The YEC price for a `priceUsd` template: the node's `yed_getprice`, or the configured fallback
+   * when the node has none or there is no node (an offline issuer needs none).
+   *
+   * @returns micro-USD per YEC and where it came from.
+   */
+  private quote(): Promise<PriceQuote> {
+    const fallback = this.config.fallbackPriceMicroUsd;
+    if (this.config.rpc) return currentPrice(this.config.rpc, fallback);
+    if (fallback !== undefined) return Promise.resolve({ priceMicroUsd: fallback, source: "configured" });
+    return Promise.reject(new Error("no YEC price: no merchant node and no fallback price is configured"));
   }
 
   /**
    * A diversified address never issued before, of the network's Sapling HRP (which also catches a
    * merchant node on another chain). Both issuers advance the diversifier index, so a repeat would
    * be an issuer fault; it is refused, not reused.
+   *
+   * @param network - The requirements' network.
+   * @returns An address not in the registry.
+   * @throws {Error} When the issuer returns another network's address, or repeats itself.
    */
   private async freshAddress(network: YcashNetwork): Promise<string> {
     const hrp = SAPLING_HRP[network] + "1";
@@ -177,7 +214,12 @@ export class ShieldedExactServer {
   }
 }
 
-/** extra.confirmationPolicy.confirmations, when declared. */
+/**
+ * extra.confirmationPolicy.confirmations, when declared.
+ *
+ * @param extra - A requirement's extra.
+ * @returns The declared confirmations, or undefined.
+ */
 export function confirmationsOf(extra: Record<string, unknown> | undefined): number | undefined {
   const policy = extra?.confirmationPolicy;
   if (policy && typeof policy === "object" && "confirmations" in policy) {

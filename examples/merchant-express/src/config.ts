@@ -25,10 +25,15 @@ export interface ChannelConfig {
 export interface ShieldedConfig {
   /** The issued-address registry file, shared with the facilitator (X402_ISSUED_REGISTRY there). */
   registryPath: string;
-  /** The merchant's base Sapling address; default: the wallet makes one. */
+  /** The merchant's base Sapling address (node-wallet issuer); default: the wallet makes one. */
   baseAddress?: string;
   /** The policy each issued request carries: −1 to 20; default 1. */
   confirmations: number;
+  /**
+   * Set for the viewing-key setup: addresses are derived offline from the merchant's viewing key,
+   * so this server needs no node and holds no spending key.
+   */
+  offline?: { viewingKey: string; startIndex: bigint; indexPath: string };
 }
 
 /**
@@ -118,14 +123,32 @@ function channelOf(env: Env, wallet: YcashRpc | undefined): ChannelConfig | unde
   };
 }
 
+function offlineIssuerOf(env: Env, network: YcashNetwork): ShieldedConfig["offline"] {
+  const kind = env.MERCHANT_SAPLING_ISSUER ?? "node-wallet";
+  if (kind !== "node-wallet" && kind !== "offline") throw new Error('MERCHANT_SAPLING_ISSUER must be "node-wallet" or "offline"');
+  if (kind === "node-wallet") return undefined;
+  const viewingKey = env.MERCHANT_SAPLING_VIEWING_KEY;
+  if (!viewingKey) throw new Error("the offline issuer needs MERCHANT_SAPLING_VIEWING_KEY, the merchant's zxview… key (z_exportviewingkey)");
+  shielded.decodeSaplingViewingKey(viewingKey, network); // throws on another network's key or a bad one
+  const raw = env.MERCHANT_SAPLING_START_INDEX;
+  if (raw !== undefined && !/^\d{1,27}$/.test(raw)) throw new Error("MERCHANT_SAPLING_START_INDEX must be a decimal diversifier index");
+  const startIndex = raw === undefined ? shielded.OFFLINE_ISSUER_DEFAULT_START : BigInt(raw);
+  if (startIndex < shielded.OFFLINE_ISSUER_MIN_START || startIndex > shielded.MAX_DIVERSIFIER_INDEX) {
+    throw new Error("MERCHANT_SAPLING_START_INDEX must be in [2^32, 2^88): the node wallets walk the low indices");
+  }
+  return { viewingKey, startIndex, indexPath: env.MERCHANT_SAPLING_INDEX_FILE ?? "merchant-sapling-index.json" };
+}
+
 function shieldedOf(env: Env, network: YcashNetwork, wallet: YcashRpc | undefined): ShieldedConfig | undefined {
   const registryPath = env.MERCHANT_ISSUED_REGISTRY;
   if (!registryPath) return undefined;
-  if (!wallet) throw new Error("the shielded route needs the merchant's wallet node: MERCHANT_DEVNET_JSON or MERCHANT_RPC_*");
+  const offline = offlineIssuerOf(env, network);
   const baseAddress = env.MERCHANT_SAPLING_BASE_ADDRESS;
+  if (offline && baseAddress) throw new Error("MERCHANT_SAPLING_BASE_ADDRESS is for the node-wallet issuer; the offline issuer derives from the viewing key");
+  if (!offline && !wallet) throw new Error("the shielded route needs the merchant's wallet node (MERCHANT_DEVNET_JSON or MERCHANT_RPC_*), or MERCHANT_SAPLING_ISSUER=offline");
   const hrp = shielded.SAPLING_HRP[network] + "1";
   if (baseAddress && !baseAddress.startsWith(hrp)) throw new Error(`MERCHANT_SAPLING_BASE_ADDRESS must be a ${network} Sapling address (${hrp}…)`);
-  return { registryPath, confirmations: int(env, "MERCHANT_SHIELDED_CONFIRMATIONS", -1, 20) ?? 1, ...(baseAddress ? { baseAddress } : {}) };
+  return { registryPath, confirmations: int(env, "MERCHANT_SHIELDED_CONFIRMATIONS", -1, 20) ?? 1, ...(baseAddress ? { baseAddress } : {}), ...(offline ? { offline } : {}) };
 }
 
 /** A dollar price ("$2", "2.00", "$0.01") as "$d.cc" and whole cents, at least `minCents`. */
@@ -200,7 +223,13 @@ export function describeConfig(c: MerchantConfig): Record<string, unknown> {
     payTo: c.payTo,
     node: c.wallet?.url ?? "(none)",
     channel: c.channel ? { maxDeposit: c.channel.maxDeposit.toString(), store: c.channel.storePath, confirmations: c.channel.confirmations, serverKey: "(set)" } : "(off)",
-    shielded: c.shielded ? { registry: c.shielded.registryPath, confirmations: c.shielded.confirmations } : "(off)",
+    shielded: c.shielded
+      ? {
+          registry: c.shielded.registryPath,
+          confirmations: c.shielded.confirmations,
+          issuer: c.shielded.offline ? { kind: "offline", startIndex: c.shielded.offline.startIndex.toString(), indexFile: c.shielded.offline.indexPath } : { kind: "node-wallet" },
+        }
+      : "(off)",
     yed: c.yed ? { payTo: c.yed.payTo, report: c.yed.priceReport, stream: c.yed.priceStream, maxDepositCents: c.yed.maxDepositCents.toString() } : "(off)",
   };
 }

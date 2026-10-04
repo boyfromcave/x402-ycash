@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -106,6 +106,23 @@ describe("loadConfig", () => {
     // the network comes from config: a mainnet ys1… base on regtest is a wrong wallet
     expect(() => loadConfig({ ...sp, X402_SAPLING_BASE_ADDRESS: "ys1abc" })).toThrow(/ycash:regtest Sapling address/);
     expect(() => loadConfig({ X402_FACILITATOR_CONFIG: file({ receiptKey: "xyz" }) })).toThrow(/receiptKey/);
+  });
+
+  it("configures the offline issuer: viewing key, start index and index file, from env or file", () => {
+    const vk = (JSON.parse(readFileSync(new URL("../../../vectors/shielded/divaddr.json", import.meta.url), "utf8")) as { cases: { viewingKey: string }[] }).cases[0]!.viewingKey;
+    const sp = { ...base, X402_RECEIPT_KEY: "11".repeat(32), X402_ISSUED_REGISTRY: "/r.json" };
+    const off = { ...sp, X402_SAPLING_ISSUER: "offline", X402_SAPLING_VIEWING_KEY: vk };
+    expect(loadConfig(off).saplingProof?.offlineIssuer).toEqual({ viewingKey: vk, startIndex: 1n << 40n, indexPath: "x402-ycash-sapling-index.json" });
+    const path = file({ network: "ycash:regtest", rpc: { url: "http://n:1", user: "u", password: "p" }, receiptKey: "11".repeat(32), issuedAddressRegistryPath: "/r.json", saplingIssuer: "offline", saplingViewingKey: vk, saplingStartIndex: "4294967296", saplingIndexPath: "/i.json" });
+    expect(loadConfig({ X402_FACILITATOR_CONFIG: path }).saplingProof?.offlineIssuer).toEqual({ viewingKey: vk, startIndex: 1n << 32n, indexPath: "/i.json" });
+    expect(() => loadConfig({ ...off, X402_SAPLING_START_INDEX: "9" })).toThrow(/2\^32/);
+    expect(() => loadConfig({ ...off, X402_SAPLING_VIEWING_KEY: vk.replace("zxviewregtestsapling", "zxviewtestsapling") })).toThrow(/X402_SAPLING_VIEWING_KEY/);
+    expect(() => loadConfig({ ...sp, X402_SAPLING_ISSUER: "offline" })).toThrow(/needs X402_SAPLING_VIEWING_KEY/);
+    expect(() => loadConfig({ ...sp, X402_SAPLING_VIEWING_KEY: vk })).toThrow(/X402_SAPLING_ISSUER="offline"/);
+    expect(() => loadConfig({ ...off, X402_SAPLING_BASE_ADDRESS: "yregtestsapling1abc" })).toThrow(/node-wallet issuer/);
+    const shown = JSON.stringify(redactConfig(loadConfig(off)));
+    expect(shown).not.toContain(vk);
+    expect(shown).toContain('"kind":"offline"');
   });
 
   it("redacts the receipt key", () => {

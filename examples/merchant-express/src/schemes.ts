@@ -54,11 +54,14 @@ export const registerServerSchemes: RegisterServerSchemes = (server, deps) => {
   const modes: PaymentModes = { exact: false, channel: false, shielded: false, yedExact: false, yedChannel: false };
   const out: ServerSchemes = { modes };
 
-  // exact: transparent YEC always; sapling-proof when the merchant's wallet issues addresses.
+  // exact: transparent YEC always; sapling-proof when the merchant's wallet or viewing key issues addresses.
   let issuer: ShieldedRouteIssuer | undefined;
-  if (deps.shielded && deps.wallet) {
+  const off = deps.shielded?.offline;
+  if (deps.shielded && (deps.wallet || off)) {
     const server = new shielded.ShieldedExactServer({
-      rpc: deps.wallet,
+      ...(deps.wallet ? { rpc: deps.wallet } : {}),
+      // The viewing-key setup: addresses derived offline, no spending key on the request path.
+      ...(off ? { issuer: new shielded.OfflineAddressIssuer({ viewingKey: off.viewingKey, network: deps.network, startIndex: off.startIndex, indexPath: off.indexPath }) } : {}),
       registry: new FileIssuedAddressRegistry(deps.shielded.registryPath),
       defaultConfirmations: deps.shielded.confirmations,
       ...(deps.shielded.baseAddress ? { baseAddress: deps.shielded.baseAddress } : {}),

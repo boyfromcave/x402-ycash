@@ -7,6 +7,7 @@ import {
   SaplingProofHandler,
   type ChannelStore,
   type IssuedAddressRegistry,
+  type shielded,
   type NodeCapabilities,
   type SettlementStore,
   type YcashNetwork,
@@ -23,6 +24,8 @@ export interface SaplingProofDeps {
   baseAddress?: string;
   /** How long settle waits for the note to reach the merchant's wallet before not_received (default 10 s). */
   noteWaitMs?: number;
+  /** The address issuer; default: the node's wallet. The facilitator half never issues, but the handler is built whole. */
+  issuer?: shielded.AddressIssuer;
 }
 
 /** Everything a Ycash facilitator mechanism needs, built once at startup (server.ts). */
@@ -77,6 +80,7 @@ export function registerSchemes(facilitator: x402Facilitator, deps: SchemeDeps):
       registry: deps.saplingProof.registry,
       ...(deps.saplingProof.baseAddress ? { baseAddress: deps.saplingProof.baseAddress } : {}),
       ...(deps.saplingProof.noteWaitMs !== undefined ? { noteWaitMs: deps.saplingProof.noteWaitMs } : {}),
+      ...(deps.saplingProof.issuer ? { issuer: deps.saplingProof.issuer } : {}),
     });
     shielded = facilitatorHalf(handler);
   }

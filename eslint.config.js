@@ -69,8 +69,6 @@ export default [
   {
     // Upstream's mechanism rules (cardano/eslint.config.js), on the code that is staged upstream.
     files: ["packages/ycash/src/**/*.ts"],
-    // TODO(coordinator): after rehearse merges, document these two and drop this ignore.
-    ignores: ["packages/ycash/src/shielded/server.ts", "packages/ycash/src/shielded/registry.ts"],
     rules: {
       "@typescript-eslint/member-ordering": "error",
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_$", varsIgnorePattern: "^_", caughtErrors: "none" }],
