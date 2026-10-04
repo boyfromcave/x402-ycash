@@ -24,6 +24,7 @@ import {
 } from "../errors.js";
 import { confirmationsSatisfy, isShieldedMethod, MAX_CONFIRMATIONS, MIN_CONFIRMATIONS } from "../policy.js";
 import { addressOfScriptSig } from "../script.js";
+import { decodeAddress, encodeAddress } from "../../tx/index.js";
 import { ATM_SAPLING_PROOF, ATM_TRANSPARENT, SCHEME_EXACT, type ExactYcashSettleExtra, type ShieldedExactHandler } from "../types.js";
 import { resolvePayment, verifyTransparent, type ExactFacilitatorRpc, type ResolvedPayment, type VerifyLimits } from "./verify.js";
 
@@ -49,6 +50,11 @@ export interface ExactYcashFacilitatorConfig {
   defaultConfirmations?: number;
   /** The `sapling-proof` method (plan X4a), implemented in src/shielded. */
   shielded?: ShieldedExactHandler;
+  /**
+   * The node runs `-experimentalfeatures -yellowback`, so `/supported` lists YED (spec "/supported").
+   * Verification asks the node itself either way; this only shapes the advertisement.
+   */
+  yellowback?: boolean;
 }
 
 /** The facilitator service's logger shape (packages/facilitator/src/logger.ts). */
@@ -61,7 +67,7 @@ export interface ExactLogger {
 export interface ExactYcashFacilitatorDeps extends Omit<ExactYcashFacilitatorConfig, "acceptMempool"> {
   rpc: ExactFacilitatorRpc;
   network?: string;
-  /** Unused by YEC-only exact; YED (plan X3) will need `yellowback`. */
+  /** `yellowback` lists YED in `/supported`. */
   capabilities?: { yellowback: boolean };
 }
 
@@ -83,12 +89,13 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
   private readonly shielded: ShieldedExactHandler | undefined;
   private readonly rpc: ExactFacilitatorRpc;
   private readonly logger: ExactLogger | undefined;
+  private readonly yellowback: boolean;
 
   /** `new ExactYcashFacilitatorScheme(rpc, config)`, or the service's `new ExactYcashFacilitatorScheme(deps)`. */
   constructor(rpcOrDeps: ExactFacilitatorRpc | ExactYcashFacilitatorDeps, config: ExactYcashFacilitatorConfig = {}) {
     if ("rpc" in rpcOrDeps) {
       this.rpc = rpcOrDeps.rpc;
-      config = { ...rpcOrDeps, ...config };
+      config = { ...rpcOrDeps, ...(rpcOrDeps.capabilities ? { yellowback: rpcOrDeps.capabilities.yellowback } : {}), ...config };
     } else {
       this.rpc = rpcOrDeps;
     }
@@ -106,13 +113,14 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
     this.confirmationTimeoutMs = config.confirmationTimeoutMs ?? DEFAULT_CONFIRMATION_TIMEOUT_MS;
     this.confirmationPollMs = config.confirmationPollMs ?? DEFAULT_CONFIRMATION_POLL_MS;
     this.shielded = config.shielded;
+    this.yellowback = config.yellowback ?? false;
   }
 
-  /** The `/supported` capability block. YED (plan X3) is not served here. */
+  /** The `/supported` capability block; YED only on a Yellowback node. */
   getExtra(_network: Network): Record<string, unknown> | undefined {
     void _network;
     return {
-      assets: ["YEC"],
+      assets: this.yellowback ? ["YEC", "YED"] : ["YEC"],
       assetTransferMethods: this.shielded ? [ATM_TRANSPARENT, ATM_SAPLING_PROOF] : [ATM_TRANSPARENT],
       areFeesSponsored: false,
       confirmations: { minimum: this.limits.minConfirmations, maximum: this.limits.maxConfirmations },
@@ -240,7 +248,10 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
   }
 
   private resumedPayer(s: ResolvedPayment): string {
-    return addressOfScriptSig(s.tx.vin[0]?.scriptSig ?? new Uint8Array(), s.network);
+    const address = addressOfScriptSig(s.tx.vin[0]?.scriptSig ?? new Uint8Array(), s.network);
+    if (!s.yed || !address) return address;
+    const d = decodeAddress(address, s.network);
+    return d.kind === "p2pkh" ? encodeAddress(s.network, "yed", d.hash) : address;
   }
 }
 

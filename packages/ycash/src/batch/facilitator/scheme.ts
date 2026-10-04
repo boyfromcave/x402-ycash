@@ -3,12 +3,13 @@
 // a voucher's shape and client signature against the live channel output), relays the funding
 // transaction, and broadcasts closes the server completed (`claim`). The charged total, the stored
 // voucher and the in-flight lock stay with the server (specs/scheme_batch_settlement_ycash.md,
-// "Settlement").
+// "Settlement"). A YED channel needs a Yellowback node: D is the channel's token record as the
+// overlay reports it, and every voucher must burn nothing.
 import type { Network, PaymentPayload, PaymentRequirements, SchemeNetworkFacilitator, SettleResponse, VerifyResponse } from "@x402/core/types";
 import { channelFromScript, channelIdOf, commitmentIdOf, type Channel } from "../../channel/channel.js";
 import { channelScriptPubKey, parseChannelScript } from "../../channel/script.js";
 import { parseCloseScriptSig } from "../../channel/voucher.js";
-import { ASSET_YEC } from "../../constants.js";
+import { ASSET_YED } from "../../constants.js";
 import { SendRawTransactionError } from "../../node/errors.js";
 import { InMemoryChannelStore, type ChannelStore } from "../../store/channelStore.js";
 import { RETAIN_FOREVER, txidKey, type SettlementStore } from "../../store/settlementStore.js";
@@ -17,7 +18,20 @@ import { bytesToHex, equalBytes, hexToBytes } from "../../tx/bytes.js";
 import { txid as txidOf, type Tx } from "../../tx/tx.js";
 import { BatchError, BatchSettlementError, reasonOf } from "../errors.js";
 import { BATCH_SETTLEMENT_SCHEME, isBatchPayload, parseTerms, requiredDepth, sameOffer, type BatchPayload, type BatchTerms } from "../types.js";
-import { chainContext, checkCompleted, checkVoucher, decodeTx, verifyOpen, zatOf, type ChainView } from "../verify.js";
+import {
+  chainContext,
+  checkCompleted,
+  checkVoucher,
+  checkYedVoucher,
+  cumulativeFloor,
+  decodeTx,
+  layoutFor,
+  overlayDeposit,
+  verifyOpen,
+  yedChain,
+  zatOf,
+  type ChainView,
+} from "../verify.js";
 
 export interface BatchYcashFacilitatorConfig {
   /** the facilitator's node (YcashRpc) */
@@ -70,15 +84,22 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
         return { isValid: true, payer: v.channelId, extra: { channelId: v.channelId } };
       }
       const { channel, tx } = await this.liveChannel(p.tx, p.channelId, terms);
-      const deposit = channel.value - channel.closeFee;
-      checkVoucher(tx, channel, BigInt(p.cumulative), {
+      const yed = terms.asset === ASSET_YED;
+      // YED: D is the channel output's token record, read through the voucher's yedIn.
+      const deposit = yed ? await overlayDeposit(this.chain, p.tx) : channel.value - channel.closeFee;
+      const cumulative = BigInt(p.cumulative);
+      checkVoucher(tx, channel, cumulative, {
         charged: 0n, // the server's charged total is not known here; it applies rule 5 in full
         amount: p.type === "voucher" ? terms.amount : 0n,
         deposit,
         branchId: ctx.branchId,
         allowCompleted: p.type === "claim",
+        layout: layoutFor(terms.asset, deposit),
+        floor: cumulativeFloor(terms.asset),
       });
       if (p.type === "claim") await checkCompleted(this.chain, tx);
+      // A voucher's server slot is empty, so only a claim's scripts can verify.
+      if (yed) await checkYedVoucher(this.chain, p.tx, deposit, cumulative, { scripts: p.type === "claim" });
       return { isValid: true, payer: p.channelId, extra: { channelId: p.channelId } };
     } catch (e) {
       return { isValid: false, invalidReason: reasonOf(e), invalidMessage: (e as Error).message };
@@ -136,7 +157,7 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
     if (terms.confirmations < this.limits.minimum || terms.confirmations > this.limits.maximum) {
       throw new BatchSettlementError(BatchError.REQUIREMENTS, `confirmations ${terms.confirmations} outside [${this.limits.minimum}, ${this.limits.maximum}]`);
     }
-    if (terms.asset !== ASSET_YEC) throw new BatchSettlementError(BatchError.YED_NODE_REQUIRED, "YED channels are not supported by this facilitator yet");
+    if (terms.asset === ASSET_YED) yedChain(this.chain);
     return { p: payload.payload, terms };
   }
 

@@ -36,6 +36,15 @@ describe("loadAgentConfig", () => {
     expect(() => loadAgentConfig({ ...node, AGENT_CHANNEL_DEPOSIT_ZAT: "-1" })).toThrow(/DEPOSIT/);
   });
 
+  it("keeps reservations in a per-payer file (AGENT_RESERVATIONS overrides) and takes the client's deposit cap", () => {
+    const w = loadAgentConfig({ ...node, AGENT_WIF: wifRegtest });
+    expect(w.reservationsPath).toMatch(new RegExp(`x402-ycash-reservations-${w.signer.kind === "wif" ? w.signer.address : "?"}\\.json$`));
+    expect(loadAgentConfig({ ...node, AGENT_SIGNER: "node" }).reservationsPath).toMatch(/x402-ycash-reservations-node-[0-9a-f]{16}\.json$/);
+    const c = loadAgentConfig({ ...node, AGENT_WIF: wifRegtest, AGENT_RESERVATIONS: "/r.json", AGENT_CHANNEL_MAX_DEPOSIT_ZAT: "5000000" });
+    expect(c).toMatchObject({ reservationsPath: "/r.json", channelMaxDepositZat: 5_000_000n });
+    expect(() => loadAgentConfig({ ...node, AGENT_CHANNEL_MAX_DEPOSIT_ZAT: "1e8" })).toThrow(/MAX_DEPOSIT/);
+  });
+
   it("requires a signer and sane numbers", () => {
     expect(() => loadAgentConfig({})).toThrow(/needs its node/);
     expect(() => loadAgentConfig({ AGENT_WIF: wifRegtest })).toThrow(/needs its node/);

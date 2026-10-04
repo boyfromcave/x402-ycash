@@ -37,6 +37,8 @@ export function createAgent(config: AgentConfig, register: RegisterClientSchemes
     ...(config.shieldedFrom ? { shieldedFrom: config.shieldedFrom } : {}),
     ...(config.channelStorePath ? { channelStorePath: config.channelStorePath } : {}),
     ...(config.channelDepositZat !== undefined ? { channelDepositZat: config.channelDepositZat } : {}),
+    ...(config.channelMaxDepositZat !== undefined ? { channelMaxDepositZat: config.channelMaxDepositZat } : {}),
+    ...(config.reservationsPath ? { reservationsPath: config.reservationsPath } : {}),
   });
   const paidFetch = wrapFetchWithPayment(baseFetch, client);
 

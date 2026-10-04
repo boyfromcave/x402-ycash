@@ -2,8 +2,9 @@
 // trusts; a light-client source (lightwalletd GetAddressUtxos + GetAddressTokens) fits the same
 // interface.
 import { RPC_METHOD_NOT_FOUND, RpcError, yecToZat, type YcashRpc } from "../../node/index.js";
-import { InMemoryCoinReservationStore, reservationLapsed, type CoinReservationStore } from "../../store/coinReservations.js";
-import { hexToBytes, type OutPoint } from "../../tx/index.js";
+import { heldOutpoints, InMemoryCoinReservationStore, type CoinReservationStore } from "../../store/coinReservations.js";
+import { addressToScript, hexToBytes, type OutPoint } from "../../tx/index.js";
+import type { TokenCoin } from "../../yed/index.js";
 import type { Coin } from "./coinSelection.js";
 import { chainStateOf, type ChainState } from "./signer.js";
 
@@ -17,6 +18,11 @@ export interface UtxoSource {
    * False when another spend already holds one of them: select again.
    */
   reserve?(coins: readonly OutPoint[], spend: { txid: string; expiryHeight: number }): Promise<boolean>;
+  /**
+   * The YED outputs paying `address` (its `ye…` or transparent form): token records, so confirmed
+   * by construction, and unspent also in the mempool. Optional: only a YED payer needs it.
+   */
+  listTokens?(address: string): Promise<TokenCoin[]>;
 }
 
 export type UtxoSourceRpc = Pick<YcashRpc, "getBlockchainInfo" | "listUnspent" | "getTxOut" | "capabilities" | "call">;
@@ -37,10 +43,13 @@ export interface RpcUtxoSourceOptions {
   noExpiryHoldMs?: number;
 }
 
-/** One token record of `yed_listtokens` (plan Y-9; ycash-dd/src/rpc/yellowback.cpp:1185). */
+/** One token record of `yed_listtokens` (plan Y-9; ycash-dd/src/rpc/yellowback.cpp:1185, :1246-1254). */
 interface TokenRow {
   txid: string;
   vout: number;
+  cents: number;
+  valueZat: number;
+  address: string;
 }
 
 /**
@@ -92,21 +101,24 @@ export class RpcUtxoSource implements UtxoSource {
     });
   }
 
-  /** The outpoints still held; releases those whose spend lapsed or whose coin is spent in a block. */
+  /** The outpoints still held (a reservation ends when its spend lapses or a block spends the coin). */
   private async heldCoins(): Promise<Set<string>> {
-    const all = await this.reservations.list();
-    if (all.size === 0) return new Set();
+    if ((await this.reservations.list()).size === 0) return new Set();
     const tip = (await this.rpc.getBlockchainInfo()).blocks;
-    const held = new Set<string>();
-    const over: string[] = [];
-    for (const [o, r] of all) {
-      const [txid, vout] = o.split(":") as [string, string];
-      // gettxout without the mempool is null once a block spends the coin: the spend confirmed.
-      if (reservationLapsed(r, tip) || !(await this.rpc.getTxOut(txid, Number(vout), false))) over.push(o);
-      else held.add(o);
+    return heldOutpoints(this.reservations, tip, async (txid, vout) => !(await this.rpc.getTxOut(txid, vout, false)));
+  }
+
+  async listTokens(address: string): Promise<TokenCoin[]> {
+    if (!(await this.rpc.capabilities()).yellowback) throw new Error("listing YED outputs needs a Yellowback node (-experimentalfeatures -yellowback)");
+    const rows = await this.rpc.call<TokenRow[]>("yed_listtokens", [[address]]);
+    const held = await this.heldCoins();
+    const tokens: TokenCoin[] = [];
+    for (const r of rows) {
+      if (held.has(`${r.txid}:${r.vout}`)) continue;
+      if (!(await this.rpc.getTxOut(r.txid, r.vout, true))) continue; // spent in the mempool (X-F13)
+      tokens.push({ outpoint: { txid: r.txid, vout: r.vout }, cents: r.cents, value: BigInt(r.valueZat), scriptPubKey: addressToScript(r.address) });
     }
-    if (over.length > 0) await this.reservations.release(over);
-    return held;
+    return tokens;
   }
 
   private async ensureImported(address: string): Promise<void> {

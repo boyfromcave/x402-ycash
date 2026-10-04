@@ -28,6 +28,12 @@ export interface ExactYcashServerConfig {
   zeroConfCapZat?: bigint;
   /** The `sapling-proof` method (plan X4a), implemented in src/shielded. */
   shielded?: ShieldedExactHandler;
+  /**
+   * The asset a USD price ("$2.50", "2.50 USD") is asked in: YEC at the price source's rate
+   * (default), or YED cents at par. A YED price below $1.00 is refused either way: a YED output
+   * below $1.00 burns (plan Y-3), and sub-dollar YED goes through batch-settlement.
+   */
+  usdAsset?: typeof ASSET_YEC | typeof ASSET_YED;
 }
 
 const CANONICAL_AMOUNT = /^[1-9][0-9]*$/;
@@ -67,7 +73,9 @@ export class ExactYcashServerScheme implements SchemeNetworkServer {
       if (r !== null) return validate(r);
     }
     if (symbol === ASSET_YEC) return validate({ amount: convertToTokenAmount(amount, 8), asset: ASSET_YEC, extra: {} });
-    if (symbol === ASSET_YED) return validate({ amount: convertToTokenAmount(amount, 2), asset: ASSET_YED, extra: {} });
+    if (symbol === ASSET_YED || (symbol === undefined && this.config.usdAsset === ASSET_YED)) {
+      return validate({ amount: yedCents(amount), asset: ASSET_YED, extra: {} });
+    }
     if (symbol !== undefined) throw new Error(`unknown asset ${symbol} on ${network}`);
     if (!this.config.priceSource) throw new Error("a USD price needs a price source (or price in YEC)");
     const rate = await this.config.priceSource.microUsdPerYec(network);
@@ -93,11 +101,15 @@ export class ExactYcashServerScheme implements SchemeNetworkServer {
     }
     const method = assetTransferMethodOf(req.extra);
     if (method !== ATM_TRANSPARENT) throw new Error(`unsupported assetTransferMethod ${String(method)}`);
-    const advertised = kind.extra as { assetTransferMethods?: unknown; confirmations?: { minimum?: unknown; maximum?: unknown } } | undefined;
+    const advertised = kind.extra as { assets?: unknown; assetTransferMethods?: unknown; confirmations?: { minimum?: unknown; maximum?: unknown } } | undefined;
     const min = typeof advertised?.confirmations?.minimum === "number" ? advertised.confirmations.minimum : MIN_CONFIRMATIONS;
     const max = typeof advertised?.confirmations?.maximum === "number" ? advertised.confirmations.maximum : MAX_CONFIRMATIONS;
     if (Array.isArray(advertised?.assetTransferMethods) && !advertised.assetTransferMethods.includes(ATM_TRANSPARENT)) {
       throw new Error("the facilitator does not support assetTransferMethod transparent");
+    }
+    // A facilitator lists YED only when its node runs the overlay (spec "/supported").
+    if (req.asset === ASSET_YED && Array.isArray(advertised?.assets) && !advertised.assets.includes(ASSET_YED)) {
+      throw new Error("the facilitator does not settle YED (it needs a Yellowback node)");
     }
     const fallback = Math.max(min, await this.defaultConfirmations(req));
     const policy = resolveConfirmationPolicy(req.extra, fallback);
@@ -124,13 +136,22 @@ export class ExactYcashServerScheme implements SchemeNetworkServer {
   }
 }
 
+/** A decimal dollar amount in whole cents; a fraction of a cent is refused, never truncated. */
+function yedCents(amount: string): string {
+  const [, frac = ""] = amount.split(".");
+  if (/[1-9]/.test(frac.slice(2))) throw new Error(`a YED price is a whole number of cents: ${amount}`);
+  return convertToTokenAmount(amount, 2);
+}
+
 function validate(v: AssetAmount): AssetAmount {
   if (!CANONICAL_AMOUNT.test(v.amount)) throw new Error(`amount must be a positive canonical integer: ${v.amount}`);
   if (v.asset === ASSET_YEC) {
     if (BigInt(v.amount) < DUST_ZAT) throw new Error(`a YEC amount must be at least ${DUST_ZAT} zatoshis (dust)`);
   } else if (v.asset === ASSET_YED) {
     const c = BigInt(v.amount);
-    if (c < BigInt(YED_MIN_OUTPUT_CENTS) || c > BigInt(YED_MAX_OUTPUT_CENTS)) throw new Error(`a YED amount must be ${YED_MIN_OUTPUT_CENTS}..${YED_MAX_OUTPUT_CENTS} cents`);
+    if (c < BigInt(YED_MIN_OUTPUT_CENTS) || c > BigInt(YED_MAX_OUTPUT_CENTS)) {
+      throw new Error(`a YED amount must be ${YED_MIN_OUTPUT_CENTS}..${YED_MAX_OUTPUT_CENTS} cents ($1.00 to $100,000): a smaller YED output burns; use batch-settlement below $1.00`);
+    }
   } else {
     throw new Error(`asset must be ${ASSET_YEC} or ${ASSET_YED}: ${v.asset}`);
   }

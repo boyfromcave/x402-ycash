@@ -137,7 +137,8 @@ describe("registerSchemes", () => {
     expect(registerSchemes(f, deps)).toEqual(["exact (transparent)", "batch-settlement"]);
     const kinds = f.getSupported().kinds;
     expect(kinds.map(k => [k.scheme, k.network])).toEqual([["exact", "ycash:regtest"], ["batch-settlement", "ycash:regtest"]]);
-    expect(kinds[0]?.extra).toMatchObject({ assets: ["YEC"], assetTransferMethods: ["transparent"], areFeesSponsored: false, confirmations: { minimum: -1, maximum: 6 } });
+    // a Yellowback node (capabilities.yellowback) lists YED beside YEC (X3)
+    expect(kinds[0]?.extra).toMatchObject({ assets: ["YEC", "YED"], assetTransferMethods: ["transparent"], areFeesSponsored: false, confirmations: { minimum: -1, maximum: 6 } });
     expect(kinds[1]?.extra).toEqual({ confirmations: { minimum: -1, maximum: 6 } });
   });
 

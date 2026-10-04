@@ -17,6 +17,14 @@ describe("configuration", () => {
     expect(loadCliConfig(parseCli(["pay", "x"]), { ...devnetEnv, X402_WIF: wif, X402_MAX_PAYMENT_ZAT: "5000" })).toMatchObject({ wif, maxPaymentZat: 5000n });
   });
 
+  it("keeps coin reservations next to the channel store by default, and takes the client's deposit cap", () => {
+    expect(loadCliConfig(parseCli(["pay", "x", "--channels", "/w/c.json"]), devnetEnv)).toMatchObject({ reservationsPath: "/w/reservations.json" });
+    const c = loadCliConfig(parseCli(["channel", "open", "x", "--max-deposit", "3000000", "--reservations", "/r.json"]), devnetEnv);
+    expect(c).toMatchObject({ reservationsPath: "/r.json", maxDepositZat: 3_000_000n });
+    expect(loadCliConfig(parseCli(["pay", "x"]), { ...devnetEnv, X402_MAX_DEPOSIT_ZAT: "7" }).maxDepositZat).toBe(7n);
+    expect(() => loadCliConfig(parseCli(["pay", "x", "--max-deposit", "0"]), devnetEnv)).toThrow(/--max-deposit/);
+  });
+
   it("refuses a missing node, a bad network, a mainnet WIF on regtest, and bad numbers", () => {
     expect(() => loadCliConfig(parseCli(["pay", "x"]), {})).toThrow(/no node/);
     expect(() => loadCliConfig(parseCli(["pay", "x", "--rpc-url", "http://n"]), {})).toThrow(/rpc-user/);

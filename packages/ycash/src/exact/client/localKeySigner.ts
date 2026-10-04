@@ -15,10 +15,12 @@ import {
   SEQUENCE_FINAL,
   SIGHASH,
   txid,
+  type Tx,
   type TxOut,
 } from "../../tx/index.js";
+import { buildYedTransfer, selectTokenCoins, type YecCoin } from "../../yed/index.js";
 import { selectCoins } from "./coinSelection.js";
-import type { ChainState, PaymentOrder, SignedPayment, YcashClientSigner } from "./signer.js";
+import type { ChainState, PaymentOrder, SignedPayment, YcashClientSigner, YedPaymentOrder } from "./signer.js";
 import type { UtxoSource } from "./utxoSource.js";
 
 /**
@@ -77,10 +79,51 @@ export class LocalKeySigner implements YcashClientSigner {
       lockTime: 0,
       expiryHeight: order.expiryHeight,
     });
-    sel.coins.forEach((c, i) => {
-      const digest = sighashV4(tx, i, c.scriptPubKey, c.value, SIGHASH.ALL, order.branchId);
+    this.signAll(tx, sel.coins.map((c) => ({ value: c.value, scriptPubKey: c.scriptPubKey })), order.branchId);
+    return { hex: serializeTxHex(tx), txid: txid(tx), inputs: sel.coins.map((c) => ({ txid: c.txid, vout: c.vout })) };
+  }
+
+  /**
+   * A YED payment from this key's token outputs (its `ye…` address), with YEC fee coins from its
+   * transparent address; YED and YEC change return to the key. The source must list tokens.
+   */
+  async signYedPayment(order: YedPaymentOrder): Promise<SignedPayment> {
+    for (let attempt = 1; ; attempt++) {
+      const signed = await this.signYedOnce(order);
+      if (!this.source.reserve || (await this.source.reserve(signed.inputs, { txid: signed.txid, expiryHeight: order.expiryHeight }))) return signed;
+      if (attempt >= 3) throw new Error("coins kept being taken by another spend of this key; try again");
+    }
+  }
+
+  private async signYedOnce(order: YedPaymentOrder): Promise<SignedPayment> {
+    if (!this.source.listTokens) throw new Error("this UtxoSource cannot list YED outputs");
+    for (const [k, expiry] of this.reserved) if (expiry < order.tip) this.reserved.delete(k);
+    const free = (o: { txid: string; vout: number }) => !this.reserved.has(`${o.txid}:${o.vout}`);
+    const yr = encodeAddress(order.network, "yed", hash160(this.pubkey));
+    const tokens = (await this.source.listTokens(yr)).filter((t) => equalBytes(t.scriptPubKey, this.script) && free(t.outpoint));
+    const yec: YecCoin[] = (await this.source.listCoins(this.address(order.network)))
+      .filter((c) => c.confirmations >= 1 && equalBytes(c.scriptPubKey, this.script) && free(c))
+      .map((c) => ({ outpoint: { txid: c.txid, vout: c.vout }, value: c.value, scriptPubKey: c.scriptPubKey }));
+    const sel = selectTokenCoins(tokens, order.amountCents);
+    const built = buildYedTransfer({
+      recipients: [{ scriptPubKey: addressToScript(order.payTo, order.network), cents: order.amountCents }],
+      tokens: sel.coins,
+      yecCoins: yec,
+      yedChangeScript: this.script,
+      yecChangeScript: this.script,
+      expiryHeight: order.expiryHeight,
+    });
+    const inputs = built.inputs.map((c) => c.outpoint);
+    for (const o of inputs) this.reserved.set(`${o.txid}:${o.vout}`, order.expiryHeight);
+    this.signAll(built.tx, built.inputs, order.branchId);
+    return { hex: serializeTxHex(built.tx), txid: txid(built.tx), inputs };
+  }
+
+  /** Signs every input SIGHASH_ALL with this key; `coins[i]` is the coin vin[i] spends. */
+  private signAll(tx: Tx, coins: readonly { value: bigint; scriptPubKey: Uint8Array }[], branchId: number): void {
+    coins.forEach((c, i) => {
+      const digest = sighashV4(tx, i, c.scriptPubKey, c.value, SIGHASH.ALL, branchId);
       (tx.vin[i] as (typeof tx.vin)[number]).scriptSig = p2pkhScriptSig(signInput(digest, this.privKey, SIGHASH.ALL), this.pubkey);
     });
-    return { hex: serializeTxHex(tx), txid: txid(tx), inputs: sel.coins.map((c) => ({ txid: c.txid, vout: c.vout })) };
   }
 }

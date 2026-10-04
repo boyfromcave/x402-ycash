@@ -22,7 +22,7 @@ import type {
 } from "@x402/core/types";
 import { DEFAULT_CLOSE_FEE, DEFAULT_CLOSE_MARGIN_BLOCKS, DEFAULT_MIN_LOCK_BLOCKS } from "../../channel/constants.js";
 import { closeFeeFloor } from "../../channel/outputs.js";
-import { ASSET_YEC } from "../../constants.js";
+import { ASSET_YEC, ASSET_YED, YED_MAX_OUTPUT_CENTS } from "../../constants.js";
 import { yecToZat } from "../../node/amount.js";
 import { bytesToHex } from "../../tx/bytes.js";
 import { BatchError, reasonOf } from "../errors.js";
@@ -38,6 +38,22 @@ export interface BatchYcashServerConfig extends ChannelManagerConfig {
   closeFee?: bigint;
   /** the funding policy depth (−1 = mempool, a YEC-only opt-in); default 1 */
   confirmations?: number;
+  /** the largest D of a YED channel, cents; default $100,000 (the largest YED output) */
+  maxDepositCents?: bigint;
+  /**
+   * Prices "$0.01" / "0.01 USD" as YED cents at par (YED channels). Without it a USD price is
+   * refused: YEC channels take YEC prices.
+   */
+  usdAsset?: typeof ASSET_YED;
+}
+
+/** A decimal dollar amount in whole cents ("0.01" → "1"); a fraction of a cent is refused. */
+function centsOf(s: string): string {
+  const m = /^(\d+)(?:\.(\d{1,2}))?$/.exec(s.trim());
+  if (!m) throw new Error(`a YED price is a whole number of cents: ${s}`);
+  const cents = BigInt(m[1] as string) * 100n + BigInt(((m[2] ?? "") + "00").slice(0, 2));
+  if (cents <= 0n) throw new Error("a price must be positive");
+  return cents.toString();
 }
 
 /** A 115-byte channel script stand-in, for the close-fee floor (C, S and t do not change its size). */
@@ -46,6 +62,8 @@ const CLOSE_FLOOR_OUTPUTS = [
   { value: 0n, scriptPubKey: new Uint8Array(25) },
   { value: 0n, scriptPubKey: new Uint8Array(25) },
 ];
+/** A YED close adds its TRANSFER (two assignments: OP_RETURN, push, 15 payload bytes). */
+const CLOSE_FLOOR_OUTPUTS_YED = [...CLOSE_FLOOR_OUTPUTS, { value: 0n, scriptPubKey: new Uint8Array(17) }];
 
 export class BatchYcashScheme implements SchemeNetworkServer {
   readonly scheme = BATCH_SETTLEMENT_SCHEME;
@@ -58,7 +76,10 @@ export class BatchYcashScheme implements SchemeNetworkServer {
   readonly manager: ChannelManager;
 
   private readonly verified = new WeakMap<DeepReadonly<PaymentPayload>, VerifiedVoucher>();
-  private readonly cfg: Required<Pick<BatchYcashServerConfig, "minLockBlocks" | "closeMarginBlocks" | "closeFee" | "confirmations">> & { maxDeposit: bigint };
+  private readonly cfg: Required<Pick<BatchYcashServerConfig, "minLockBlocks" | "closeMarginBlocks" | "closeFee" | "confirmations" | "maxDepositCents">> & {
+    maxDeposit: bigint;
+    usdAsset: typeof ASSET_YED | undefined;
+  };
 
   constructor(config: BatchYcashServerConfig) {
     this.cfg = {
@@ -67,9 +88,11 @@ export class BatchYcashScheme implements SchemeNetworkServer {
       closeMarginBlocks: config.closeMarginBlocks ?? DEFAULT_CLOSE_MARGIN_BLOCKS,
       closeFee: config.closeFee ?? DEFAULT_CLOSE_FEE,
       confirmations: config.confirmations ?? 1,
+      maxDepositCents: config.maxDepositCents ?? BigInt(YED_MAX_OUTPUT_CENTS),
+      usdAsset: config.usdAsset,
     };
     if (this.cfg.closeMarginBlocks >= this.cfg.minLockBlocks) throw new Error("closeMarginBlocks must be below minLockBlocks");
-    const floor = closeFeeFloor(CLOSE_FLOOR_SCRIPT, CLOSE_FLOOR_OUTPUTS);
+    const floor = closeFeeFloor(CLOSE_FLOOR_SCRIPT, CLOSE_FLOOR_OUTPUTS_YED); // ≥ the YEC close's floor
     if (this.cfg.closeFee < floor) throw new Error(`closeFee ${this.cfg.closeFee} is below the close's fee floor ${floor}`);
     this.manager = new ChannelManager(config);
     this.schemeHooks = {
@@ -80,18 +103,28 @@ export class BatchYcashScheme implements SchemeNetworkServer {
     };
   }
 
-  /** YEC prices: a decimal YEC amount ("0.0002", 0.0002) or an AssetAmount in zatoshis. */
+  /**
+   * YEC prices: a decimal YEC amount ("0.0002", 0.0002) or an AssetAmount in zatoshis. YED prices:
+   * "0.01 YED", "$0.01" with `usdAsset: "YED"`, or an AssetAmount in cents. A YED ceiling may be
+   * below $1.00: the dollar floor applies to the voucher's cumulative, not to one request (X-7).
+   */
   async parsePrice(price: Price, network: Network): Promise<AssetAmount> {
     if (typeof price === "object" && price !== null && "amount" in price) {
-      if (price.asset !== ASSET_YEC) throw new Error(`batch-settlement on ${network}: asset ${price.asset} is not supported here`);
-      return { amount: price.amount, asset: ASSET_YEC };
+      if (price.asset !== ASSET_YEC && price.asset !== ASSET_YED) throw new Error(`batch-settlement on ${network}: asset ${price.asset} is not supported here`);
+      if (!/^[1-9][0-9]*$/.test(price.amount)) throw new Error(`amount must be a positive canonical integer: ${price.amount}`);
+      return { amount: price.amount, asset: price.asset };
     }
-    const s = typeof price === "number" ? price.toFixed(8) : price.trim().replace(/\s*YEC$/i, "");
+    const s = typeof price === "number" ? price.toFixed(8) : price.trim();
+    const yed = /\s*YED$/i.test(s) || (s.startsWith("$") && this.cfg.usdAsset === ASSET_YED) || (/\s*USD$/i.test(s) && this.cfg.usdAsset === ASSET_YED);
+    if (yed) return { amount: centsOf(s.replace(/^\$/, "").replace(/\s*(YED|USD)$/i, "")), asset: ASSET_YED };
     if (s.startsWith("$")) throw new Error("USD prices need a price source; give the price in YEC");
-    return { amount: yecToZat(s).toString(), asset: ASSET_YEC };
+    return { amount: yecToZat(s.replace(/\s*YEC$/i, "")).toString(), asset: ASSET_YEC };
   }
 
   async enhancePaymentRequirements(req: PaymentRequirements, _kind: SupportedKind, _ext: string[]): Promise<PaymentRequirements> {
+    const yed = req.asset === ASSET_YED;
+    // YED vouchers are checkable only against confirmed token records (plan X-F14).
+    if (yed && this.cfg.confirmations < 0) throw new Error("YED channels require a funding depth of at least 0 (in a block)");
     return {
       ...req,
       extra: {
@@ -99,7 +132,7 @@ export class BatchYcashScheme implements SchemeNetworkServer {
         serverPubKey: bytesToHex(this.manager.serverPubKey),
         minLockBlocks: this.cfg.minLockBlocks,
         closeMarginBlocks: this.cfg.closeMarginBlocks,
-        maxDeposit: this.cfg.maxDeposit.toString(),
+        maxDeposit: (yed ? this.cfg.maxDepositCents : this.cfg.maxDeposit).toString(),
         closeFee: this.cfg.closeFee.toString(),
         areFeesSponsored: false,
         confirmationPolicy: { confirmations: this.cfg.confirmations },

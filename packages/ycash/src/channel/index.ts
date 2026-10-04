@@ -7,3 +7,4 @@ export * from "./outputs.js";
 export * from "./funding.js";
 export * from "./voucher.js";
 export * from "./refund.js";
+export * from "./yed.js";

@@ -2,9 +2,11 @@
 // script verifier that checks P2PKH signatures with the SDK's own ZIP-243 code, so a corrupted
 // signature fails rule 9 as it would on a node.
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
-import { RpcError, SendRawTransactionError, type BlockchainInfo, type NodeCapabilities, type TxOutInfo, type VerifyScriptsResult, type YedValidation } from "../../../src/node/index.js";
+import { RpcError, SendRawTransactionError, type BlockchainInfo, type NodeCapabilities, type TxOutInfo, type VerifyScriptsResult, type YedPayload, type YedValidation } from "../../../src/node/index.js";
+import { findPayload, isFindPayloadFailure } from "../../../src/yed/index.js";
 import type { ExactFacilitatorRpc } from "../../../src/exact/index.js";
 import type { ChainState, Coin, UtxoSource } from "../../../src/exact/index.js";
+import type { TokenCoin } from "../../../src/yed/index.js";
 import {
   bytesToHex,
   encodeWif,
@@ -44,6 +46,13 @@ export class FakeNode implements ExactFacilitatorRpc {
 
   private key(txid: string, n: number): string {
     return `${txid}:${n}`;
+  }
+
+  /** A confirmed coin holding `cents` of YED (a token record), carrying TOKEN_VALUE. */
+  addToken(cents: number, script: Uint8Array, confirmations = 6): { txid: string; vout: number } {
+    const o = this.addCoin(10_000n, script, confirmations);
+    this.yedCents.set(this.key(o.txid, o.vout), cents);
+    return o;
   }
 
   /** A confirmed coin paying `script`. */
@@ -125,14 +134,54 @@ export class FakeNode implements ExactFacilitatorRpc {
     return { line: "v4", subversion: "/YcashCpp:4.5.0/", version: 4050050, yellowback: this.yellowback, chain: this.chain };
   }
 
+  /**
+   * The overlay's dry run, modelled on ApplyTransfer and IN-3 (ycash-dd/src/yellowback/state.cpp:443-474,
+   * 860-885): a TRANSFER out of range or over-assigned burns everything, an under-assigned one burns the
+   * rest, a YED spend without a TRANSFER burns it all. `valid` is the fake script verifier's verdict.
+   */
   async yedValidateRawTransaction(hex: string): Promise<YedValidation> {
     this.calls.push("yed_validaterawtransaction");
     const tx = parseTx(hex);
     const yedIn = tx.vin.reduce((s, i) => s + (this.yedCents.get(this.key(i.prevout.txid, i.prevout.vout)) ?? 0), 0);
+    const unconfirmedInputs = tx.vin
+      .filter((i) => this.unconfirmed.has(this.key(i.prevout.txid, i.prevout.vout)))
+      .map((i) => ({ txid: i.prevout.txid, vout: i.prevout.vout }));
+    const found = findPayload(tx.vout);
+    let type = "none";
+    let verdict = "ok";
+    let yedOut = 0;
+    if (found && !isFindPayloadFailure(found) && found.payload.type === "transfer") {
+      type = "transfer";
+      const total = found.payload.assignments.reduce((s, a) => s + a.cents, 0);
+      if (found.payload.assignments.some((a) => a.cents < 100 || a.cents > 10_000_000)) verdict = "bad-transfer-assignment";
+      else if (total > yedIn) verdict = "transfer-over-assigned";
+      else if (yedIn <= 0) verdict = "transfer-no-yed-input";
+      else {
+        yedOut = total;
+        verdict = total < yedIn ? "burned" : "ok";
+      }
+    } else if (yedIn > 0) {
+      verdict = "burned";
+    }
+    const valid = (await this.verifyScripts(hex)).complete;
     return {
-      valid: yedIn === 0, verdict: yedIn === 0 ? "OK" : "BURNED", type: yedIn === 0 ? "none" : "transfer", path: "", yedIn, yedOut: 0, burned: yedIn,
-      feeZat: 0, payee: null, blockValid: true, wouldBeRejected: false, mempoolExpiryOk: true, unconfirmedInputs: [],
+      valid, verdict, type, path: "", yedIn, yedOut, burned: yedIn - yedOut,
+      feeZat: 0, payee: null, blockValid: true, wouldBeRejected: false, mempoolExpiryOk: true, unconfirmedInputs,
     };
+  }
+
+  /** Outpoints yed_validaterawtransaction reports as unconfirmed. */
+  unconfirmed = new Set<string>();
+  /** Overrides yed_decodepayload's answer (a disagreeing node). */
+  decodeOverride: YedPayload | undefined;
+
+  async yedDecodePayload(hex: string): Promise<YedPayload> {
+    this.calls.push("yed_decodepayload");
+    if (this.decodeOverride) return this.decodeOverride;
+    const found = findPayload(parseTx(hex).vout);
+    if (!found || isFindPayloadFailure(found)) return { valid: false, version: 0, type: "none", reason: "malformed" };
+    const p = found.payload;
+    return { valid: true, version: 3, type: p.type, reason: "", opReturnIndex: found.index, ...(p.type === "transfer" ? { assignments: p.assignments.map((a) => ({ ...a })) } : {}) };
   }
 
   /** Mines the mempool into a block at tip + 1. */
@@ -170,16 +219,28 @@ function out(u: { value: bigint; script: Uint8Array }, confirmations: number): T
   };
 }
 
-/** A UtxoSource over the fake node: the coins of one script. */
+/** A UtxoSource over the fake node: its plain coins, and its token records. */
 export class FakeUtxoSource implements UtxoSource {
   constructor(private readonly node: FakeNode) {}
   async chainState(): Promise<ChainState> {
     return { chain: this.node.chain, height: this.node.tip, branchId: BRANCH_ID };
   }
+  async listTokens(address: string): Promise<TokenCoin[]> {
+    void address;
+    const tokens: TokenCoin[] = [];
+    for (const [k, cents] of this.node.yedCents) {
+      const u = this.node.utxos.get(k);
+      const [txid, vout] = k.split(":") as [string, string];
+      if (!u || (await this.node.getTxOut(txid, Number(vout), true)) === null) continue;
+      tokens.push({ outpoint: { txid, vout: Number(vout) }, cents, value: u.value, scriptPubKey: u.script });
+    }
+    return tokens;
+  }
   async listCoins(address: string): Promise<Coin[]> {
     void address;
     const coins: Coin[] = [];
     for (const [k, u] of this.node.utxos) {
+      if (this.node.yedCents.has(k)) continue; // a YEC payment never spends a token record
       const [txid, vout] = k.split(":") as [string, string];
       if ((await this.node.getTxOut(txid, Number(vout), true)) === null) continue;
       coins.push({ txid, vout: Number(vout), value: u.value, scriptPubKey: u.script, confirmations: this.node.tip - u.height + 1 });

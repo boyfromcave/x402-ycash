@@ -29,6 +29,23 @@ export function reservationLapsed(r: CoinReservation, tip: number, now = Date.no
   return r.untilMs !== undefined && now >= r.untilMs;
 }
 
+/**
+ * The outpoints still held at `tip`. Releases those whose spend lapsed and, given `spentInBlock`
+ * (`gettxout(…, false)` is null), those a block already spent: the spend confirmed.
+ */
+export async function heldOutpoints(store: CoinReservationStore, tip: number, spentInBlock?: (txid: string, vout: number) => Promise<boolean>): Promise<Set<string>> {
+  const all = await store.list();
+  const held = new Set<string>();
+  const over: string[] = [];
+  for (const [o, r] of all) {
+    const [txid, vout] = o.split(":") as [string, string];
+    if (reservationLapsed(r, tip) || (spentInBlock && (await spentInBlock(txid, Number(vout))))) over.push(o);
+    else held.add(o);
+  }
+  if (over.length > 0) await store.release(over);
+  return held;
+}
+
 function heldByOther(get: (outpoint: string) => CoinReservation | undefined, outpoints: readonly string[], spentBy: string): boolean {
   return outpoints.some((o) => {
     const r = get(o);

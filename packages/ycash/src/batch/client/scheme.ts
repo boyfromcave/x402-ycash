@@ -6,11 +6,12 @@ import type { FindDefaultAsset, PaymentPayloadContext, PaymentPayloadResult, Pay
 import { channelIdOf } from "../../channel/channel.js";
 import { DUST_THRESHOLD } from "../../channel/constants.js";
 import { findChannelVout } from "../../channel/funding.js";
-import { yecVoucherOutputs, type VoucherLayout } from "../../channel/outputs.js";
+import type { VoucherLayout } from "../../channel/outputs.js";
 import { buildRefund } from "../../channel/refund.js";
 import { buildChannelScript, channelAddress } from "../../channel/script.js";
 import { buildVoucher } from "../../channel/voucher.js";
-import { ASSET_YEC, ASSET_YED } from "../../constants.js";
+import { buildYedRefund, yedChannelValue } from "../../channel/yed.js";
+import { ASSET_YEC, ASSET_YED, YED_MAX_OUTPUT_CENTS } from "../../constants.js";
 import type { BlockchainInfo, TxOutInfo } from "../../node/types.js";
 import { bytesToHex, hexToBytes } from "../../tx/bytes.js";
 import { hash160 } from "../../tx/hash.js";
@@ -19,6 +20,7 @@ import { p2pkhScript } from "../../tx/script.js";
 import { parseTx, serializeTxHex, txid as txidOf } from "../../tx/tx.js";
 import { BatchError } from "../errors.js";
 import { parseTerms, type BatchChannelState, type BatchClientPayload, type BatchTerms } from "../types.js";
+import { closeCumulative, cumulativeFloor, layoutFor } from "../verify.js";
 import { channelOfRecord, InMemoryClientChannelStorage, offerKeyOf, type ClientChannelRecord, type ClientChannelStorage } from "./channel.js";
 import type { ChannelFunder } from "./funder.js";
 
@@ -30,11 +32,11 @@ export interface ClientChain {
 }
 
 /**
- * The client's own deposit caps, in each asset's unit: 1 YEC and $20 (2,000 YED cents). Spend
+ * The client's own deposit caps, in each asset's unit: 1 YEC and $50 (5,000 YED cents). Spend
  * controls cap only the per-request `amount`; D is locked until t, and the server alone chooses
  * its `maxDeposit`, so the client caps it too.
  */
-export const DEFAULT_CLIENT_MAX_DEPOSIT: Readonly<Record<string, bigint>> = { [ASSET_YEC]: 100_000_000n, [ASSET_YED]: 2_000n };
+export const DEFAULT_CLIENT_MAX_DEPOSIT: Readonly<Record<string, bigint>> = { [ASSET_YEC]: 100_000_000n, [ASSET_YED]: 5_000n };
 
 export interface BatchYcashClientConfig {
   chain: ClientChain;
@@ -72,8 +74,9 @@ export class BatchYcashScheme implements SchemeNetworkClient {
   readonly scheme = "batch-settlement";
   readonly storage: ClientChannelStorage;
   readonly schemeHooks: SchemeClientHooks;
-  /** Makes YEC (8 decimals) known to x402Client's spend controls, which refuse unknown assets. */
-  readonly findDefaultAsset: FindDefaultAsset = (asset) => (asset === ASSET_YEC ? { asset: ASSET_YEC, decimals: 8, symbol: ASSET_YEC } : undefined);
+  /** Makes YEC (8 decimals) and YED (cents) known to x402Client's spend controls, which refuse unknown assets. */
+  readonly findDefaultAsset: FindDefaultAsset = (asset) =>
+    asset === ASSET_YEC ? { asset: ASSET_YEC, decimals: 8, symbol: ASSET_YEC } : asset === ASSET_YED ? { asset: ASSET_YED, decimals: 2, symbol: ASSET_YED } : undefined;
 
   constructor(private readonly cfg: BatchYcashClientConfig) {
     this.storage = cfg.storage ?? new InMemoryClientChannelStorage();
@@ -87,10 +90,14 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     };
   }
 
-  /** The voucher outputs of an asset. YED (plan X3) adds its layout here. */
-  protected layoutFor(asset: string): VoucherLayout {
-    if (asset === ASSET_YEC) return yecVoucherOutputs;
-    throw new Error(`no channel layout for ${asset}`);
+  /** The voucher outputs of a channel of `asset` holding D (YEC, or YED with the dollar floor). */
+  protected layoutFor(asset: string, deposit: bigint): VoucherLayout {
+    return layoutFor(asset, deposit);
+  }
+
+  /** The least a voucher may carry: the dust threshold for YEC, $1.00 for YED (X-7). */
+  private floorOf(asset: string): bigint {
+    return asset === ASSET_YED ? cumulativeFloor(asset) : DUST_THRESHOLD;
   }
 
   async createPaymentPayload(x402Version: number, req: PaymentRequirements, _ctx?: PaymentPayloadContext): Promise<PaymentPayloadResult> {
@@ -108,7 +115,8 @@ export class BatchYcashScheme implements SchemeNetworkClient {
         await this.storage.put(rec);
         rec = undefined;
       } else {
-        const cumulative = next > DUST_THRESHOLD ? next : DUST_THRESHOLD;
+        const floor = this.floorOf(rec.asset);
+        const cumulative = next > floor ? next : floor;
         const tx = this.sign(rec, cumulative, branchId);
         rec.signed = cumulative.toString();
         await this.storage.put(rec);
@@ -120,20 +128,25 @@ export class BatchYcashScheme implements SchemeNetworkClient {
   }
 
   private async open(terms: BatchTerms, offerKey: string, tip: number, branchId: number) {
-    this.layoutFor(terms.asset); // refuse an asset without a layout before funding anything
+    const yed = terms.asset === ASSET_YED;
     const priv = randomPrivKey();
     const clientPubKey = pubkeyFromPriv(priv);
     const refundHeight = tip + terms.minLockBlocks + (this.cfg.lockSlackBlocks ?? 10);
     const redeemScript = buildChannelScript({ clientPubKey, serverPubKey: terms.serverPubKey, refundHeight });
     const cap = this.maxDepositFor(terms.asset);
     let deposit = this.cfg.deposit?.(terms) ?? terms.amount * BigInt(this.cfg.depositMultiplier ?? 100);
-    if (deposit > terms.maxDeposit) deposit = terms.maxDeposit;
+    const serverCap = yed && terms.maxDeposit > BigInt(YED_MAX_OUTPUT_CENTS) ? BigInt(YED_MAX_OUTPUT_CENTS) : terms.maxDeposit;
+    if (deposit > serverCap) deposit = serverCap;
     if (!this.cfg.deposit && deposit > cap) deposit = cap;
+    const floor = this.floorOf(terms.asset);
+    const first = terms.amount > floor ? terms.amount : floor;
+    if (yed && deposit < first) deposit = first; // a YED channel holds at least the pre-paid $1.00
     if (deposit > cap) throw new Error(`deposit ${deposit} is above this client's maxDeposit ${cap} for ${terms.asset}`);
-    const first = terms.amount > DUST_THRESHOLD ? terms.amount : DUST_THRESHOLD;
-    if (deposit < first) throw new Error(`maxDeposit ${terms.maxDeposit} cannot carry one request of ${first}`);
-    const value = deposit + terms.closeFee;
-    const fundingTx = await this.cfg.funder.fund({ network: terms.network, redeemScript, value, branchId });
+    if (deposit < first || deposit > serverCap) throw new Error(`maxDeposit ${terms.maxDeposit} cannot carry one request of ${first}`);
+    this.layoutFor(terms.asset, deposit); // refuse an asset without a layout before funding anything
+    // YED: V carries the two voucher outputs' TOKEN_VALUE and the close fee; D is assigned in cents.
+    const value = yed ? yedChannelValue(terms.closeFee) : deposit + terms.closeFee;
+    const fundingTx = await this.cfg.funder.fund({ network: terms.network, redeemScript, value, branchId, asset: terms.asset, deposit });
     const vout = findChannelVout(parseTx(fundingTx), redeemScript);
     if (vout < 0) throw new Error("the funder's transaction does not pay the channel");
     const channelId = channelIdOf({ txid: txidOf(hexToBytes(fundingTx)), vout });
@@ -164,7 +177,7 @@ export class BatchYcashScheme implements SchemeNetworkClient {
       clientScript: hexToBytes(rec.clientScript),
       clientPrivKey: hexToBytes(rec.clientPrivKey),
       branchId,
-      layout: this.layoutFor(rec.asset),
+      layout: this.layoutFor(rec.asset, BigInt(rec.deposit)),
     }));
   }
 
@@ -205,7 +218,7 @@ export class BatchYcashScheme implements SchemeNetworkClient {
   async closePayload(channelId: string): Promise<PaymentPayloadResult> {
     const rec = await this.mustGet(channelId);
     const info = await this.cfg.chain.getBlockchainInfo();
-    const cumulative = BigInt(rec.charged);
+    const cumulative = closeCumulative(rec.asset, BigInt(rec.charged));
     const tx = this.sign(rec, cumulative, parseInt(info.consensus.nextblock, 16) >>> 0);
     const payload: BatchClientPayload = { type: "close", channelId, tx, cumulative: cumulative.toString() };
     return { x402Version: 2, payload: { ...payload } };
@@ -224,13 +237,15 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     const rec = await this.mustGet(channelId);
     const info = await this.cfg.chain.getBlockchainInfo();
     if (info.blocks < rec.refundHeight) throw new Error(`the refund is valid from height ${rec.refundHeight}; tip is ${info.blocks}`);
-    const tx = buildRefund({
+    const params = {
       channel: channelOfRecord(rec),
       clientPrivKey: hexToBytes(rec.clientPrivKey),
       toScript: opts.toScript ?? hexToBytes(rec.clientScript),
       branchId: parseInt(info.consensus.nextblock, 16) >>> 0,
       ...(opts.fee !== undefined ? { fee: opts.fee } : {}),
-    });
+    };
+    // A YED refund carries a TRANSFER of all of D to the client: a bare spend would burn it (Y-4).
+    const tx = rec.asset === ASSET_YED ? buildYedRefund({ ...params, depositCents: BigInt(rec.deposit) }) : buildRefund(params);
     const txid = await this.cfg.chain.sendRawTransaction(serializeTxHex(tx));
     rec.status = "refunded";
     rec.refundTxid = txid;

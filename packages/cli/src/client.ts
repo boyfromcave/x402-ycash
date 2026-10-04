@@ -3,7 +3,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { x402Client, x402HTTPClient } from "@x402/core/client";
-import { BatchYcashClientScheme, exact, FileClientChannelStorage, rpcWalletFunder, ShieldedExactClient, tx, utxoSourceFunder } from "x402-ycash-mechanism";
+import { BatchYcashClientScheme, exact, FileClientChannelStorage, FileCoinReservationStore, rpcWalletFunder, ShieldedExactClient, tx, utxoSourceFunder } from "x402-ycash-mechanism";
 import type { CliConfig } from "./config.js";
 
 export interface PayingClient {
@@ -17,16 +17,18 @@ export function buildClient(config: CliConfig): PayingClient {
   mkdirSync(dirname(config.channelStorePath), { recursive: true });
   const storage = new FileClientChannelStorage(config.channelStorePath);
   const node = config.node;
-  const source = config.wif ? new exact.RpcUtxoSource(node, { importAddress: true }) : undefined;
-  const transparent = new exact.ExactYcashScheme(config.wif && source ? new exact.LocalKeySigner(config.wif, source) : new exact.RpcWalletSigner(node));
+  const held = { reservations: new FileCoinReservationStore(config.reservationsPath) };
+  const source = config.wif ? new exact.RpcUtxoSource(node, { importAddress: true, ...held }) : undefined;
+  const transparent = new exact.ExactYcashScheme(config.wif && source ? new exact.LocalKeySigner(config.wif, source) : new exact.RpcWalletSigner(node, held));
   const shielded = config.shieldedFrom ? new ShieldedExactClient({ rpc: node, from: config.shieldedFrom }) : undefined;
-  const funder = config.wif && source ? utxoSourceFunder(tx.decodeWif(config.wif, config.network).privKey, source) : rpcWalletFunder(node);
+  const funder = config.wif && source ? utxoSourceFunder(tx.decodeWif(config.wif, config.network).privKey, source) : rpcWalletFunder(node, held);
   const deposit = config.depositZat;
   const batch = new BatchYcashClientScheme({
     chain: node,
     funder,
     storage,
     ...(deposit !== undefined ? { deposit: (t) => (deposit < t.maxDeposit ? deposit : t.maxDeposit) } : {}),
+    ...(config.maxDepositZat !== undefined ? { maxDeposit: { YEC: config.maxDepositZat } } : {}),
   });
   const client = new x402Client()
     .register(config.network, new exact.ExactYcashMethodRouter({ transparent, ...(shielded ? { shielded } : {}) }))

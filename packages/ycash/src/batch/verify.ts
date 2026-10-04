@@ -5,9 +5,14 @@ import { channelFromScript, channelIdOf, yecDeposit, type Channel } from "../cha
 import { parseChannelScript } from "../channel/script.js";
 import { checkVoucherShape, verifyVoucherSignature } from "../channel/voucher.js";
 import { yecVoucherOutputs, type VoucherLayout } from "../channel/outputs.js";
-import { YCASH_MAINNET, YCASH_REGTEST, YCASH_TESTNET, type YcashNetwork } from "../constants.js";
+import { assignedTo, YED_TRANSFER_VOUT, yedChannelValue, yedVoucherAssignments, yedVoucherLayout } from "../channel/yed.js";
+import { ASSET_YEC, ASSET_YED, YCASH_MAINNET, YCASH_REGTEST, YCASH_TESTNET, YED_MAX_OUTPUT_CENTS, YED_MIN_OUTPUT_CENTS, type YcashNetwork } from "../constants.js";
 import { yecToZat } from "../node/amount.js";
-import type { BlockchainInfo, TxOutInfo, VerifyScriptsResult } from "../node/types.js";
+import { RPC_METHOD_NOT_FOUND, RpcError } from "../node/errors.js";
+import type { BlockchainInfo, TxOutInfo, VerifyScriptsResult, YedPayload, YedValidation } from "../node/types.js";
+import { checkTransferVerdict, decodedTransferOf, sameAssignments } from "../yed/verdict.js";
+import { findPayload, isFindPayloadFailure } from "../yed/script.js";
+import { validateTransferAssignments } from "../yed/transfer.js";
 import { addressToScript } from "../tx/address.js";
 import { equalBytes, hexToBytes } from "../tx/bytes.js";
 import { feeFloor, txFee } from "../tx/fee.js";
@@ -23,6 +28,91 @@ export interface ChainView {
   getTxOut(txid: string, n: number, includeMempool: boolean): Promise<TxOutInfo | null>;
   verifyScripts(hex: string): Promise<VerifyScriptsResult>;
   sendRawTransaction(hex: string): Promise<string>;
+}
+
+/** A Yellowback node's view (`-experimentalfeatures -yellowback`): what YED channels need (plan Y-9). */
+export interface YedChainView extends ChainView {
+  yedValidateRawTransaction(hex: string): Promise<YedValidation>;
+  yedDecodePayload(hex: string): Promise<YedPayload>;
+}
+
+export function isYedChain(chain: ChainView): chain is YedChainView {
+  const c = chain as Partial<YedChainView>;
+  return typeof c.yedValidateRawTransaction === "function" && typeof c.yedDecodePayload === "function";
+}
+
+/** The chain as a Yellowback node, or YED_NODE_REQUIRED. */
+export function yedChain(chain: ChainView): YedChainView {
+  if (!isYedChain(chain)) throw new BatchSettlementError(BatchError.YED_NODE_REQUIRED, "YED channels need a Yellowback node");
+  return chain;
+}
+
+/** A stock node answers the overlay's RPCs with −32601: that is YED_NODE_REQUIRED, not a verdict. */
+async function overlay<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (e) {
+    if (e instanceof RpcError && e.code === RPC_METHOD_NOT_FOUND) {
+      throw new BatchSettlementError(BatchError.YED_NODE_REQUIRED, "the node does not run -experimentalfeatures -yellowback");
+    }
+    throw e;
+  }
+}
+
+/** The voucher outputs of a channel of `asset` holding D (YEC: zatoshis; YED: cents). */
+export function layoutFor(asset: string, deposit: bigint): VoucherLayout {
+  if (asset === ASSET_YEC) return yecVoucherOutputs;
+  if (asset === ASSET_YED) return yedVoucherLayout(deposit);
+  throw new BatchSettlementError(BatchError.REQUIREMENTS, `no channel layout for ${asset}`);
+}
+
+/** The least cumulative a voucher may carry: $1.00 for YED (the dollar floor, X-7), none for YEC (the layout enforces dust). */
+export function cumulativeFloor(asset: string): bigint {
+  return asset === ASSET_YED ? BigInt(YED_MIN_OUTPUT_CENTS) : 0n;
+}
+
+/** The cumulative of a client `close` at the charged total: never below the floor (the pre-paid dollar is the server's). */
+export function closeCumulative(asset: string, charged: bigint): bigint {
+  const floor = cumulativeFloor(asset);
+  return charged > floor ? charged : floor;
+}
+
+/**
+ * Whether the server should close after a charge: the next voucher at the ceiling would exceed D,
+ * or, for YED, would leave the client a remainder in (0, $1.00), or the latest voucher already
+ * assigns all of D to the server (scheme "Close triggers").
+ */
+export function isExhausted(asset: string, deposit: bigint, charged: bigint, ceiling: bigint, latestCumulative: bigint): boolean {
+  if (asset !== ASSET_YED) return latestCumulative >= deposit || charged + ceiling > deposit;
+  const min = BigInt(YED_MIN_OUTPUT_CENTS);
+  const next = charged + ceiling > min ? charged + ceiling : min;
+  const left = deposit - next;
+  return next > deposit || (left > 0n && left < min) || deposit - latestCumulative < min;
+}
+
+/**
+ * The overlay's checks of a YED voucher (scheme "Verification adds"): `yed_decodepayload` finds
+ * exactly the split at vout 2, and `yed_validaterawtransaction` reports a transfer, verdict ok,
+ * burned 0, yedIn = yedOut = D, no unconfirmed input. `scripts` is false for a voucher whose
+ * server slot is still empty (a facilitator's `voucher`): its scripts cannot verify yet.
+ */
+export async function checkYedVoucher(chain: ChainView, hex: string, deposit: bigint, cumulative: bigint, opts: { scripts?: boolean } = {}): Promise<void> {
+  const node = yedChain(chain);
+  const decoded = decodedTransferOf(await overlay(() => node.yedDecodePayload(hex)));
+  if (!decoded || decoded.opReturnIndex !== YED_TRANSFER_VOUT || !sameAssignments(decoded.assignments, yedVoucherAssignments(deposit, cumulative))) {
+    throw new BatchSettlementError(BatchError.YED_VERDICT, "yed_decodepayload does not find the voucher's split at vout 2");
+  }
+  const problem = checkTransferVerdict(await overlay(() => node.yedValidateRawTransaction(hex)), { yedIn: Number(deposit), scripts: opts.scripts ?? true });
+  if (problem) throw new BatchSettlementError(problem.problem === "scripts" ? BatchError.SCRIPT : BatchError.YED_VERDICT, problem.message);
+}
+
+/** The channel's D as the overlay records it: the yedIn of a voucher spending it (the channel's token record). */
+export async function overlayDeposit(chain: ChainView, voucherHex: string): Promise<bigint> {
+  const node = yedChain(chain);
+  const v = await overlay(() => node.yedValidateRawTransaction(voucherHex));
+  if (v.unconfirmedInputs.length > 0) throw new BatchSettlementError(BatchError.FUNDING_DEPTH, "the channel's funding is not in a block (plan X-F14)");
+  if (v.yedIn < YED_MIN_OUTPUT_CENTS) throw new BatchSettlementError(BatchError.YED_VERDICT, `the channel output holds ${v.yedIn} cents of YED`);
+  return BigInt(v.yedIn);
 }
 
 const CHAIN_OF: Record<YcashNetwork, string> = { [YCASH_MAINNET]: "main", [YCASH_TESTNET]: "test", [YCASH_REGTEST]: "regtest" };
@@ -68,8 +158,9 @@ export async function verifyOpen(
   terms: BatchTerms,
   chain: ChainView,
   ctx: { tip: number; branchId: number },
-  layout: VoucherLayout = yecVoucherOutputs,
 ): Promise<VerifiedOpen> {
+  const yed = terms.asset === ASSET_YED;
+  if (yed) yedChain(chain);
   // 2. the redeem script
   const rs = hexToBytes(p.redeemScript);
   const script = parseChannelScript(rs);
@@ -95,8 +186,8 @@ export async function verifyOpen(
     closeFee: terms.closeFee,
     payToScript: addressToScript(terms.payTo, terms.network),
   });
-  // 4. the deposit (YEC: V − closeFee)
-  const deposit = yecDeposit(channel);
+  // 4. the deposit: V − closeFee for YEC; for YED the cents the funding TRANSFER assigns the channel
+  const deposit = yed ? yedFundingDeposit(fundingTx, p.vout, channel.value, terms.closeFee) : yecDeposit(channel);
   if (deposit <= 0n) throw new BatchSettlementError(BatchError.FUNDING, "V does not cover the close fee");
   if (deposit > terms.maxDeposit) throw new BatchSettlementError(BatchError.DEPOSIT_TOO_LARGE, `D = ${deposit} > ${terms.maxDeposit}`);
   // 5–6. unspent inputs, fee floor, scripts — or the funding output already exists
@@ -113,10 +204,48 @@ export async function verifyOpen(
     const scripts = await chain.verifyScripts(p.fundingTx);
     if (!scripts.complete || scripts.errors.length > 0) throw new BatchSettlementError(BatchError.FUNDING, "the funding scripts do not verify");
   }
+  // The overlay's view of the funding TRANSFER while its inputs are still in the UTXO set (not
+  // broadcast, or in the mempool). Once mined, the first voucher's yedIn = D is the check.
+  if (yed && (!existing || existing.confirmations === 0)) await checkYedFunding(chain, p.fundingTx, p.vout, deposit);
   // 7. the first voucher, rules 4–6 (charged is 0)
   const cumulative = BigInt(p.voucher.cumulative);
-  checkVoucher(decodeTx(p.voucher.tx, BatchError.VOUCHER_SHAPE), channel, cumulative, { charged: 0n, amount: terms.amount, deposit, branchId: ctx.branchId, layout });
+  checkVoucher(decodeTx(p.voucher.tx, BatchError.VOUCHER_SHAPE), channel, cumulative, {
+    charged: 0n, amount: terms.amount, deposit, branchId: ctx.branchId, layout: layoutFor(terms.asset, deposit), floor: cumulativeFloor(terms.asset),
+  });
   return { channel, channelId: channelIdOf(channel.outpoint), fundingTx, fundingTxid, deposit, alreadyBroadcast: existing !== null };
+}
+
+/**
+ * D of a YED channel from its funding transaction (scheme "YED Channels", Funding): V is exactly
+ * 2 × TOKEN_VALUE + closeFee, and the one TRANSFER assigns the channel output D cents in
+ * [$1.00, $100,000], with assignments the overlay registers.
+ */
+function yedFundingDeposit(fundingTx: Tx, vout: number, value: bigint, closeFee: bigint): bigint {
+  if (value !== yedChannelValue(closeFee)) {
+    throw new BatchSettlementError(BatchError.FUNDING, `a YED channel output carries 2 × TOKEN_VALUE + closeFee = ${yedChannelValue(closeFee)} zatoshis, not ${value}`);
+  }
+  const found = findPayload(fundingTx.vout);
+  if (!found || isFindPayloadFailure(found) || found.payload.type !== "transfer") {
+    throw new BatchSettlementError(BatchError.FUNDING, "the funding transaction carries no TRANSFER");
+  }
+  const check = validateTransferAssignments(found.payload.assignments, fundingTx.vout.length, found.index);
+  if (!check.valid) throw new BatchSettlementError(BatchError.FUNDING, `the funding TRANSFER would burn (${check.error})`);
+  const d = assignedTo(found.payload.assignments, vout);
+  if (d === undefined || d < YED_MIN_OUTPUT_CENTS || d > YED_MAX_OUTPUT_CENTS) {
+    throw new BatchSettlementError(BatchError.FUNDING, `the funding TRANSFER does not assign the channel output (vout ${vout})`);
+  }
+  return BigInt(d);
+}
+
+/** The overlay agrees: the funding TRANSFER decodes the same and burns nothing (verdict ok). */
+async function checkYedFunding(chain: ChainView, hex: string, vout: number, deposit: bigint): Promise<void> {
+  const node = yedChain(chain);
+  const decoded = decodedTransferOf(await overlay(() => node.yedDecodePayload(hex)));
+  if (!decoded || assignedTo(decoded.assignments, vout) !== Number(deposit)) {
+    throw new BatchSettlementError(BatchError.FUNDING, "yed_decodepayload does not assign D to the channel output");
+  }
+  const problem = checkTransferVerdict(await overlay(() => node.yedValidateRawTransaction(hex)));
+  if (problem) throw new BatchSettlementError(problem.problem === "unconfirmed_input" ? BatchError.FUNDING : BatchError.YED_VERDICT, `funding: ${problem.message}`);
 }
 
 export interface VoucherBounds {
@@ -130,11 +259,14 @@ export interface VoucherBounds {
   layout?: VoucherLayout;
   /** accept a completed close (the server's slot filled), for a facilitator's `claim` */
   allowCompleted?: boolean;
+  /** the least cumulative (YED: $1.00, the dollar floor X-7) */
+  floor?: bigint;
 }
 
 /** Voucher rules 4 (shape), 5 (charged + amount ≤ cumulative ≤ D, plan X-F16) and 6 (sigC). */
 export function checkVoucher(tx: Tx, channel: Channel, cumulative: bigint, b: VoucherBounds): void {
   if (cumulative > b.deposit) throw new BatchSettlementError(BatchError.CUMULATIVE_EXCEEDS_DEPOSIT, `${cumulative} > D = ${b.deposit}`);
+  if (b.floor !== undefined && cumulative < b.floor) throw new BatchSettlementError(BatchError.YED_FLOOR, `cumulative ${cumulative} is below the $1.00 floor`);
   const shape = checkVoucherShape(tx, channel, cumulative, { ...(b.layout ? { layout: b.layout } : {}), allowCompleted: b.allowCompleted ?? false });
   if (shape) throw new BatchSettlementError(BatchError.VOUCHER_SHAPE, shape);
   if (cumulative < b.charged + b.amount) {
