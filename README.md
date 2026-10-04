@@ -67,6 +67,35 @@ agent's wallet with a confirmed note>` pays privately and prints the merchant's 
 `scripts/devnet.sh down dd 181` stops the devnet. Every block the payments need can come from
 node 1, the stock seat: no node runs anything for x402.
 
+### YED
+
+Ycash Yellowback (YED) is paid on two more merchant routes, served only when the facilitator lists
+YED in `/supported` (its node runs `-experimentalfeatures -yellowback`, as node 0 does) and the
+merchant has a Yellowback address: `GET /yed/report` (exact, `PRICE_YED_REPORT`, default `$2`;
+never below $1.00, since a smaller YED output burns) and `GET /yed/stream` (a YED channel,
+`PRICE_YED_STREAM` per request, default `$0.01`, deposits up to `MERCHANT_MAX_DEPOSIT_CENTS`). A
+YED channel's funding must be in a block, so run the merchant of step 3 without
+`MERCHANT_CHANNEL_CONFIRMATIONS=-1` and add, for example,
+`MERCHANT_YED_PAY_TO=$(X402_SCRATCH=$PWD/scratch scripts/devnet.sh cli dd 181 -- yed_getnewaddress)`.
+Node 0 needs YED first: `scripts/devnet.sh cli dd 181 -- yed_mint 20000 48 "" "" false`, then a
+block from a pool, whose blocks carry the price (`scripts/devnet.sh cli dd 181 --node 2 -- generate 1`).
+
+```
+# YED exact at $2 from node 0's wallet (YED is a default asset with a $1.00 cap: raise the agent's)
+RESOURCE_URL=http://127.0.0.1:4021/yed/report MAX_PAYMENT_YED_CENTS=200 AGENT_DEVNET_JSON=$PWD/scratch/dd-181/devnet.json npm start -w x402-ycash-example-agent-client
+
+# a YED channel of 150 one-cent requests with D = $5.00, then the CLI's close (the merchant gets max($1.00, charged))
+RESOURCE_URL=http://127.0.0.1:4021/yed/stream REQUESTS=150 AGENT_YED_CHANNEL_DEPOSIT_CENTS=500 AGENT_CHANNEL_STORE=$PWD/scratch/yed.json AGENT_DEVNET_JSON=$PWD/scratch/dd-181/devnet.json npm start -w x402-ycash-example-agent-client
+npm start -s -w x402-ycash-cli -- channel close http://127.0.0.1:4021/yed/stream --asset YED --devnet $PWD/scratch/dd-181/devnet.json --channels $PWD/scratch/yed.json
+```
+
+The agent pays YED from `AGENT_WIF` (the key's `ye…` token outputs) or the node's wallet, with
+`MAX_PAYMENT_YED_CENTS` (default 100), `AGENT_YED_CHANNEL_DEPOSIT_CENTS` and
+`AGENT_YED_CHANNEL_MAX_DEPOSIT_CENTS` (default $50). The CLI takes `--asset YED` on `pay` and
+`channel open|close` (`--deposit` is then in cents), `--max-payment-yed` and `--max-deposit-yed`;
+`channel refund` of a YED channel carries a TRANSFER of all of D, by default to the WIF key or a new
+Yellowback address of the node's wallet.
+
 ## Facilitator
 
 `packages/facilitator` (`x402-ycash-facilitator`) is a self-hostable x402 facilitator for one Ycash
