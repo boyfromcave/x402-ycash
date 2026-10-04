@@ -191,7 +191,7 @@ describe("sapling-proof facilitator: settle", () => {
     expect(res.payer).toBeUndefined();
     const receipt = (res.extensions as { "offer-receipt": { info: { receipt: JwsSignedArtifact } } })["offer-receipt"].info.receipt;
     expect(verifyReceipt(receipt, { trustedPublicKeys: [secp.getPublicKey(RECEIPT_KEY, true)] })).toEqual({ version: 1, network: YCASH_REGTEST, resourceUrl: RESOURCE, payer: "anonymous", issuedAt: NOW, transaction: TXID });
-    expect(await store.isClaimed(`ycash:regtest:${TXID}`)).toBe(true);
+    expect(await store.isClaimed(`ycash:regtest:${TXID}@${req.payTo}`)).toBe(true);
     // the same proof again
     expect(await handler.settle(payloadFor(req), req)).toMatchObject({ success: false, errorReason: ERR.duplicateSettlement, transaction: TXID });
   });
