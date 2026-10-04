@@ -11,7 +11,7 @@ against the same devnet. The light client's regtest test brings up its own devne
 
 | | |
 |---|---|
-| x402-ycash | `main` at `f0a8815` plus `89d754f` (the one harness fix, below) for the package, HTTP and Python suites; the light client at `main` `d4db4c3` (the spend review merge: `light/` only) for `light/scripts/regtest.sh` and a second `light.http` run with that build. Recorded on branch `x402/final2` |
+| x402-ycash | `main` at `f0a8815` plus `89d754f` (the one harness fix, below) for the package, HTTP and Python suites; the light client at `main` `d4db4c3` (the spend review merge: `light/` only) for `light/scripts/regtest.sh` and a second `light.http` run with that build. Recorded on branch `x402/final2`. Two later test-only commits there, `40c8dbe` (the harness reads P2P ports lazily) and `ec52b4e` (`exact_yec`'s YED mint retries on an empty price window), ran in the staged package's devnet suites on both lines (`docs/upstream.md`), not in a rerun of this record |
 | v4.5.0 line | `ycash-dd/src/ycashd`: `Ycash Daemon version v4.5.0-cdfc4945f-dirty`; devnet seed 391 |
 | 6.21.0 line | `ycash6/src/ycashd`: `Ycash Daemon version v6.21.0-rc1-94bafa4fd-dirty`; devnet seed 393 |
 | lightwalletd | lightwalletd-dd at `0b3448e` (has `YellowbackStreamer.GetChainInfo`), built with `CGO_ENABLED=0 go build -mod=vendor`, run `--yellowback` on node 0 at port 9458 (dd) and 9460 (6) |
