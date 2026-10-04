@@ -2,7 +2,7 @@
 // channel on first use (a fresh key C, t = tip + minLockBlocks + slack, a funding transaction from
 // its funder), signs one voucher per request at the server's charged total plus `amount`, and can
 // close cooperatively or refund alone from t (specs/scheme_batch_settlement_ycash.md).
-import type { PaymentPayloadContext, PaymentPayloadResult, PaymentRequirements, SchemeClientHooks, SchemeNetworkClient, SettleResponse } from "@x402/core/types";
+import type { FindDefaultAsset, PaymentPayloadContext, PaymentPayloadResult, PaymentRequirements, SchemeClientHooks, SchemeNetworkClient, SettleResponse } from "@x402/core/types";
 import { channelIdOf } from "../../channel/channel.js";
 import { DUST_THRESHOLD } from "../../channel/constants.js";
 import { findChannelVout } from "../../channel/funding.js";
@@ -60,6 +60,8 @@ export class BatchYcashScheme implements SchemeNetworkClient {
   readonly scheme = "batch-settlement";
   readonly storage: ClientChannelStorage;
   readonly schemeHooks: SchemeClientHooks;
+  /** Makes YEC (8 decimals) known to x402Client's spend controls, which refuse unknown assets. */
+  readonly findDefaultAsset: FindDefaultAsset = (asset) => (asset === ASSET_YEC ? { asset: ASSET_YEC, decimals: 8, symbol: ASSET_YEC } : undefined);
 
   constructor(private readonly cfg: BatchYcashClientConfig) {
     this.storage = cfg.storage ?? new InMemoryClientChannelStorage();

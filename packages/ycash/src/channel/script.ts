@@ -69,9 +69,13 @@ export function parseChannelScript(rs: Uint8Array): ChannelScript | null {
   if (chunks.length !== 13) return null;
   const c = chunks[2]?.data;
   const s = chunks[3]?.data;
-  const t = chunks[7]?.data;
-  if (!c || !s || !t || t.length === 0 || t.length > 5) return null;
-  const height = decodeScriptNum(t);
+  const tc = chunks[7];
+  if (!c || !s || !tc) return null;
+  // t ≤ 16 is pushed as OP_1..OP_16 (CScript << int64), larger t as a CScriptNum.
+  let height: bigint;
+  if (tc.data === undefined && tc.op >= OP.OP_1 && tc.op <= OP.OP_16) height = BigInt(tc.op - OP.OP_1 + 1);
+  else if (tc.data && tc.data.length > 0 && tc.data.length <= 5) height = decodeScriptNum(tc.data);
+  else return null;
   if (height <= 0n || height >= BigInt(LOCKTIME_THRESHOLD)) return null;
   const parsed: ChannelScript = { clientPubKey: c, serverPubKey: s, refundHeight: Number(height) };
   try {

@@ -10,6 +10,7 @@ import { channelScriptPubKey, parseChannelScript } from "../../channel/script.js
 import { parseCloseScriptSig } from "../../channel/voucher.js";
 import { ASSET_YEC } from "../../constants.js";
 import { SendRawTransactionError } from "../../node/errors.js";
+import { InMemoryChannelStore, type ChannelStore } from "../../store/channelStore.js";
 import { RETAIN_FOREVER, txidKey, type SettlementStore } from "../../store/settlementStore.js";
 import { addressToScript } from "../../tx/address.js";
 import { bytesToHex, equalBytes, hexToBytes } from "../../tx/bytes.js";
@@ -19,9 +20,18 @@ import { BATCH_SETTLEMENT_SCHEME, isBatchPayload, parseTerms, requiredDepth, sam
 import { chainContext, checkCompleted, checkVoucher, decodeTx, verifyOpen, zatOf, type ChainView } from "../verify.js";
 
 export interface BatchYcashFacilitatorConfig {
-  chain: ChainView;
+  /** the facilitator's node (YcashRpc) */
+  rpc: ChainView;
   /** Deduplicates relays of a close by its txid (plan X-F6); optional for a single process. */
   settlementStore?: SettlementStore;
+  /**
+   * Records the channels this facilitator relayed (open) and the cumulative of the close it
+   * relayed (claim), for audit across processes. The facilitator decides nothing from it: the
+   * charged total and the voucher watermark are the server's. Default: in memory.
+   */
+  channelStore?: ChannelStore;
+  /** The funding depths this facilitator settles (`/supported`); default −1..20. */
+  confirmations?: { minimum: number; maximum: number };
   /** How long settle waits for the funding depth before answering settlement_pending (default 0). */
   fundingWaitMs?: number;
   fundingPollMs?: number;
@@ -31,10 +41,19 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
   readonly scheme = BATCH_SETTLEMENT_SCHEME;
   readonly caipFamily = "ycash:*";
 
-  constructor(private readonly cfg: BatchYcashFacilitatorConfig) {}
+  private readonly chain: ChainView;
+  private readonly channels: ChannelStore;
+  private readonly limits: { minimum: number; maximum: number };
 
+  constructor(private readonly cfg: BatchYcashFacilitatorConfig) {
+    this.chain = cfg.rpc;
+    this.channels = cfg.channelStore ?? new InMemoryChannelStore();
+    this.limits = cfg.confirmations ?? { minimum: -1, maximum: 20 };
+  }
+
+  /** The funding depths it settles, as the `exact` facilitator advertises its range. */
   getExtra(_network: Network): Record<string, unknown> | undefined {
-    return undefined;
+    return { confirmations: { ...this.limits } };
   }
 
   /** No sponsorship: the facilitator signs nothing. */
@@ -45,9 +64,9 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
   async verify(payload: PaymentPayload, requirements: PaymentRequirements): Promise<VerifyResponse> {
     try {
       const { p, terms } = this.envelope(payload, requirements);
-      const ctx = await chainContext(this.cfg.chain, terms.network);
+      const ctx = await chainContext(this.chain, terms.network);
       if (p.type === "open") {
-        const v = await verifyOpen(p, terms, this.cfg.chain, ctx);
+        const v = await verifyOpen(p, terms, this.chain, ctx);
         return { isValid: true, payer: v.channelId, extra: { channelId: v.channelId } };
       }
       const { channel, tx } = await this.liveChannel(p.tx, p.channelId, terms);
@@ -59,7 +78,7 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
         branchId: ctx.branchId,
         allowCompleted: p.type === "claim",
       });
-      if (p.type === "claim") await checkCompleted(this.cfg.chain, tx);
+      if (p.type === "claim") await checkCompleted(this.chain, tx);
       return { isValid: true, payer: p.channelId, extra: { channelId: p.channelId } };
     } catch (e) {
       return { isValid: false, invalidReason: reasonOf(e), invalidMessage: (e as Error).message };
@@ -84,6 +103,7 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
           if (!(await this.waitForDepth(fundingTxid, p.vout, requiredDepth(terms.confirmations)))) {
             return { ...fail(new BatchSettlementError(BatchError.SETTLEMENT_PENDING, "funding below the policy depth"), fundingTxid), payer: channelId };
           }
+          await this.channels.open({ channelId, cumulative: 0n, data: { fundingTxid, vout: p.vout } });
           return { success: true, transaction: fundingTxid, network, payer: channelId, amount: "", extra: { commitmentId: commitmentId(channelId) } };
         }
         case "voucher":
@@ -95,6 +115,7 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
             throw new BatchSettlementError("duplicate_settlement", closeTxid);
           }
           await this.relay(p.tx);
+          await this.recordClaim(p.channelId, BigInt(p.cumulative));
           return { success: true, transaction: closeTxid, network, payer: p.channelId, amount: "", extra: { commitmentId: commitmentId(p.channelId) } };
         }
         case "close":
@@ -112,6 +133,9 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
     }
     if (!isBatchPayload(payload.payload)) throw new BatchSettlementError(BatchError.PAYLOAD, "not a batch-settlement payload");
     const terms = parseTerms(requirements);
+    if (terms.confirmations < this.limits.minimum || terms.confirmations > this.limits.maximum) {
+      throw new BatchSettlementError(BatchError.REQUIREMENTS, `confirmations ${terms.confirmations} outside [${this.limits.minimum}, ${this.limits.maximum}]`);
+    }
     if (terms.asset !== ASSET_YEC) throw new BatchSettlementError(BatchError.YED_NODE_REQUIRED, "YED channels are not supported by this facilitator yet");
     return { p: payload.payload, terms };
   }
@@ -125,7 +149,7 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
     if (channelIdOf(input.prevout) !== channelId) throw new BatchSettlementError(BatchError.VOUCHER_SHAPE, "the voucher does not spend channelId");
     const script = parseChannelScript(ss.redeemScript);
     if (!script || !equalBytes(script.serverPubKey, terms.serverPubKey)) throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, bytesToHex(ss.redeemScript));
-    const out = await this.cfg.chain.getTxOut(input.prevout.txid, input.prevout.vout, true);
+    const out = await this.chain.getTxOut(input.prevout.txid, input.prevout.vout, true);
     if (!out) throw new BatchSettlementError(BatchError.CHANNEL_CLOSING, "the channel output is spent or unknown");
     if (out.scriptPubKey.hex !== bytesToHex(channelScriptPubKey(ss.redeemScript))) throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, "not the channel output's script");
     const channel = channelFromScript({
@@ -138,9 +162,15 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
     return { channel, tx };
   }
 
+  private async recordClaim(channelId: string, cumulative: bigint): Promise<void> {
+    if (await this.channels.open({ channelId, cumulative })) return;
+    const r = await this.channels.get(channelId);
+    if (r && r.cumulative < cumulative) await this.channels.compareAndSetCumulative(channelId, r.cumulative, cumulative);
+  }
+
   private async relay(hex: string): Promise<void> {
     try {
-      await this.cfg.chain.sendRawTransaction(hex);
+      await this.chain.sendRawTransaction(hex);
     } catch (e) {
       if (e instanceof SendRawTransactionError && e.kind === "already-in-chain") return;
       throw e;
@@ -150,7 +180,7 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
   private async waitForDepth(txid: string, vout: number, want: number): Promise<boolean> {
     const deadline = Date.now() + (this.cfg.fundingWaitMs ?? 0);
     for (;;) {
-      const out = await this.cfg.chain.getTxOut(txid, vout, true);
+      const out = await this.chain.getTxOut(txid, vout, true);
       if (out && out.confirmations >= want) return true;
       if (Date.now() >= deadline) return false;
       await new Promise((r) => setTimeout(r, this.cfg.fundingPollMs ?? 500));
