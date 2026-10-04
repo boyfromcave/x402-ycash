@@ -73,7 +73,8 @@ async def tokens_of(d: Devnet, address: str) -> list[dict[str, Any]]:
 
 
 async def ensure_yed(d: Devnet, cents: int) -> None:
-    """Node 0's confirmed YED, minting more when short (the lean devnet mints; pool blocks carry the quotes)."""
+    """Node 0's confirmed YED, minting more when short (the lean devnet mints; pool blocks carry the quotes and
+    lift the low-participation halt that a run of stock-node blocks causes, ACT-4)."""
     async def balance() -> int:
         return int((await d.wallet.call("yed_getbalance"))["confirmedCents"])
     if await balance() >= cents:
@@ -84,7 +85,7 @@ async def ensure_yed(d: Devnet, cents: int) -> None:
             await d.wallet.call("yed_mint", [max(cents, 10_000), 48, "", "", False])  # MINT is $100..$10,000
             break
         except RpcError as e:
-            if "price" not in e.message.lower() or time.monotonic() > deadline:
+            if not ("price" in e.message.lower() or "participation" in e.message.lower()) or time.monotonic() > deadline:
                 raise
             await d.pool.generate(4)
             await asyncio.sleep(1)

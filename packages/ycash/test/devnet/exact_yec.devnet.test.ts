@@ -1,7 +1,7 @@
-// X1 acceptance (plan §7 X1, §4.3): `exact` transparent YEC through the real @x402/core
+// Acceptance (plan §7 X1, §4.3): `exact` transparent YEC through the real @x402/core
 // x402Client / x402ResourceServer / x402Facilitator, against a live devnet of either line.
-// The whole suite runs twice: facilitator on node 0 (Yellowback) and on node 1 (stock, OP-6).
-// Blocks that confirm payments are mined by node 1 (stock, OP-1); one by the yolo stratum pool (OP-3).
+// The whole suite runs twice: facilitator on node 0 (Yellowback) and on node 1 (stock).
+// Blocks that confirm payments are mined by node 1 (stock); one by the yolo stratum pool.
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -169,7 +169,7 @@ describeDevnet("exact YEC through @x402/core on a live devnet", () => {
   for (const which of ["yellowback", "stock"] as const) {
     const S = () => stacks.find((s) => s.name === which) as Stack;
 
-    it(`[${which}] happy path at -1, 0 and 1; blocks mined by node 1 (OP-1); latency per policy`, async () => {
+    it(`[${which}] happy path at -1, 0 and 1; blocks mined by node 1, the stock seat; latency per policy`, async () => {
       const s = S();
       const latency: Record<string, number> = {};
       for (const c of [-1, 0, 1]) {
@@ -338,7 +338,7 @@ describeDevnet("exact YEC through @x402/core on a live devnet", () => {
     record(d.line, "YEC payment spending a YED coin", results);
   });
 
-  it("OP-3: one payment mined through the yolo stratum pool", async () => {
+  it("one payment mined through the yolo stratum pool", async () => {
     const state = JSON.parse(readFileSync(DEVNET_JSON as string, "utf8")) as { portseed: number; bitcoind: string; dir: string };
     const repo = d.line === "v6" ? "ycash6" : "ycash-dd";
     const cli = join(WORKSPACE, repo, "contrib/yellowback/devnet/yellowback-devnet");
@@ -370,7 +370,7 @@ describeDevnet("exact YEC through @x402/core on a live devnet", () => {
       const status = JSON.parse(readFileSync(DEVNET_JSON as string, "utf8")) as { stratum?: Record<string, { payout: string }> };
       const payout = status.stratum?.[String(POOL)]?.payout;
       expect(coinbaseOut?.scriptPubKey.addresses).toContain(payout); // yolo's --payout: the block is the pool's
-      record(d.line, "OP-3 yolo block", { height: block.height, payout, stratumBlocks, latencyMs: r.ms });
+      record(d.line, "yolo block", { height: block.height, payout, stratumBlocks, latencyMs: r.ms });
     } finally {
       await run("pool", String(POOL), "stratum", "stop");
     }

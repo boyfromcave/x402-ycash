@@ -1,4 +1,4 @@
-// YED payment channels (specs/scheme_batch_settlement_ycash.md, "YED Channels"; plan §5.8, X-7):
+// YED payment channels (specs/scheme_batch_settlement_ycash.md, "YED Channels"; plan §5.8):
 // the funding TRANSFER, the dollar floor, a TRANSFER on every spend, the overlay's verdict, against
 // an in-process chain with the Yellowback overlay.
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
@@ -143,7 +143,7 @@ describe("open: the funding TRANSFER", () => {
   });
 });
 
-describe("vouchers under the dollar floor (X-7)", () => {
+describe("vouchers under the dollar floor", () => {
   it("$0.01 requests consume the pre-paid dollar first, then the cumulative grows by the ceiling", async () => {
     const s = await setup();
     await s.open(); // charged 1

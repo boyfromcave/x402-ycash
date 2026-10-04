@@ -48,7 +48,7 @@ export interface SpendDescription {
   spendAuthSig: Uint8Array;
 }
 
-/** A Sapling output; a facilitator trial-decrypts encCiphertext (X4b). */
+/** A Sapling output; a facilitator trial-decrypts encCiphertext (the reserved `sapling` method). */
 export interface OutputDescription {
   cv: Uint8Array;
   cmu: Uint8Array;

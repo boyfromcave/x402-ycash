@@ -68,7 +68,7 @@ const refund = C.buildYedRefund({ channel, depositCents, clientPrivKey: cPriv, t
 
 const doc = {
   description:
-    "YED payment channel (batch-settlement, plan X3): the funding TRANSFER (D cents to the P2SH output of V = 2 × TOKEN_VALUE + closeFee), vouchers under the dollar floor with their TRANSFER at vout 2, completed closes, the refund with its TRANSFER of all of D to the client (vout 1). The client's YED (voucher vout 1, the refund) goes to the open's returnAddress (clientScript, a P2PKH). The funding keeps nExpiryHeight 0 (still accepted) so its bytes stay those of the earlier vector. Offline, deterministic; the builders' spends are mined on both lines by test/devnet/yed.devnet.test.ts.",
+    "YED payment channel (batch-settlement): the funding TRANSFER (D cents to the P2SH output of V = 2 × TOKEN_VALUE + closeFee), vouchers under the dollar floor with their TRANSFER at vout 2, completed closes, the refund with its TRANSFER of all of D to the client (vout 1). The client's YED (voucher vout 1, the refund) goes to the open's returnAddress (clientScript, a P2PKH). The funding keeps nExpiryHeight 0 (still accepted) so its bytes stay those of the earlier vector. Offline, deterministic; the builders' spends are mined on both lines by test/devnet/yed.devnet.test.ts.",
   branchId: BRANCH.toString(16),
   channel: {
     clientPriv: hex(cPriv), serverPriv: hex(sPriv), funderPriv: hex(fPriv), refundHeight, depositCents: depositCents.toString(),

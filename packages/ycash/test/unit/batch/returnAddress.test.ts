@@ -100,7 +100,8 @@ describe("server", () => {
   it("refuses an open without a returnAddress, or with payTo's, one of another network, or garbage", async () => {
     const s = await setup();
     const p = (await s.pay()).payload as unknown as batch.BatchOpenPayload;
-    const { returnAddress: _omit, ...without } = p;
+    const without: Partial<batch.BatchOpenPayload> = { ...p };
+    delete without.returnAddress;
     expect(await reasonOf(s.server.manager.verify(s.wrap(without), s.req))).toBe(E.PAYLOAD_TYPE);
     for (const addr of [payToAddr, T.encodeAddress("ycash:mainnet", "p2pkh", T.hexToBytes("dd".repeat(20))), "x"]) {
       expect(await reasonOf(s.server.manager.verify(s.wrap({ ...p, returnAddress: addr }), s.req))).toBe(E.RETURN_ADDRESS);

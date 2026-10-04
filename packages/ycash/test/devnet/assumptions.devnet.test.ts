@@ -1,4 +1,5 @@
-// Live checks of the plan's node assumptions (plan §3 R-2, R-3, R-5, R-6, Z-3; §5.5 replacement).
+// Live checks of the plan's node assumptions R-2, R-3, R-5, R-6 and Z-3 (plan §3), and of mempool
+// replacement (plan §5.5).
 // Each test records the exact RPC outputs as `FINDING <line> <item>: <json>` lines.
 import { beforeAll, expect, it } from "vitest";
 import { RpcError, SendRawTransactionError, type ZReceived } from "../../src/node/index.js";
@@ -12,7 +13,7 @@ function errorOf(e: unknown): Record<string, unknown> {
   throw e;
 }
 
-describeDevnet("plan assumptions on a live devnet", () => {
+describeDevnet("node assumptions on a live devnet", () => {
   let d: Devnet;
   beforeAll(async () => {
     d = await devnet();
@@ -119,7 +120,7 @@ describeDevnet("plan assumptions on a live devnet", () => {
     expect(spentResubmit).not.toMatchObject({ code: -27 });
   });
 
-  it("§5.5: a double spend of a mempool tx's input is refused on both seats (no replace-by-fee)", async () => {
+  it("a double spend of a mempool tx's input is refused on both seats (no replace-by-fee)", async () => {
     const u = await d.utxo(d.wallet, 30_000_000n);
     const t1 = await d.wallet.sendRawTransaction(await spend(u, await d.stock.getNewAddress()));
     await d.syncMempools();

@@ -182,7 +182,7 @@ export async function checkYedVoucher(chain: ChainView, hex: string, deposit: bi
 export async function overlayDeposit(chain: ChainView, voucherHex: string): Promise<bigint> {
   const node = yedChain(chain);
   const v = await overlay(() => node.yedValidateRawTransaction(voucherHex));
-  if (v.unconfirmedInputs.length > 0) throw new BatchSettlementError(BatchError.FUNDING_DEPTH, "the channel's funding is not in a block (plan X-F14)");
+  if (v.unconfirmedInputs.length > 0) throw new BatchSettlementError(BatchError.FUNDING_DEPTH, "the channel's funding is not in a block");
   if (v.yedIn < YED_MIN_OUTPUT_CENTS) throw new BatchSettlementError(BatchError.YED_VERDICT, `the channel output holds ${v.yedIn} cents of YED`);
   return BigInt(v.yedIn);
 }
@@ -402,7 +402,7 @@ export interface VoucherBounds {
   layout?: VoucherLayout;
   /** accept a completed close (the server's slot filled), for a facilitator's `claim` */
   allowCompleted?: boolean;
-  /** the least cumulative (YED: $1.00, the dollar floor X-7) */
+  /** the least cumulative (YED: $1.00, the dollar floor) */
   floor?: bigint;
   /** the channel's bound client script (from `returnAddress`); absent only for a verifier that never saw the open */
   returnScript?: Uint8Array;

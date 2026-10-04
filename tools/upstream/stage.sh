@@ -14,6 +14,7 @@
 # What it does, so a refresh after a change in this repository is one command:
 #   specs/*.md                  → specs/schemes/{exact,batch-settlement}/…   (transform.mjs spec)
 #   packages/ycash/src          → typescript/packages/mechanisms/ycash/src   (transform.mjs code)
+#   packages/ycash/proto        → …/proto (the lightwalletd protos src/lwd loads at run time)
 #   packages/ycash/test/unit    → …/test/unit (flow/ goes to test/integrations/)
 #   packages/ycash/test/devnet  → …/test/integrations/*.devnet.test.ts (not the x4m measurement)
 #   vectors/**/*.json           → …/test/vectors/
@@ -30,7 +31,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --part) part="$2"; shift 2 ;;
     --check) check=1; shift ;;
-    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
     *) fork="$1"; shift ;;
   esac
 done
@@ -80,6 +81,8 @@ stage_impl() {
   rm -rf "$pkg"
   mkdir -p "$pkg/test/integrations" "$pkg/test/vectors"
   cp -R "$src/src" "$pkg/src"
+  # the lightwalletd protos src/lwd loads at run time (package root, beside src/ and dist/)
+  cp -R "$src/proto" "$pkg/proto"
   mv "$pkg/src/batch" "$pkg/src/batch-settlement"
   cp -R "$src/test/unit" "$pkg/test/unit"
   mv "$pkg/test/unit/batch" "$pkg/test/unit/batch-settlement"
@@ -96,8 +99,8 @@ stage_impl() {
   done
   # the stratum-pool case drives this repository's devnet tooling: skipped unless it is there
   local op3="$pkg/test/integrations/exact_yec.devnet.test.ts"
-  if grep -q '  it("OP-3:' "$op3"; then
-    sed -i.bak 's/  it("OP-3:/  it.skipIf(!process.env.YELLOWBACK_WORKSPACE)("OP-3:/' "$op3" && rm "$op3.bak"
+  if grep -q '  it("one payment mined through the yolo stratum pool"' "$op3"; then
+    sed -i.bak 's/  it("one payment mined through the yolo/  it.skipIf(!process.env.YELLOWBACK_WORKSPACE)("one payment mined through the yolo/' "$op3" && rm "$op3.bak"
   fi
   (cd "$repo/vectors" && find . -name '*.json' -print0 | while IFS= read -r -d '' v; do
     mkdir -p "$pkg/test/vectors/$(dirname "$v")"; cp "$v" "$pkg/test/vectors/$v"; done)
