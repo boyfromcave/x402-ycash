@@ -25,7 +25,12 @@ export const YED_TRANSFER_VOUT = 2;
 
 const TOKEN_VALUE = BigInt(TOKEN_VALUE_ZAT);
 
-/** V of a YED channel: the two voucher outputs' YEC plus the close fee. */
+/**
+ * V of a YED channel: the two voucher outputs' YEC plus the close fee.
+ *
+ * @param closeFee - The channel's close fee, zatoshis.
+ * @returns V, zatoshis.
+ */
 export function yedChannelValue(closeFee: bigint): bigint {
   return 2n * TOKEN_VALUE + closeFee;
 }
@@ -33,6 +38,11 @@ export function yedChannelValue(closeFee: bigint): bigint {
 /**
  * The voucher's TRANSFER at `cumulative` out of D: the server's vout gets serverCents and the
  * client's clientCents, omitted when 0 (yedChannelSplit: the dollar floor, X-7). Σ = D, so nothing burns.
+ *
+ * @param depositCents - D, cents.
+ * @param cumulative - The total paid to the server, cents.
+ * @returns The TRANSFER's assignments.
+ * @throws RangeError when the cumulative is below $1.00 or above D.
  */
 export function yedVoucherAssignments(depositCents: bigint, cumulative: bigint): Assignment[] {
   const split = yedChannelSplit(Number(depositCents), Number(cumulative));
@@ -46,6 +56,9 @@ export function yedVoucherAssignments(depositCents: bigint, cumulative: bigint):
  * split, so the fee is always V − 2 × TOKEN_VALUE = closeFee. Throws when V is not
  * 2 × TOKEN_VALUE + closeFee, the client script is missing, not P2PKH or payTo's, or the cumulative breaks
  * the dollar floor.
+ *
+ * @param depositCents - D, cents.
+ * @returns The layout to pass to the voucher builder and verifier.
  */
 export function yedVoucherLayout(depositCents: bigint): VoucherLayout {
   return ({ channel, cumulative, clientScript }) => {
@@ -81,6 +94,9 @@ export interface BuildYedFundingParams {
  * The unsigned funding TRANSFER: vout 0 the channel's P2SH output carrying V and assigned D, then
  * the YED change, the OP_RETURN and YEC change. The SDK builds it: there is no P2SH `ye…` address
  * and `yed_send` refuses one (plan Y-8).
+ *
+ * @param p - Redeem script, D, close fee, the coins to spend and the change scripts.
+ * @returns The unsigned transaction with its per-vin coins, assignments and fee.
  */
 export function buildYedFundingTx(p: BuildYedFundingParams): BuiltYedTransfer {
   return buildYedTransfer({
@@ -93,14 +109,25 @@ export function buildYedFundingTx(p: BuildYedFundingParams): BuiltYedTransfer {
   });
 }
 
-/** The client's refund of a YED channel: the CLTV branch with a TRANSFER assigning all of D to it. */
+/**
+ * The client's refund of a YED channel: the CLTV branch with a TRANSFER assigning all of D to it.
+ *
+ * @param p - The refund parameters plus D in cents.
+ * @returns The signed refund.
+ */
 export function buildYedRefund(p: Omit<BuildRefundParams, "extraOutputs"> & { depositCents: bigint }): Tx {
   // buildRefund puts the extra outputs first, so the client's output is vout 1.
   const opReturn = { value: 0n, scriptPubKey: transferOpReturnScript([{ vout: 1, cents: Number(p.depositCents) }]) };
   return buildRefund({ ...p, extraOutputs: [opReturn] });
 }
 
-/** D as the funding transaction assigns it to the channel output, from its decoded TRANSFER. */
+/**
+ * D as the funding transaction assigns it to the channel output, from its decoded TRANSFER.
+ *
+ * @param assignments - The funding TRANSFER's assignments.
+ * @param vout - The channel output's index.
+ * @returns The cents assigned, or undefined unless exactly one assignment targets `vout`.
+ */
 export function assignedTo(assignments: readonly Assignment[], vout: number): number | undefined {
   const hits = assignments.filter((a) => a.vout === vout);
   return hits.length === 1 ? hits[0]?.cents : undefined;

@@ -38,7 +38,15 @@ export const FUNDING_VOUT = 0;
 /** A P2PKH scriptSig at its longest: a 73-byte signature and a compressed key. */
 const P2PKH_SCRIPTSIG_MAX = 1 + 73 + 1 + 33;
 
-/** The unsigned funding transaction. Inputs keep empty scriptSigs until signFundingTx. */
+/**
+ * Builds the unsigned funding transaction: V to the channel script at vout 0, then change unless
+ * it is below dust (it then goes to the fee). The default fee is the floor of the tx sized with
+ * full-length scriptSigs; inputs are returned with empty scriptSigs for {@link signFundingTx}.
+ *
+ * @param p - Inputs, redeem script, V, change script, optional fee and expiry height.
+ * @returns The unsigned transaction.
+ * @throws Error when there are no inputs or they cannot pay V plus the fee.
+ */
 export function buildFundingTx(p: BuildFundingParams): Tx {
   if (p.inputs.length === 0) throw new Error("funding needs at least one input");
   const total = p.inputs.reduce((s, i) => s + i.value, 0n);
@@ -56,7 +64,16 @@ export function buildFundingTx(p: BuildFundingParams): Tx {
   return tx;
 }
 
-/** Signs every P2PKH input SIGHASH_ALL; `privKeys[i]` owns `inputs[i]`. */
+/**
+ * Signs every P2PKH input SIGHASH_ALL under ZIP-243; `privKeys[i]` owns `inputs[i]`.
+ *
+ * @param tx - The unsigned funding transaction.
+ * @param inputs - The coins spent, in vin order (value and scriptPubKey feed the sighash).
+ * @param privKeys - One private key per input.
+ * @param branchId - The consensus branch id to sign under.
+ * @returns A signed copy; `tx` is not modified.
+ * @throws Error when the counts differ or an input is not a P2PKH coin of its key.
+ */
 export function signFundingTx(tx: Tx, inputs: readonly FundingInput[], privKeys: readonly Uint8Array[], branchId: number): Tx {
   if (inputs.length !== tx.vin.length || privKeys.length !== tx.vin.length) throw new Error("one input and key per vin");
   const signed: Tx = { ...tx, vin: tx.vin.map((i) => ({ ...i })) };
@@ -71,7 +88,13 @@ export function signFundingTx(tx: Tx, inputs: readonly FundingInput[], privKeys:
   return signed;
 }
 
-/** The vout of `tx` paying the channel script, or -1. */
+/**
+ * Finds the output of `tx` that pays the channel's P2SH script.
+ *
+ * @param tx - A funding transaction.
+ * @param redeemScript - The channel redeem script.
+ * @returns The first matching vout, or -1 when none pays it.
+ */
 export function findChannelVout(tx: Tx, redeemScript: Uint8Array): number {
   const spk = channelScriptPubKey(redeemScript);
   return tx.vout.findIndex((o) => equalBytes(o.scriptPubKey, spk));

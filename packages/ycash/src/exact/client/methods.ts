@@ -19,19 +19,42 @@ export interface ExactYcashMethodRouterConfig {
   shielded?: ShieldedExactPayer;
 }
 
+/**
+ * Routes `createPaymentPayload` to the transparent client or the Sapling payer by the
+ * requirement's `extra.assetTransferMethod`.
+ */
 export class ExactYcashMethodRouter implements SchemeNetworkClient {
   readonly scheme = SCHEME_EXACT;
   readonly findDefaultAsset = findYcashDefaultAsset;
 
+  /**
+   * Builds the router.
+   *
+   * @param config - The transparent client, the shielded payer, or both.
+   * @throws Error when neither is given.
+   */
   constructor(private readonly config: ExactYcashMethodRouterConfig) {
     if (!config.transparent && !config.shielded) throw new Error("ExactYcashMethodRouter needs a transparent client, a shielded payer, or both");
   }
 
-  /** The methods this client can pay, for logs and tests. */
+  /**
+   * The methods this client can pay, for logs and tests.
+   *
+   * @returns The configured method names.
+   */
   get methods(): string[] {
     return [...(this.config.transparent ? ["transparent"] : []), ...(this.config.shielded ? ["sapling-proof"] : [])];
   }
 
+  /**
+   * Hands the requirements to the payer for their method; rejects when that method is not
+   * configured.
+   *
+   * @param x402Version - The protocol version of the 402.
+   * @param requirements - The selected payment requirements.
+   * @param context - Optional payload context, passed to the transparent client.
+   * @returns The payment payload.
+   */
   createPaymentPayload(x402Version: number, requirements: PaymentRequirements, context?: PaymentPayloadContext): Promise<PaymentPayloadResult> {
     if (isShieldedMethod(requirements.extra)) {
       if (!this.config.shielded) return Promise.reject(new Error("this client has no Sapling wallet configured for sapling-proof"));

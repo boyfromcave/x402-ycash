@@ -52,28 +52,69 @@ export interface ClientChannelStorage {
   list(): Promise<ClientChannelRecord[]>;
 }
 
+/**
+ * Process-local channel store. Records are cloned on the way in and out, so callers never share
+ * mutable state with the store; channels (and their keys) are lost when the process exits.
+ */
 export class InMemoryClientChannelStorage implements ClientChannelStorage {
   private readonly records = new Map<string, ClientChannelRecord>();
+  /**
+   * Looks up a channel by id.
+   *
+   * @param channelId - The channel id (`txid:vout` of the funding output).
+   * @returns A copy of the record, or undefined.
+   */
   async get(channelId: string): Promise<ClientChannelRecord | undefined> {
     const r = this.records.get(channelId);
     return r ? structuredClone(r) : undefined;
   }
+  /**
+   * Finds the channel in `opening` or `open` state for an offer, so a new request reuses it.
+   *
+   * @param offerKey - The key from {@link offerKeyOf}.
+   * @returns A copy of the live record, or undefined.
+   */
   async findLive(offerKey: string): Promise<ClientChannelRecord | undefined> {
     for (const r of this.records.values()) if (r.offerKey === offerKey && (r.status === "opening" || r.status === "open")) return structuredClone(r);
     return undefined;
   }
+  /**
+   * Inserts or replaces a record by its channel id.
+   *
+   * @param record - The record to store.
+   */
   async put(record: ClientChannelRecord): Promise<void> {
     this.records.set(record.channelId, structuredClone(record));
   }
+  /**
+   * Lists every stored channel, in any state.
+   *
+   * @returns Copies of all records.
+   */
   async list(): Promise<ClientChannelRecord[]> {
     return [...this.records.values()].map((r) => structuredClone(r));
   }
 }
 
+/**
+ * The key under which a client keeps one live channel per offer: same network, payTo and server key.
+ *
+ * @param network - The CAIP-2 network.
+ * @param payTo - The server's payTo address.
+ * @param serverPubKey - The server key S, lowercase hex.
+ * @returns The offer key.
+ */
 export function offerKeyOf(network: string, payTo: string, serverPubKey: string): string {
   return `${network}|${payTo}|${serverPubKey}`;
 }
 
+/**
+ * Rebuilds the {@link Channel} of a stored record (outpoint from the id, script, value, close fee
+ * and payTo script).
+ *
+ * @param r - The stored record.
+ * @returns The channel.
+ */
 export function channelOfRecord(r: ClientChannelRecord): Channel {
   const [txid, vout] = r.channelId.split(":") as [string, string];
   return channelFromScript({

@@ -47,7 +47,13 @@ export interface BatchYcashServerConfig extends ChannelManagerConfig {
   usdAsset?: typeof ASSET_YED;
 }
 
-/** A decimal dollar amount in whole cents ("0.01" → "1"); a fraction of a cent is refused. */
+/**
+ * A decimal dollar amount in whole cents ("0.01" → "1"); a fraction of a cent is refused.
+ *
+ * @param s - The dollar amount, without currency sign or unit.
+ * @returns The cents, as a decimal string.
+ * @throws Error when it is not a positive whole number of cents.
+ */
 function centsOf(s: string): string {
   const m = /^(\d+)(?:\.(\d{1,2}))?$/.exec(s.trim());
   if (!m) throw new Error(`a YED price is a whole number of cents: ${s}`);
@@ -65,6 +71,11 @@ const CLOSE_FLOOR_OUTPUTS = [
 /** A YED close adds its TRANSFER (two assignments: OP_RETURN, push, 15 payload bytes). */
 const CLOSE_FLOOR_OUTPUTS_YED = [...CLOSE_FLOOR_OUTPUTS, { value: 0n, scriptPubKey: new Uint8Array(17) }];
 
+/**
+ * The `batch-settlement` resource-server scheme for Ycash. It advertises the channel terms, and its
+ * hooks run the {@link ChannelManager}: verify locally before the handler (skipping the facilitator)
+ * and charge the actual price, the settle-time `requirements.amount`, after it.
+ */
 export class BatchYcashScheme implements SchemeNetworkServer {
   readonly scheme = BATCH_SETTLEMENT_SCHEME;
   /** The binding has one method, so no on-wire assetTransferMethod. */
@@ -81,6 +92,12 @@ export class BatchYcashScheme implements SchemeNetworkServer {
     usdAsset: typeof ASSET_YED | undefined;
   };
 
+  /**
+   * Creates the scheme and its channel manager.
+   *
+   * @param config - The manager's config plus the advertised channel terms.
+   * @throws Error when `closeMarginBlocks` is not below `minLockBlocks`, or `closeFee` is below a YED close's fee floor.
+   */
   constructor(config: BatchYcashServerConfig) {
     this.cfg = {
       maxDeposit: config.maxDeposit,
@@ -106,7 +123,12 @@ export class BatchYcashScheme implements SchemeNetworkServer {
   /**
    * YEC prices: a decimal YEC amount ("0.0002", 0.0002) or an AssetAmount in zatoshis. YED prices:
    * "0.01 YED", "$0.01" with `usdAsset: "YED"`, or an AssetAmount in cents. A YED ceiling may be
-   * below $1.00: the dollar floor applies to the voucher's cumulative, not to one request (X-7).
+   * below $1.00: the dollar floor applies to the voucher's cumulative, not to one request.
+   *
+   * @param price - The route's price.
+   * @param network - The network, for error messages.
+   * @returns The amount in zatoshis (YEC) or cents (YED).
+   * @throws Error for another asset, a non-canonical amount, a fraction of a cent, or a USD price without `usdAsset`.
    */
   async parsePrice(price: Price, network: Network): Promise<AssetAmount> {
     if (typeof price === "object" && price !== null && "amount" in price) {
@@ -121,7 +143,16 @@ export class BatchYcashScheme implements SchemeNetworkServer {
     return { amount: yecToZat(s.replace(/\s*YEC$/i, "")).toString(), asset: ASSET_YEC };
   }
 
-  async enhancePaymentRequirements(req: PaymentRequirements, _kind: SupportedKind, _ext: string[]): Promise<PaymentRequirements> {
+  /**
+   * Adds the channel terms to `extra`: the server key, lock and margin blocks, the largest deposit
+   * (cents for YED), the close fee and the funding depth.
+   *
+   * @param req - The requirements built from the route.
+   * @param _ - The supported kind and extension keys (unused).
+   * @returns The requirements with the channel terms.
+   * @throws Error for a YED offer when the configured depth is the mempool (−1).
+   */
+  async enhancePaymentRequirements(req: PaymentRequirements, ..._: [SupportedKind, string[]]): Promise<PaymentRequirements> {
     const yed = req.asset === ASSET_YED;
     // YED vouchers are checkable only against confirmed token records (plan X-F14).
     if (yed && this.cfg.confirmations < 0) throw new Error("YED channels require a funding depth of at least 0 (in a block)");
@@ -140,7 +171,13 @@ export class BatchYcashScheme implements SchemeNetworkServer {
     };
   }
 
-  /** The corrective 402 of a cumulative mismatch or a stale voucher carries `channelState`. */
+  /**
+   * The corrective 402 of a cumulative mismatch or a stale voucher carries `channelState`, so the
+   * client can re-sign at the server's totals.
+   *
+   * @param ctx - The 402 being built, with the error and the rejected payload.
+   * @returns The requirements with `channelState` added, or nothing to leave the 402 unchanged.
+   */
   enrichPaymentRequiredResponse = async (ctx: SchemePaymentRequiredContext): Promise<PaymentRequirements[] | void> => {
     if (ctx.error !== BatchError.CUMULATIVE_MISMATCH && ctx.error !== BatchError.STALE_VOUCHER) return;
     const raw = ctx.paymentPayload?.payload;
@@ -159,6 +196,12 @@ export class BatchYcashScheme implements SchemeNetworkServer {
 
   // ------------------------------------------------------------------ hooks
 
+  /**
+   * Verifies a batch payload locally and remembers the locked voucher for settle.
+   *
+   * @param ctx - The verify context.
+   * @returns A skip with the local result, an abort with the reason, or nothing for another scheme.
+   */
   private async beforeVerify(ctx: VerifyContext) {
     if (ctx.requirements.scheme !== this.scheme) return;
     try {
@@ -170,6 +213,12 @@ export class BatchYcashScheme implements SchemeNetworkServer {
     }
   }
 
+  /**
+   * Skips the handler for a client close, which settle broadcasts.
+   *
+   * @param ctx - The verify-result context.
+   * @returns A skip-handler response for a close, else undefined.
+   */
   private async afterVerify(ctx: VerifyResultContext) {
     const v = this.verified.get(ctx.paymentPayload);
     // A client close runs no handler: settle broadcasts it.
@@ -177,6 +226,12 @@ export class BatchYcashScheme implements SchemeNetworkServer {
     return undefined;
   }
 
+  /**
+   * Charges the settle-time amount on the voucher `beforeVerify` locked, instead of calling the facilitator.
+   *
+   * @param ctx - The settle context.
+   * @returns A skip with the settle response, an abort with the reason, or nothing when this scheme did not verify the payload.
+   */
   private async beforeSettle(ctx: SettleContext) {
     const v = this.verified.get(ctx.paymentPayload);
     if (!v) return;
@@ -189,6 +244,11 @@ export class BatchYcashScheme implements SchemeNetworkServer {
     }
   }
 
+  /**
+   * Releases the channel's in-flight lock when a verified request will not be settled.
+   *
+   * @param ctx - The cancellation context.
+   */
   private async onCanceled(ctx: VerifiedPaymentCanceledContext): Promise<void> {
     const v = this.verified.get(ctx.paymentPayload);
     if (!v) return;

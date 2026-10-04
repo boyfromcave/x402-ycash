@@ -10,7 +10,14 @@ import { SEQUENCE_FINAL, hasShielded, newTx, type Tx } from "../tx/tx.js";
 import type { Channel } from "./channel.js";
 import { yecVoucherOutputs, type VoucherLayout } from "./outputs.js";
 
-/** The ZIP-243 hash both voucher signatures cover: script code the redeem script, amount V. */
+/**
+ * The ZIP-243 hash both voucher signatures cover: script code the redeem script, amount V.
+ *
+ * @param tx - The voucher or close.
+ * @param channel - The channel it spends.
+ * @param branchId - The consensus branch id.
+ * @returns The 32-byte SIGHASH_ALL digest of input 0.
+ */
 export function voucherSighash(tx: Tx, channel: Channel, branchId: number): Uint8Array {
   return sighashV4(tx, 0, channel.redeemScript, channel.value, SIGHASH.ALL, branchId);
 }
@@ -30,6 +37,10 @@ export interface BuildVoucherParams {
  * A voucher: one input (the channel outpoint), the layout's outputs, nLockTime 0 and nExpiryHeight
  * 0 (it must stay valid until the server closes), signed SIGHASH_ALL by C, with the server's slot
  * empty: `OP_0 <sigC> OP_0 OP_1 <redeemScript>`.
+ *
+ * @param p - Channel, cumulative, client key and script, branch id and optional layout (default YEC).
+ * @returns The client-signed voucher.
+ * @throws RangeError or Error from the layout when the channel cannot carry `cumulative`.
  */
 export function buildVoucher(p: BuildVoucherParams): Tx {
   const layout = p.layout ?? yecVoucherOutputs;
@@ -54,6 +65,9 @@ export interface CloseScriptSig {
 /**
  * Parses `OP_0 <sigC> <sigS | OP_0> OP_1 <redeemScript>`, with minimal pushes only; null for any
  * other scriptSig.
+ *
+ * @param scriptSig - The channel input's scriptSig.
+ * @returns The two signatures (sigS empty when unfilled) and redeem script, or null.
  */
 export function parseCloseScriptSig(scriptSig: Uint8Array): CloseScriptSig | null {
   let chunks;
@@ -79,6 +93,15 @@ export type VoucherShapeError = "inputs" | "script_sig" | "redeem_script" | "loc
  * layout's outputs at `cumulative`. The client's script is the channel's bound return script
  * (`clientScript`, from the open's returnAddress); only a verifier that never saw the open (a
  * stateless facilitator) leaves it out, and then it is read from vout 1.
+ *
+ * @param tx - The voucher (or completed close, with `allowCompleted`).
+ * @param channel - The channel it must spend.
+ * @param cumulative - The amount it must pay the server, in the asset's unit.
+ * @param opts - Optional checks.
+ * @param opts.layout - The output layout; defaults to the YEC layout.
+ * @param opts.allowCompleted - Accept a filled server signature slot.
+ * @param opts.clientScript - The channel's bound client return script.
+ * @returns The first rule broken, or null when the shape is valid.
  */
 export function checkVoucherShape(
   tx: Tx,
@@ -111,7 +134,14 @@ export function checkVoucherShape(
   return null;
 }
 
-/** Voucher rule 6: sigC is a valid strict-DER low-S SIGHASH_ALL signature by C. */
+/**
+ * Voucher rule 6: sigC is a valid strict-DER low-S SIGHASH_ALL signature by C.
+ *
+ * @param tx - The voucher.
+ * @param channel - The channel it spends.
+ * @param branchId - The consensus branch id it was signed under.
+ * @returns Whether the client signature verifies.
+ */
 export function verifyVoucherSignature(tx: Tx, channel: Channel, branchId: number): boolean {
   const ss = tx.vin.length === 1 && tx.vin[0] ? parseCloseScriptSig(tx.vin[0].scriptSig) : null;
   if (!ss || sigHashType(ss.sigC) !== SIGHASH.ALL) return false;
@@ -121,6 +151,13 @@ export function verifyVoucherSignature(tx: Tx, channel: Channel, branchId: numbe
 /**
  * Server completion: adds sigS in its slot, giving `OP_0 <sigC> <sigS> OP_1 <redeemScript>`.
  * The outputs cannot change: the client signed SIGHASH_ALL.
+ *
+ * @param tx - The client-signed voucher.
+ * @param channel - The channel it spends.
+ * @param serverPrivKey - S's private key.
+ * @param branchId - The consensus branch id to sign under.
+ * @returns The completed close, ready to broadcast; `tx` is not modified.
+ * @throws Error when `tx` does not have the voucher's scriptSig.
  */
 export function completeVoucher(tx: Tx, channel: Channel, serverPrivKey: Uint8Array, branchId: number): Tx {
   const ss = tx.vin.length === 1 && tx.vin[0] ? parseCloseScriptSig(tx.vin[0].scriptSig) : null;

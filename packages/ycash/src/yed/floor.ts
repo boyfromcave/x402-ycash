@@ -13,6 +13,12 @@ export interface YedChannelSplit {
   readonly clientCents: number;
 }
 
+/**
+ * Refuses a channel deposit that is not a valid single YED output (XFER-1).
+ *
+ * @param depositCents - The channel deposit, in cents.
+ * @throws RangeError when the deposit is not an integer in [$1.00, the output maximum].
+ */
 function checkDeposit(depositCents: number): void {
   if (!Number.isInteger(depositCents) || depositCents < YED_MIN_OUTPUT_CENTS || depositCents > YED_MAX_OUTPUT_CENTS) {
     throw new RangeError(
@@ -25,6 +31,10 @@ function checkDeposit(depositCents: number): void {
  * True when `cumulativeCents` is a voucher amount the channel can carry: an integer in
  * [$1.00, deposit]. Every such amount has a non-burning split (yedChannelSplit); a deposit outside
  * the XFER-1 range has none.
+ *
+ * @param depositCents - The channel deposit, in cents.
+ * @param cumulativeCents - The voucher's cumulative amount, in cents.
+ * @returns Whether the voucher amount is acceptable.
  */
 export function isValidYedVoucherCumulative(depositCents: number, cumulativeCents: number): boolean {
   return (
@@ -40,7 +50,12 @@ export function isValidYedVoucherCumulative(depositCents: number, cumulativeCent
 /**
  * The TRANSFER assignments of a YED voucher (or close) at `cumulativeCents` out of a channel holding
  * `depositCents`. serverCents + clientCents always equals the deposit, so yedOut = yedIn and nothing
- * burns. Throws on a cumulative below $1.00 or above the deposit, and on a deposit outside XFER-1.
+ * burns; a client remainder below $1.00 goes to the server.
+ *
+ * @param depositCents - The channel deposit, in cents.
+ * @param cumulativeCents - The voucher's cumulative amount, in cents.
+ * @returns The server and client cents.
+ * @throws RangeError on a cumulative below $1.00 or above the deposit, and on a deposit outside XFER-1.
  */
 export function yedChannelSplit(depositCents: number, cumulativeCents: number): YedChannelSplit {
   checkDeposit(depositCents);

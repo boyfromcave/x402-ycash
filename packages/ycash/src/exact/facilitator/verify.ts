@@ -85,7 +85,15 @@ export interface VerifiedPayment extends ResolvedPayment {
 const fail = (reason: string, message: string, payer?: string): Failure => ({ ok: false, reason, message, ...(payer !== undefined ? { payer } : {}) });
 const HEX = /^(?:[0-9a-f]{2})+$/;
 
-/** Rule 1, the requirement forms, and the pure part of the transaction: rules 3, 4 and 5. */
+/**
+ * Rule 1, the requirement forms, and the pure part of the transaction (rules 3, 4 and 5): checks
+ * that need no chain lookup, so a malformed payment is refused before any RPC is made.
+ *
+ * @param payload - The client's payment payload.
+ * @param req - The server's payment requirements.
+ * @param limits - The facilitator's size, input and confirmation limits.
+ * @returns The resolved payment (parsed tx, txid, payTo vout, required confirmations), or a failure.
+ */
 export function resolvePayment(payload: PaymentPayload, req: PaymentRequirements, limits: VerifyLimits): { ok: true; state: ResolvedPayment } | Failure {
   // Rule 1: envelope.
   if (payload.x402Version !== 2) return fail(ERR_REQUIREMENTS_MISMATCH, `x402Version ${payload.x402Version} is not 2`);
@@ -154,6 +162,11 @@ export function resolvePayment(payload: PaymentPayload, req: PaymentRequirements
  * Rule 4Y without the node: the payTo output is above dust, the transaction's one OP_RETURN is a
  * TRANSFER whose assignments the overlay would register (vouts exist, distinct, not the OP_RETURN,
  * each in [100, 10,000,000]), and exactly one assignment names the payTo output, for `amount`.
+ *
+ * @param tx - The parsed payment transaction.
+ * @param payToVout - Index of the output paying `payTo`.
+ * @param amountCents - The required amount, in YED cents.
+ * @returns The TRANSFER's OP_RETURN index and assignments, or a failure.
  */
 function resolveYedTransfer(tx: Tx, payToVout: number, amountCents: number): { ok: true; transfer: NonNullable<ResolvedPayment["yed"]> } | Failure {
   if ((tx.vout[payToVout]?.value ?? 0n) < DUST_ZAT) return fail(ERR_RECIPIENT_MISMATCH, `the payTo output is below the ${DUST_ZAT}-zatoshi dust threshold`);
@@ -169,7 +182,13 @@ function resolveYedTransfer(tx: Tx, payToVout: number, amountCents: number): { o
   return { ok: true, transfer: { opReturnIndex: found.index, assignments } };
 }
 
-/** Rule 2. */
+/**
+ * Rule 2: the node's chain must be the one the requirements' network names.
+ *
+ * @param rpc - The facilitator's node RPC.
+ * @param network - The CAIP-2 network from the requirements.
+ * @returns The node's tip height on success (rule 8 reads the expiry window against it), or a failure.
+ */
 export async function checkNetwork(rpc: ExactFacilitatorRpc, network: YcashNetwork): Promise<{ ok: true; tip: number } | Failure> {
   const info = await rpc.getBlockchainInfo();
   if (info.chain !== chainOfNetwork(network)) return fail(ERR_NETWORK_MISMATCH, `the node runs ${info.chain}, the requirements name ${network}`);
@@ -180,6 +199,13 @@ export async function checkNetwork(rpc: ExactFacilitatorRpc, network: YcashNetwo
  * Rules 1–10 in order. A tx this facilitator already claimed (its own broadcast) has spent its
  * inputs, so rules 6–9Y "no longer apply" (rule 6's note) and the answer is rule 10's
  * `duplicate_settlement` rather than a spent-input failure.
+ *
+ * @param rpc - The facilitator's node RPC (read-only calls only).
+ * @param store - The settlement store holding claimed txids.
+ * @param payload - The client's payment payload.
+ * @param req - The server's payment requirements.
+ * @param limits - The facilitator's size, input, fee and confirmation limits.
+ * @returns The verified payment with its payer and fee in zatoshis, or the first failing rule.
  */
 export async function verifyTransparent(
   rpc: ExactFacilitatorRpc,
@@ -256,7 +282,13 @@ export async function verifyTransparent(
   return { ok: true, state: { ...s, payer, feeZat: fee } };
 }
 
-/** The response's `payer`: input 0's address, in the `ye…` form for a YED payment from a P2PKH coin. */
+/**
+ * The response's `payer`: input 0's address, in the `ye…` form for a YED payment from a P2PKH coin.
+ *
+ * @param spk - The scriptPubKey of the coin input 0 spends.
+ * @param s - The payment's network and, for YED, its decoded transfer.
+ * @returns The payer address.
+ */
 export function payerOf(spk: Uint8Array, s: Pick<ResolvedPayment, "network" | "yed">): string {
   const pkh = s.yed ? p2pkhHash(spk) : null;
   return pkh ? encodeAddress(s.network, "yed", pkh) : addressOfScript(spk, s.network);

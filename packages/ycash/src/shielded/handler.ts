@@ -53,6 +53,11 @@ export interface SaplingProofHandlerConfig extends Omit<ShieldedExactServerConfi
   notePollMs?: number;
 }
 
+/**
+ * The self-hosted `sapling-proof` handler for one network: a {@link ShieldedExactServer} issuing a
+ * fresh diversified address per request and a {@link ShieldedExactFacilitator} settling against the
+ * same wallet and registry.
+ */
 export class SaplingProofHandler implements ShieldedExactHandlerShape {
   readonly network: YcashNetwork;
   readonly server: ShieldedExactServer;
@@ -61,6 +66,12 @@ export class SaplingProofHandler implements ShieldedExactHandlerShape {
   private readonly confirmations: { minimum: number; maximum: number } | undefined;
   private readonly logger: ShieldedLogger | undefined;
 
+  /**
+   * Builds the server and facilitator halves, sharing the registry.
+   *
+   * @param config - The network, merchant wallet, stores, confirmation range and receipt key.
+   * @throws Error when `capabilities` reports another chain than the network's.
+   */
   constructor(config: SaplingProofHandlerConfig) {
     this.network = config.network;
     if (config.capabilities && config.capabilities.chain !== CHAIN_OF[config.network]) {
@@ -87,16 +98,38 @@ export class SaplingProofHandler implements ShieldedExactHandlerShape {
     });
   }
 
+  /**
+   * Issues a per-request address and memo for the requirement.
+   *
+   * @param requirements - The route's requirements.
+   * @param resource - The resource being paid for.
+   * @returns The requirements with the issued payTo and `sapling-proof` extra.
+   * @throws Error when the requirement is for another network, or the server refuses to issue.
+   */
   async enhanceRequirements(requirements: PaymentRequirements, resource: ResourceInfo | string): Promise<PaymentRequirements> {
     this.checkNetwork(requirements);
     return this.server.enhanceRequirements(requirements, resource);
   }
 
+  /**
+   * Read-only check of a presented payment.
+   *
+   * @param payload - The client's payload.
+   * @param requirements - The issued requirements.
+   * @returns The facilitator's answer, or `network_mismatch` for another network.
+   */
   async verify(payload: PaymentPayload, requirements: PaymentRequirements): Promise<VerifyResponse> {
     if (requirements.network !== this.network) return { isValid: false, invalidReason: "network_mismatch", invalidMessage: `this handler serves ${this.network}` };
     return this.facilitator.verify(payload, requirements);
   }
 
+  /**
+   * Settles a presented payment and logs the outcome.
+   *
+   * @param payload - The client's payload.
+   * @param requirements - The issued requirements.
+   * @returns The facilitator's settle response, or `network_mismatch` for another network.
+   */
   async settle(payload: PaymentPayload, requirements: PaymentRequirements): Promise<SettleResponse> {
     if (requirements.network !== this.network) {
       return { success: false, errorReason: "network_mismatch", errorMessage: `this handler serves ${this.network}`, transaction: "", network: requirements.network };
@@ -107,6 +140,12 @@ export class SaplingProofHandler implements ShieldedExactHandlerShape {
     return res;
   }
 
+  /**
+   * Refuses a requirement for another network.
+   *
+   * @param requirements - The requirements to check.
+   * @throws Error when the network is not this handler's.
+   */
   private checkNetwork(requirements: PaymentRequirements): void {
     if (requirements.network !== this.network) throw new Error(`this handler serves ${this.network}, not ${requirements.network}`);
   }

@@ -15,18 +15,34 @@ import { SIGHASH } from "./sighash.js";
 secp.hashes.sha256 = sha256;
 secp.hashes.hmacSha256 = (key, msg) => hmac(sha256, key, msg);
 
-/** The 33-byte compressed public key (or 65-byte uncompressed). */
+/**
+ * Derives the public key of a private key.
+ *
+ * @param privKey - The 32-byte private key.
+ * @param compressed - Whether to return the 33-byte compressed form rather than the 65-byte one.
+ * @returns The serialized public key.
+ */
 export function pubkeyFromPriv(privKey: Uint8Array, compressed = true): Uint8Array {
   return secp.getPublicKey(privKey, compressed);
 }
 
-/** A fresh random private key. */
+/**
+ * Generates a private key from the platform CSPRNG.
+ *
+ * @returns A fresh 32-byte private key.
+ */
 export function randomPrivKey(): Uint8Array {
   return secp.utils.randomSecretKey();
 }
 
 /**
  * Sign a sighash: low-S strict DER followed by the hash-type byte, ready to push in a scriptSig.
+ *
+ * @param sighash - The 32-byte signature hash.
+ * @param privKey - The 32-byte private key.
+ * @param hashType - The hash-type byte to append.
+ * @returns The scriptSig signature.
+ * @throws Error when `sighash` is not 32 bytes.
  */
 export function signInput(sighash: Uint8Array, privKey: Uint8Array, hashType: number = SIGHASH.ALL): Uint8Array {
   if (sighash.length !== 32) throw new Error("sighash must be 32 bytes");
@@ -36,7 +52,12 @@ export function signInput(sighash: Uint8Array, privKey: Uint8Array, hashType: nu
 
 /**
  * Verify a scriptSig signature (DER ‖ hash type) against a sighash, as the node's policy would:
- * strict DER, low S. Returns false rather than throwing on malformed input.
+ * strict DER, low S.
+ *
+ * @param sig - The DER signature followed by its hash-type byte.
+ * @param sighash - The 32-byte signature hash.
+ * @param pubkey - The serialized public key.
+ * @returns True if valid; false (never a throw) on a bad or malformed signature.
  */
 export function verifyInputSig(sig: Uint8Array, sighash: Uint8Array, pubkey: Uint8Array): boolean {
   if (sig.length < 9) return false;
@@ -47,7 +68,13 @@ export function verifyInputSig(sig: Uint8Array, sighash: Uint8Array, pubkey: Uin
   }
 }
 
-/** The hash-type byte a scriptSig signature ends with. */
+/**
+ * The hash-type byte a scriptSig signature ends with.
+ *
+ * @param sig - The scriptSig signature.
+ * @returns The hash type.
+ * @throws Error when `sig` is empty.
+ */
 export function sigHashType(sig: Uint8Array): number {
   const t = sig[sig.length - 1];
   if (t === undefined) throw new Error("empty signature");
@@ -66,13 +93,29 @@ export interface DecodedWif {
   network: YcashNetwork;
 }
 
+/**
+ * Encodes a private key as WIF; testnet and regtest share one prefix.
+ *
+ * @param privKey - The 32-byte private key.
+ * @param network - The network whose prefix to use.
+ * @param compressed - Whether to mark the key as having a compressed public key.
+ * @returns The WIF string.
+ * @throws Error when `privKey` is not 32 bytes.
+ */
 export function encodeWif(privKey: Uint8Array, network: YcashNetwork, compressed = true): string {
   if (privKey.length !== 32) throw new Error("private key must be 32 bytes");
   const version = network === YCASH_MAINNET ? WIF_MAINNET : WIF_TEST;
   return base58CheckEncode(concatBytes(Uint8Array.of(version), privKey, compressed ? Uint8Array.of(1) : new Uint8Array()));
 }
 
-/** Decode a WIF key; with `network`, also require that network's prefix. */
+/**
+ * Decode a WIF key; with `network`, also require that network's prefix.
+ *
+ * @param wif - The WIF string.
+ * @param network - The network the key must belong to, if known.
+ * @returns The private key, its compression flag and network (`network` itself when given).
+ * @throws Error on a bad checksum, prefix or length, or a network mismatch.
+ */
 export function decodeWif(wif: string, network?: YcashNetwork): DecodedWif {
   const b = base58CheckDecode(wif);
   const version = b[0];

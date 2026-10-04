@@ -26,16 +26,30 @@ export interface ChannelScript {
 /**
  * The spec's key form: 33 bytes with prefix 02/03 (uncompressed keys are refused by the binding).
  * The script itself does not need a valid point; a key off the curve simply never verifies.
+ *
+ * @param k - A public key.
+ * @returns Whether it has the compressed form.
  */
 export function isCompressedPubKey(k: Uint8Array): boolean {
   return k.length === 33 && (k[0] === 0x02 || k[0] === 0x03);
 }
 
-/** A compressed key that is also a point on secp256k1 (required of S in the requirements). */
+/**
+ * A compressed key that is also a point on secp256k1 (required of S in the requirements).
+ *
+ * @param k - A public key.
+ * @returns Whether it is a valid compressed point.
+ */
 export function isValidCompressedPubKey(k: Uint8Array): boolean {
   return isCompressedPubKey(k) && secp.utils.isValidPublicKey(k, true);
 }
 
+/**
+ * Enforces the channel script's parameter rules: compressed keys, C ≠ S, and t a block height.
+ *
+ * @param p - The script parameters.
+ * @throws Error naming the first rule broken.
+ */
 function check(p: ChannelScript): void {
   if (!isCompressedPubKey(p.clientPubKey)) throw new Error("client key must be a compressed secp256k1 key");
   if (!isCompressedPubKey(p.serverPubKey)) throw new Error("server key must be a compressed secp256k1 key");
@@ -45,7 +59,13 @@ function check(p: ChannelScript): void {
   }
 }
 
-/** The redeem script, byte for byte `63 52 21 <C> 21 <S> 52 ae 67 <push(t)> b1 75 21 <C> ac 68`. */
+/**
+ * The redeem script, byte for byte `63 52 21 <C> 21 <S> 52 ae 67 <push(t)> b1 75 21 <C> ac 68`.
+ *
+ * @param p - C, S and t.
+ * @returns The serialized redeem script.
+ * @throws Error when the parameters break the rules of {@link ChannelScript}.
+ */
 export function buildChannelScript(p: ChannelScript): Uint8Array {
   check(p);
   return buildScript([
@@ -58,6 +78,9 @@ export function buildChannelScript(p: ChannelScript): Uint8Array {
 /**
  * Parses exactly the channel script, or returns null. The parse is checked by rebuilding: any
  * other encoding (a non-minimal t push, extra opcodes, an uncompressed key, C = S) is refused.
+ *
+ * @param rs - A candidate redeem script.
+ * @returns C, S and t, or null when `rs` is not the channel script.
  */
 export function parseChannelScript(rs: Uint8Array): ChannelScript | null {
   let chunks;
@@ -85,16 +108,33 @@ export function parseChannelScript(rs: Uint8Array): ChannelScript | null {
   }
 }
 
-/** The funding output's scriptPubKey: `a9 14 <HASH160(redeemScript)> 87`. */
+/**
+ * The funding output's scriptPubKey: `a9 14 <HASH160(redeemScript)> 87`.
+ *
+ * @param rs - The redeem script.
+ * @returns The P2SH scriptPubKey.
+ */
 export function channelScriptPubKey(rs: Uint8Array): Uint8Array {
   return p2shScript(hash160(rs));
 }
 
-/** The channel's P2SH address (`s2…`/`s3…` on mainnet). */
+/**
+ * The channel's P2SH address (`s2…`/`s3…` on mainnet).
+ *
+ * @param network - The network whose address prefix to use.
+ * @param rs - The redeem script.
+ * @returns The encoded address.
+ */
 export function channelAddress(network: YcashNetwork, rs: Uint8Array): string {
   return encodeAddress(network, "p2sh", hash160(rs));
 }
 
+/**
+ * Builds the redeem script and hex-encodes it, as carried in the payment payload.
+ *
+ * @param p - C, S and t.
+ * @returns The redeem script as lowercase hex.
+ */
 export function channelScriptHex(p: ChannelScript): string {
   return bytesToHex(buildChannelScript(p));
 }

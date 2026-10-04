@@ -46,18 +46,36 @@ export interface YedChainView extends ChainView {
   yedDecodePayload(hex: string): Promise<YedPayload>;
 }
 
+/**
+ * Duck-typed check for the two overlay RPCs a YED channel needs.
+ *
+ * @param chain - The node view.
+ * @returns Whether `chain` is a {@link YedChainView}.
+ */
 export function isYedChain(chain: ChainView): chain is YedChainView {
   const c = chain as Partial<YedChainView>;
   return typeof c.yedValidateRawTransaction === "function" && typeof c.yedDecodePayload === "function";
 }
 
-/** The chain as a Yellowback node, or YED_NODE_REQUIRED. */
+/**
+ * The chain as a Yellowback node.
+ *
+ * @param chain - The node view.
+ * @returns The same view, narrowed.
+ * @throws BatchSettlementError with `YED_NODE_REQUIRED` when the view lacks the overlay RPCs.
+ */
 export function yedChain(chain: ChainView): YedChainView {
   if (!isYedChain(chain)) throw new BatchSettlementError(BatchError.YED_NODE_REQUIRED, "YED channels need a Yellowback node");
   return chain;
 }
 
-/** A stock node answers the overlay's RPCs with −32601: that is YED_NODE_REQUIRED, not a verdict. */
+/**
+ * Runs an overlay RPC. A stock node answers the overlay's RPCs with −32601: that is
+ * `YED_NODE_REQUIRED`, not a verdict; any other error is rethrown unchanged.
+ *
+ * @param call - The overlay call.
+ * @returns The call's result.
+ */
 async function overlay<T>(call: () => Promise<T>): Promise<T> {
   try {
     return await call();
@@ -69,19 +87,39 @@ async function overlay<T>(call: () => Promise<T>): Promise<T> {
   }
 }
 
-/** The voucher outputs of a channel of `asset` holding D (YEC: zatoshis; YED: cents). */
+/**
+ * The voucher output layout of a channel of `asset` holding D.
+ *
+ * @param asset - `YEC` or `YED`.
+ * @param deposit - D, in zatoshis (YEC) or cents (YED).
+ * @returns The layout.
+ * @throws BatchSettlementError with `REQUIREMENTS` for any other asset.
+ */
 export function layoutFor(asset: string, deposit: bigint): VoucherLayout {
   if (asset === ASSET_YEC) return yecVoucherOutputs;
   if (asset === ASSET_YED) return yedVoucherLayout(deposit);
   throw new BatchSettlementError(BatchError.REQUIREMENTS, `no channel layout for ${asset}`);
 }
 
-/** The least cumulative a voucher may carry: $1.00 for YED (the dollar floor, X-7), none for YEC (the layout enforces dust). */
+/**
+ * The least cumulative a voucher may carry: $1.00 for YED (the dollar floor), none for YEC (the
+ * layout enforces dust).
+ *
+ * @param asset - The channel's asset.
+ * @returns The floor, in the asset's unit.
+ */
 export function cumulativeFloor(asset: string): bigint {
   return asset === ASSET_YED ? BigInt(YED_MIN_OUTPUT_CENTS) : 0n;
 }
 
-/** The cumulative of a client `close` at the charged total: never below the floor (the pre-paid dollar is the server's). */
+/**
+ * The cumulative of a client `close` at the charged total: never below the floor (the pre-paid
+ * dollar is the server's).
+ *
+ * @param asset - The channel's asset.
+ * @param charged - The server's charged total.
+ * @returns The cumulative to sign.
+ */
 export function closeCumulative(asset: string, charged: bigint): bigint {
   const floor = cumulativeFloor(asset);
   return charged > floor ? charged : floor;
@@ -91,6 +129,13 @@ export function closeCumulative(asset: string, charged: bigint): bigint {
  * Whether the server should close after a charge: the next voucher at the ceiling would exceed D,
  * or, for YED, would leave the client a remainder in (0, $1.00), or the latest voucher already
  * assigns all of D to the server (scheme "Close triggers").
+ *
+ * @param asset - The channel's asset.
+ * @param deposit - D.
+ * @param charged - The charged total after this charge.
+ * @param ceiling - The per-request ceiling (`amount`).
+ * @param latestCumulative - The cumulative of the latest stored voucher.
+ * @returns Whether the channel is exhausted.
  */
 export function isExhausted(asset: string, deposit: bigint, charged: bigint, ceiling: bigint, latestCumulative: bigint): boolean {
   if (asset !== ASSET_YED) return latestCumulative >= deposit || charged + ceiling > deposit;
@@ -105,6 +150,14 @@ export function isExhausted(asset: string, deposit: bigint, charged: bigint, cei
  * exactly the split at vout 2, and `yed_validaterawtransaction` reports a transfer, verdict ok,
  * burned 0, yedIn = yedOut = D, no unconfirmed input. `scripts` is false for a voucher whose
  * server slot is still empty (a facilitator's `voucher`): its scripts cannot verify yet.
+ *
+ * @param chain - The node view; must be a Yellowback node.
+ * @param hex - The voucher transaction.
+ * @param deposit - D, in cents.
+ * @param cumulative - The voucher's cumulative, in cents.
+ * @param opts - Verification options.
+ * @param opts.scripts - Whether the verdict must include passing scripts (default true).
+ * @throws BatchSettlementError with `YED_VERDICT` or `SCRIPT` when the overlay disagrees.
  */
 export async function checkYedVoucher(chain: ChainView, hex: string, deposit: bigint, cumulative: bigint, opts: { scripts?: boolean } = {}): Promise<void> {
   const node = yedChain(chain);
@@ -116,7 +169,16 @@ export async function checkYedVoucher(chain: ChainView, hex: string, deposit: bi
   if (problem) throw new BatchSettlementError(problem.problem === "scripts" ? BatchError.SCRIPT : BatchError.YED_VERDICT, problem.message);
 }
 
-/** The channel's D as the overlay records it: the yedIn of a voucher spending it (the channel's token record). */
+/**
+ * The channel's D as the overlay records it: the yedIn of a voucher spending it (the channel's
+ * token record).
+ *
+ * @param chain - The node view; must be a Yellowback node.
+ * @param voucherHex - Any voucher spending the channel output.
+ * @returns D, in cents.
+ * @throws BatchSettlementError with `FUNDING_DEPTH` while the funding is unconfirmed, or
+ * `YED_VERDICT` when the output holds less than $1.00.
+ */
 export async function overlayDeposit(chain: ChainView, voucherHex: string): Promise<bigint> {
   const node = yedChain(chain);
   const v = await overlay(() => node.yedValidateRawTransaction(voucherHex));
@@ -127,13 +189,30 @@ export async function overlayDeposit(chain: ChainView, voucherHex: string): Prom
 
 const CHAIN_OF: Record<YcashNetwork, string> = { [YCASH_MAINNET]: "main", [YCASH_TESTNET]: "test", [YCASH_REGTEST]: "regtest" };
 
-/** The node's chain matches the network, and the branch id the next block signs under. */
+/**
+ * Checks that the node's chain matches the network and reads the branch id the next block signs
+ * under, which every voucher signature commits to.
+ *
+ * @param chain - The node view.
+ * @param network - The network of the requirements.
+ * @returns The tip height and the next block's consensus branch id.
+ * @throws BatchSettlementError with `NETWORK` when the node is on another chain.
+ */
 export async function chainContext(chain: ChainView, network: YcashNetwork): Promise<{ tip: number; branchId: number }> {
   const info = await chain.getBlockchainInfo();
   if (info.chain !== CHAIN_OF[network]) throw new BatchSettlementError(BatchError.NETWORK, `node is on ${info.chain}, not ${network}`);
   return { tip: info.blocks, branchId: parseInt(info.consensus.nextblock, 16) >>> 0 };
 }
 
+/**
+ * Parses a transaction and requires the canonical encoding (re-serialization must give the same
+ * hex), so the txid the client signed is the txid that is relayed.
+ *
+ * @param hex - The transaction, lowercase hex.
+ * @param reason - The error code to refuse with.
+ * @returns The parsed transaction.
+ * @throws BatchSettlementError with `reason` when it does not parse or is not canonical.
+ */
 export function decodeTx(hex: string, reason: string): Tx {
   try {
     const tx = parseTx(hex);
@@ -144,6 +223,12 @@ export function decodeTx(hex: string, reason: string): Tx {
   }
 }
 
+/**
+ * The value of a `gettxout` result, converted from YEC to zatoshis.
+ *
+ * @param out - The `gettxout` result.
+ * @returns The value in zatoshis.
+ */
 export function zatOf(out: TxOutInfo): bigint {
   return yecToZat(out.value);
 }
@@ -166,6 +251,10 @@ export interface VerifiedOpen {
  * funding must still relay at the next block, which refuses an expiry below next + 3
  * (TX_EXPIRING_SOON_THRESHOLD; ycash-dd/src/main.cpp:742, ycash6 :799), and leave one block per
  * confirmation of the policy depth.
+ *
+ * @param tip - The current tip height.
+ * @param confirmations - The policy's `confirmations` value.
+ * @returns The least acceptable non-zero expiry height.
  */
 export function minFundingExpiry(tip: number, confirmations: number): number {
   return tip + TX_EXPIRING_SOON_THRESHOLD + requiredDepth(confirmations);
@@ -174,6 +263,15 @@ export function minFundingExpiry(tip: number, confirmations: number): number {
 /**
  * Open rules 2–8, and voucher rules 4–6 for the first voucher (rule 9). Read-only: nothing is relayed.
  * Rule 1 (the envelope) is the caller's.
+ *
+ * @param p - The `open` payload.
+ * @param terms - The parsed requirements.
+ * @param chain - The node view.
+ * @param ctx - The node context from {@link chainContext}.
+ * @param ctx.tip - The current tip height.
+ * @param ctx.branchId - The branch id the first voucher must be signed under.
+ * @returns The verified channel, its deposit and return script.
+ * @throws BatchSettlementError naming the first rule that fails.
  */
 export async function verifyOpen(
   p: BatchOpenPayload,
@@ -248,6 +346,13 @@ export async function verifyOpen(
  * D of a YED channel from its funding transaction (scheme "YED Channels", Funding): V is exactly
  * 2 × TOKEN_VALUE + closeFee, and the one TRANSFER assigns the channel output D cents in
  * [$1.00, $100,000], with assignments the overlay registers.
+ *
+ * @param fundingTx - The funding transaction.
+ * @param vout - The channel output index.
+ * @param value - The channel output value, in zatoshis.
+ * @param closeFee - The close fee, in zatoshis.
+ * @returns D, in cents.
+ * @throws BatchSettlementError with `FUNDING` when any of these fails.
  */
 function yedFundingDeposit(fundingTx: Tx, vout: number, value: bigint, closeFee: bigint): bigint {
   if (value !== yedChannelValue(closeFee)) {
@@ -266,7 +371,16 @@ function yedFundingDeposit(fundingTx: Tx, vout: number, value: bigint, closeFee:
   return BigInt(d);
 }
 
-/** The overlay agrees: the funding TRANSFER decodes the same and burns nothing (verdict ok). */
+/**
+ * Checks that the overlay agrees: the funding TRANSFER decodes the same and burns nothing
+ * (verdict ok).
+ *
+ * @param chain - The node view; must be a Yellowback node.
+ * @param hex - The funding transaction.
+ * @param vout - The channel output index.
+ * @param deposit - D, in cents.
+ * @throws BatchSettlementError with `FUNDING` or `YED_VERDICT` when it does not.
+ */
 async function checkYedFunding(chain: ChainView, hex: string, vout: number, deposit: bigint): Promise<void> {
   const node = yedChain(chain);
   const decoded = decodedTransferOf(await overlay(() => node.yedDecodePayload(hex)));
@@ -294,7 +408,15 @@ export interface VoucherBounds {
   returnScript?: Uint8Array;
 }
 
-/** Voucher rules 4 (shape), 5 (charged + amount ≤ cumulative ≤ D, plan X-F16) and 6 (sigC). */
+/**
+ * Voucher rules 4 (shape), 5 (charged + amount ≤ cumulative ≤ D) and 6 (the client's signature).
+ *
+ * @param tx - The voucher transaction.
+ * @param channel - The channel it spends.
+ * @param cumulative - The cumulative the payload claims.
+ * @param b - The bounds the voucher must meet.
+ * @throws BatchSettlementError naming the first rule that fails.
+ */
 export function checkVoucher(tx: Tx, channel: Channel, cumulative: bigint, b: VoucherBounds): void {
   if (cumulative > b.deposit) throw new BatchSettlementError(BatchError.CUMULATIVE_EXCEEDS_DEPOSIT, `${cumulative} > D = ${b.deposit}`);
   if (b.floor !== undefined && cumulative < b.floor) throw new BatchSettlementError(BatchError.YED_FLOOR, `cumulative ${cumulative} is below the $1.00 floor`);
@@ -310,7 +432,14 @@ export function checkVoucher(tx: Tx, channel: Channel, cumulative: bigint, b: Vo
   if (!verifyVoucherSignature(tx, channel, b.branchId)) throw new BatchSettlementError(BatchError.VOUCHER_SIGNATURE);
 }
 
-/** Rule 7: the completed voucher passes the node's script verifier (signrawtransaction hex [] []). */
+/**
+ * Rule 7: the completed voucher passes the node's script verifier (signrawtransaction hex [] []).
+ *
+ * @param chain - The node view.
+ * @param completed - The voucher with the server's signature added.
+ * @returns The completed transaction's hex.
+ * @throws BatchSettlementError with `SCRIPT` when the scripts do not verify.
+ */
 export async function checkCompleted(chain: ChainView, completed: Tx): Promise<string> {
   const hex = serializeTxHex(completed);
   const r = await chain.verifyScripts(hex);

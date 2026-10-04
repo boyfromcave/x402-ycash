@@ -26,7 +26,15 @@ export interface BuildRefundParams {
 
 const MAX_SIG = new Uint8Array(73);
 
-/** `<sigC> OP_0 <redeemScript>`, nSequence 0xFFFFFFFE, nLockTime ≥ t, expiry 0. */
+/**
+ * Builds and signs the client's refund through the CLTV branch: scriptSig
+ * `<sigC> OP_0 <redeemScript>`, nSequence 0xFFFFFFFE, nLockTime ≥ t, expiry 0. The client's
+ * output, last, gets V less the extra outputs and the fee.
+ *
+ * @param p - Channel, client key, destination script, branch id and optional lock time, fee and extra outputs.
+ * @returns The signed refund transaction.
+ * @throws Error when the lock time is not a height ≥ t, or the refund output would be below dust.
+ */
 export function buildRefund(p: BuildRefundParams): Tx {
   const lockTime = p.lockTime ?? p.channel.refundHeight;
   if (!Number.isSafeInteger(lockTime) || lockTime < p.channel.refundHeight || lockTime >= LOCKTIME_THRESHOLD) {

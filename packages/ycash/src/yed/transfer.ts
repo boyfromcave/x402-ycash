@@ -40,6 +40,12 @@ export interface TransferValidationOptions {
  * Checks a TRANSFER's assignments against the transaction it will sit in: `outputCount` outputs, the
  * payload's OP_RETURN at `opReturnIndex`. Valid means the overlay registers every assigned cent
  * (verdict OK) and, with `yedInCents`, that nothing burns.
+ *
+ * @param assignments - The payload's assignments.
+ * @param outputCount - The number of outputs in the transaction.
+ * @param opReturnIndex - The vout of the payload's OP_RETURN.
+ * @param options - The spent token total, to check over- and under-assignment.
+ * @returns Valid with the assigned total, or the first rule broken and the offending assignment index.
  */
 export function validateTransferAssignments(
   assignments: readonly Assignment[],

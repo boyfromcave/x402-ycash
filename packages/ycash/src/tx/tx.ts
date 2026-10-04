@@ -80,7 +80,12 @@ export interface Tx {
   bindingSig: Uint8Array | null;
 }
 
-/** A transparent v4 transaction; callers fill vin/vout and the heights. */
+/**
+ * A transparent v4 transaction; callers fill vin/vout and the heights.
+ *
+ * @param fields - Initial inputs, outputs, lock time and expiry height; the rest default to empty.
+ * @returns The transaction.
+ */
 export function newTx(fields: Partial<Pick<Tx, "vin" | "vout" | "lockTime" | "expiryHeight">> = {}): Tx {
   return {
     version: TX_VERSION,
@@ -100,37 +105,88 @@ export function newTx(fields: Partial<Pick<Tx, "vin" | "vout" | "lockTime" | "ex
   };
 }
 
-/** True when the tx carries any Sprout or Sapling component (a transparent binding refuses it). */
+/**
+ * True when the tx carries any Sprout or Sapling component (a transparent binding refuses it).
+ *
+ * @param tx - The transaction.
+ * @returns Whether it has a spend, output or JoinSplit.
+ */
 export function hasShielded(tx: Tx): boolean {
   return tx.shieldedSpends.length > 0 || tx.shieldedOutputs.length > 0 || tx.joinSplits.length > 0;
 }
 
+/**
+ * Writes an outpoint: the txid in internal byte order, then the output index.
+ *
+ * @param w - The writer.
+ * @param p - The outpoint, txid in display order.
+ */
 export function writeOutPoint(w: ByteWriter, p: OutPoint): void {
   w.bytes(fromReversedHex(p.txid)).u32(p.vout);
 }
 
+/**
+ * Writes an output: the int64 value then the length-prefixed scriptPubKey.
+ *
+ * @param w - The writer.
+ * @param o - The output.
+ */
 export function writeTxOut(w: ByteWriter, o: TxOut): void {
   w.i64(o.value).varBytes(o.scriptPubKey);
 }
 
+/**
+ * Writes an input: outpoint, length-prefixed scriptSig, nSequence.
+ *
+ * @param w - The writer.
+ * @param i - The input.
+ */
 export function writeTxIn(w: ByteWriter, i: TxIn): void {
   writeOutPoint(w, i.prevout);
   w.varBytes(i.scriptSig).u32(i.sequence);
 }
 
+/**
+ * Writes a Sapling output description in wire order.
+ *
+ * @param w - The writer.
+ * @param d - The output description.
+ */
 export function writeOutputDescription(w: ByteWriter, d: OutputDescription): void {
   w.bytes(d.cv).bytes(d.cmu).bytes(d.ephemeralKey).bytes(d.encCiphertext).bytes(d.outCiphertext).bytes(d.zkproof);
 }
 
+/**
+ * Writes a Sapling spend description in wire order, spendAuthSig included.
+ *
+ * @param w - The writer.
+ * @param d - The spend description.
+ */
 function writeSpendDescription(w: ByteWriter, d: SpendDescription): void {
   w.bytes(d.cv).bytes(d.anchor).bytes(d.nullifier).bytes(d.rk).bytes(d.zkproof).bytes(d.spendAuthSig);
 }
 
+/**
+ * Guards a fixed-size field before it is serialized.
+ *
+ * @param b - The field, or null when absent.
+ * @param len - The required length in bytes.
+ * @param what - The field name used in the error message.
+ * @returns `b` unchanged.
+ * @throws Error when `b` is null or the wrong length.
+ */
 function fixed(b: Uint8Array | null, len: number, what: string): Uint8Array {
   if (b === null || b.length !== len) throw new Error(`${what} must be ${len} bytes`);
   return b;
 }
 
+/**
+ * Refuses anything that would not serialize as a valid v4 transaction: a wrong header, an output
+ * value outside 0..21M coins, or a shielded field of the wrong size.
+ *
+ * @param tx - The transaction.
+ * @throws Error describing the first problem found.
+ */
 function checkShape(tx: Tx): void {
   if (tx.version !== TX_VERSION || tx.overwintered !== true || tx.versionGroupId !== SAPLING_VERSION_GROUP_ID) {
     throw new Error("only v4 (Sapling version group) transactions are supported");
@@ -150,6 +206,13 @@ function checkShape(tx: Tx): void {
   for (const js of tx.joinSplits) fixed(js, JOINSPLIT_SIZE, "JSDescription");
 }
 
+/**
+ * Serializes a v4 transaction in wire order, after a shape check.
+ *
+ * @param tx - The transaction.
+ * @returns The raw transaction bytes.
+ * @throws Error when the transaction is malformed.
+ */
 export function serializeTx(tx: Tx): Uint8Array {
   checkShape(tx);
   const w = new ByteWriter();
@@ -172,6 +235,13 @@ export function serializeTx(tx: Tx): Uint8Array {
   return w.finish();
 }
 
+/**
+ * Parses a raw v4 Sapling-group transaction, rejecting any other format and trailing bytes.
+ *
+ * @param input - The raw transaction, as hex or bytes.
+ * @returns The transaction.
+ * @throws Error on another version, truncation, a non-canonical CompactSize or trailing bytes.
+ */
 export function parseTx(input: string | Uint8Array): Tx {
   const bytes = typeof input === "string" ? hexToBytes(input) : input;
   const r = new ByteReader(bytes);
@@ -220,12 +290,23 @@ export function parseTx(input: string | Uint8Array): Tx {
   };
 }
 
-/** The txid in display order: SHA256d of the serialisation, reversed. */
+/**
+ * The txid in display order: SHA256d of the serialisation, reversed.
+ *
+ * @param tx - The transaction, or its raw bytes or hex.
+ * @returns The display-order txid hex.
+ */
 export function txid(tx: Tx | Uint8Array | string): string {
   const bytes = typeof tx === "string" ? hexToBytes(tx) : tx instanceof Uint8Array ? tx : serializeTx(tx);
   return reversedHex(sha256d(bytes));
 }
 
+/**
+ * Serializes a v4 transaction to hex, as `sendrawtransaction` takes it.
+ *
+ * @param tx - The transaction.
+ * @returns The raw transaction hex.
+ */
 export function serializeTxHex(tx: Tx): string {
   return bytesToHex(serializeTx(tx));
 }

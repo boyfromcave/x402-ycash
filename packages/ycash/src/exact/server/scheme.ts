@@ -39,6 +39,10 @@ export interface ExactYcashServerConfig {
 const CANONICAL_AMOUNT = /^[1-9][0-9]*$/;
 const ONE_DOLLAR_MICRO_USD = 1_000_000n;
 
+/**
+ * The x402 resource-server scheme for `exact` on Ycash: parses route prices into YEC zatoshis or
+ * YED cents and fills in the `extra` a 402 response carries.
+ */
 export class ExactYcashServerScheme implements SchemeNetworkServer {
   readonly scheme = SCHEME_EXACT;
   readonly defaultAssetTransferMethod = ATM_TRANSPARENT;
@@ -46,13 +50,25 @@ export class ExactYcashServerScheme implements SchemeNetworkServer {
   readonly paymentFlows: Readonly<Record<string, PaymentFlowConfig>>;
   private readonly moneyParsers: MoneyParser[] = [];
 
+  /**
+   * Advertises `sapling-proof` (upfront flow) alongside `transparent` only when a shielded handler
+   * is configured.
+   *
+   * @param config - Price source, zero-confirmation cap, USD asset and optional shielded handler.
+   */
   constructor(private readonly config: ExactYcashServerConfig = {}) {
     const flows: Record<string, PaymentFlowConfig> = { [ATM_TRANSPARENT]: { supported: [FLOW_AUTHORIZATION], default: FLOW_AUTHORIZATION } };
     if (config.shielded) flows[ATM_SAPLING_PROOF] = { supported: [FLOW_UPFRONT], default: FLOW_UPFRONT };
     this.paymentFlows = flows;
   }
 
-  /** Custom money parsers run first, in registration order; null defers to the next. */
+  /**
+   * Registers a money parser. Custom parsers run first, in registration order; one returning null
+   * defers to the next, and the built-in YEC/YED/USD handling runs last.
+   *
+   * @param parser - The parser to add.
+   * @returns This scheme, for chaining.
+   */
   registerMoneyParser(parser: MoneyParser): this {
     this.moneyParsers.push(parser);
     return this;
@@ -60,7 +76,14 @@ export class ExactYcashServerScheme implements SchemeNetworkServer {
 
   /**
    * `{amount, asset}` passes through after validation. Money: "0.0025 YEC" in YEC, "25 YED" in
-   * YED, and "$0.10" (or "0.10", "0.10 USD") in YEC at the price source's rate.
+   * YED, and "$0.10" (or "0.10", "0.10 USD") in YEC at the price source's rate, or in YED cents
+   * when `usdAsset` is YED.
+   *
+   * @param price - The route's price.
+   * @param network - The Ycash network the price is for.
+   * @returns The amount in the asset's smallest unit (zatoshis or cents) and the asset.
+   * @throws Error on an unsupported network, an unknown asset, a USD price without a price source,
+   * or an amount outside the asset's limits.
    */
   async parsePrice(price: Price, network: Network): Promise<AssetAmount> {
     if (!isYcashNetwork(network)) throw new Error(`unsupported network ${network}`);
@@ -83,6 +106,13 @@ export class ExactYcashServerScheme implements SchemeNetworkServer {
     return validate({ amount: zat.toString(), asset: ASSET_YEC, extra: {} });
   }
 
+  /**
+   * Reports the decimals of an asset's smallest unit: 8 for YEC (zatoshis), 2 for YED (cents).
+   *
+   * @param asset - The asset ticker.
+   * @param network - The network (the decimals do not vary by network).
+   * @returns The decimals, or undefined for an unknown asset.
+   */
   getAssetDecimals(asset: string, network: Network): number | undefined {
     void network;
     return asset === ASSET_YEC ? 8 : asset === ASSET_YED ? 2 : undefined;
@@ -92,6 +122,13 @@ export class ExactYcashServerScheme implements SchemeNetworkServer {
    * Adds the `extra` the spec's 402 carries: `assetTransferMethod`, `areFeesSponsored: false`
    * and `confirmationPolicy` (−1 up to the zero-confirmation cap, else 1). Fields the route set
    * are kept. A facilitator that advertises capabilities must cover the method and the policy.
+   * `sapling-proof` requirements are delegated to the shielded handler.
+   *
+   * @param req - The route's requirements.
+   * @param kind - The facilitator's supported kind for this network, with its advertised `extra`.
+   * @param facilitatorExtensions - Extensions the facilitator advertises.
+   * @returns The requirements with the completed `extra`.
+   * @throws Error when the method, asset or policy is not one the facilitator can settle.
    */
   async enhancePaymentRequirements(req: PaymentRequirements, kind: SupportedKind, facilitatorExtensions: string[]): Promise<PaymentRequirements> {
     if (!isYcashNetwork(kind.network)) throw new Error(`unsupported network ${kind.network}`);
@@ -123,7 +160,13 @@ export class ExactYcashServerScheme implements SchemeNetworkServer {
     };
   }
 
-  /** −1 for YEC up to the zero-confirmation cap; 1 otherwise and for YED (Confirmation policy). */
+  /**
+   * Picks the default confirmation policy (Confirmation policy): −1 for YEC up to the
+   * zero-confirmation cap, 1 otherwise and for YED. A failing price source yields 1.
+   *
+   * @param req - The requirements being enhanced.
+   * @returns The default `confirmations`.
+   */
   private async defaultConfirmations(req: PaymentRequirements): Promise<number> {
     if (req.asset !== ASSET_YEC) return 1;
     let cap = this.config.zeroConfCapZat;
@@ -136,13 +179,27 @@ export class ExactYcashServerScheme implements SchemeNetworkServer {
   }
 }
 
-/** A decimal dollar amount in whole cents; a fraction of a cent is refused, never truncated. */
+/**
+ * Converts a decimal dollar amount to whole cents; a fraction of a cent is refused, never truncated.
+ *
+ * @param amount - The decimal amount, e.g. "2.50".
+ * @returns The amount in cents as a decimal string.
+ * @throws Error when the amount has a nonzero digit past the cents.
+ */
 function yedCents(amount: string): string {
   const [, frac = ""] = amount.split(".");
   if (/[1-9]/.test(frac.slice(2))) throw new Error(`a YED price is a whole number of cents: ${amount}`);
   return convertToTokenAmount(amount, 2);
 }
 
+/**
+ * Enforces the asset limits on a parsed price: a canonical positive integer, at least the dust
+ * threshold for YEC, and 100..10,000,000 cents for YED (a smaller YED output burns).
+ *
+ * @param v - The parsed amount and asset.
+ * @returns The same value, unchanged.
+ * @throws Error when the amount or asset is invalid.
+ */
 function validate(v: AssetAmount): AssetAmount {
   if (!CANONICAL_AMOUNT.test(v.amount)) throw new Error(`amount must be a positive canonical integer: ${v.amount}`);
   if (v.asset === ASSET_YEC) {

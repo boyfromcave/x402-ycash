@@ -49,7 +49,13 @@ const validChange = (c: number) => c === 0 || (c >= YED_MIN_OUTPUT_CENTS && c <=
  * Token coins for `amountCents` such that the change is 0 or a valid YED output (XFER-1): a change
  * in (0, $1.00) would make the whole TRANSFER burn. An exact single coin first, then largest-first;
  * a sub-dollar change is cured by one more coin (every token record holds at least $1.00, so the
- * change then clears the floor). Throws rather than return a burning selection.
+ * change then clears the floor).
+ *
+ * @param tokens - The confirmed token coins available.
+ * @param amountCents - The YED amount to pay, in cents.
+ * @returns The coins to spend and the YED change in cents.
+ * @throws RangeError when `amountCents` is outside the XFER-1 range; Error when the coins are
+ * insufficient or every selection would leave a burning change.
  */
 export function selectTokenCoins(tokens: readonly TokenCoin[], amountCents: number): TokenSelection {
   if (!Number.isInteger(amountCents) || amountCents < YED_MIN_OUTPUT_CENTS || amountCents > YED_MAX_OUTPUT_CENTS) {
@@ -118,8 +124,13 @@ export interface BuiltYedTransfer {
 
 /**
  * The TRANSFER: recipients at vouts 0..n−1, the YED change (if any) next, then the OP_RETURN, then
- * YEC change (if not dust). Every cent of yedIn is assigned, so nothing burns; the fee is the S-6
- * floor of the tx with signatures at their largest. Throws when the coins cannot pay.
+ * YEC change (if not dust). Every cent of yedIn is assigned, so nothing burns; the fee is the fee
+ * floor (feeFloor) of the tx with signatures at their largest.
+ *
+ * @param p - Recipients, token and YEC coins, change scripts and expiry.
+ * @returns The unsigned transaction with its spent coins, assignments and fee.
+ * @throws Error when there is no recipient, the YED change would burn, or the YEC coins cannot pay
+ * the outputs and the fee.
  */
 export function buildYedTransfer(p: BuildYedTransferParams): BuiltYedTransfer {
   if (p.recipients.length === 0) throw new Error("a transfer needs a recipient");

@@ -23,6 +23,14 @@ export type VoucherLayout = (p: VoucherLayoutParams) => TxOut[];
 /**
  * YEC: vout 0 pays `payTo` the cumulative, vout 1 returns V − closeFee − cumulative to the client.
  * A client remainder below dust is folded into vout 0 and vout 1 is omitted (plan X-F15).
+ *
+ * @param root0 - The layout parameters.
+ * @param root0.channel - The channel.
+ * @param root0.cumulative - The total paid to the server, zatoshis.
+ * @param root0.clientScript - The client's change script; needed unless the remainder is dust.
+ * @returns The voucher's outputs.
+ * @throws RangeError when the cumulative is below dust or above the deposit; Error when the
+ *   client script is missing or equals payTo.
  */
 export const yecVoucherOutputs: VoucherLayout = ({ channel, cumulative, clientScript }) => {
   const deposit = channel.value - channel.closeFee;
@@ -44,6 +52,10 @@ const MAX_SIG = new Uint8Array(73);
 /**
  * The fee floor of a close with these outputs: one channel input whose scriptSig is the full
  * `OP_0 <sigC> <sigS> OP_1 <redeemScript>` at maximum signature length.
+ *
+ * @param redeemScript - The channel redeem script.
+ * @param outputs - The close's outputs.
+ * @returns The minimum fee, zatoshis.
  */
 export function closeFeeFloor(redeemScript: Uint8Array, outputs: readonly TxOut[]): bigint {
   const scriptSig = buildScript([OP.OP_0, MAX_SIG, MAX_SIG, OP.OP_1, redeemScript]);
