@@ -6,13 +6,15 @@ import { HTTPFacilitatorClient, type FacilitatorClient, type RoutesConfig } from
 import { paymentMiddleware, x402ResourceServer } from "@x402/express";
 import { ASSET_YEC } from "x402-ycash-mechanism";
 import type { MerchantConfig } from "./config.js";
-import { registerServerSchemes, type PaymentModes, type RegisterServerSchemes, type ServerSchemes } from "./schemes.js";
+import { registerServerSchemes, type PaymentModes, type RegisterServerSchemes, type ServerSchemes, type YedModes } from "./schemes.js";
 
 export interface MerchantOptions {
   /** Defaults to an HTTPFacilitatorClient on `config.facilitatorUrl`. */
   facilitator?: FacilitatorClient;
   /** Defaults to schemes.ts; tests pass a fake. */
   register?: RegisterServerSchemes;
+  /** The YED modes probeYed (yed.ts) found; absent, the YED routes answer 501. */
+  yed?: YedModes;
 }
 
 export interface Merchant {
@@ -28,11 +30,20 @@ export const PAID_ROUTES = {
   ticker: "GET /exact/ticker",
   channel: "GET /channel/search",
   shielded: "GET /shielded/report",
+  yedReport: "GET /yed/report",
+  yedStream: "GET /yed/stream",
 } as const;
 export type PaidRoute = keyof typeof PAID_ROUTES;
 
 /** The payment mode each route needs. */
-export const MODE_OF: Readonly<Record<PaidRoute, keyof PaymentModes>> = { exact: "exact", ticker: "exact", channel: "channel", shielded: "shielded" };
+export const MODE_OF: Readonly<Record<PaidRoute, keyof PaymentModes>> = {
+  exact: "exact",
+  ticker: "exact",
+  channel: "channel",
+  shielded: "shielded",
+  yedReport: "yedExact",
+  yedStream: "yedChannel",
+};
 
 function routes(config: MerchantConfig, schemes: ServerSchemes): RoutesConfig {
   const { network, payTo } = config;
@@ -85,20 +96,39 @@ function routes(config: MerchantConfig, schemes: ServerSchemes): RoutesConfig {
       mimeType: "application/json",
     };
   }
+  const yed = config.yed;
+  if (yed && modes.yedExact) {
+    all[PAID_ROUTES.yedReport] = {
+      // "$2.00": YED cents at par (the exact scheme's usdAsset), never below $1.00 (config.ts).
+      accepts: { scheme: "exact", network, payTo: yed.payTo, price: yed.priceReport, maxTimeoutSeconds: 300 },
+      description: "One report, paid per request in YED",
+      mimeType: "application/json",
+    };
+  }
+  if (yed && modes.yedChannel) {
+    all[PAID_ROUTES.yedStream] = {
+      accepts: { scheme: "batch-settlement", network, payTo: yed.payTo, price: yed.priceStream, maxTimeoutSeconds: 300 },
+      description: "One stream chunk, paid by a voucher on a YED payment channel",
+      mimeType: "application/json",
+    };
+  }
   return all;
+}
+
+/** An HTTP client for the configured facilitator (with its API key). */
+export function facilitatorClientOf(config: MerchantConfig): FacilitatorClient {
+  return new HTTPFacilitatorClient({
+    url: config.facilitatorUrl,
+    ...(config.facilitatorApiKey
+      ? { createAuthHeaders: async () => ({ verify: { Authorization: `Bearer ${config.facilitatorApiKey}` }, settle: { Authorization: `Bearer ${config.facilitatorApiKey}` }, supported: { Authorization: `Bearer ${config.facilitatorApiKey}` } }) }
+      : {}),
+  });
 }
 
 const SHIELDED_TIMEOUT_SECONDS = 900;
 
 export function createMerchant(config: MerchantConfig, opts: MerchantOptions = {}): Merchant {
-  const facilitator =
-    opts.facilitator ??
-    new HTTPFacilitatorClient({
-      url: config.facilitatorUrl,
-      ...(config.facilitatorApiKey
-        ? { createAuthHeaders: async () => ({ verify: { Authorization: `Bearer ${config.facilitatorApiKey}` }, settle: { Authorization: `Bearer ${config.facilitatorApiKey}` } }) }
-        : {}),
-    });
+  const facilitator = opts.facilitator ?? facilitatorClientOf(config);
   const server = new x402ResourceServer(facilitator);
   const schemes = (opts.register ?? registerServerSchemes)(server, {
     network: config.network,
@@ -106,6 +136,7 @@ export function createMerchant(config: MerchantConfig, opts: MerchantOptions = {
     ...(config.wallet ? { wallet: config.wallet } : {}),
     ...(config.channel ? { channel: config.channel } : {}),
     ...(config.shielded ? { shielded: { ...config.shielded, amount: config.priceShieldedZat, maxTimeoutSeconds: SHIELDED_TIMEOUT_SECONDS } } : {}),
+    ...(config.yed && opts.yed ? { yed: opts.yed } : {}),
     log: (msg, fields) => console.log(JSON.stringify({ msg, ...fields })),
   });
   const { modes } = schemes;
@@ -138,6 +169,12 @@ export function createMerchant(config: MerchantConfig, opts: MerchantOptions = {
     },
     shielded: (_req, res) => {
       res.json({ report: "Private report body.", paidWith: "exact/sapling-proof" });
+    },
+    yedReport: (_req, res) => {
+      res.json({ report: "Dollar report body.", paidWith: "exact/transparent YED" });
+    },
+    yedStream: (req, res) => {
+      res.json({ chunk: String(req.query.n ?? "0"), paidWith: "batch-settlement YED" });
     },
   };
   for (const name of Object.keys(PAID_ROUTES) as PaidRoute[]) {

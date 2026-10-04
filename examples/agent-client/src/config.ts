@@ -33,6 +33,15 @@ export interface AgentConfig {
   /** batch-settlement: the most this agent locks in one channel, zatoshis; default 1 YEC, whatever the server allows. */
   channelMaxDepositZat?: bigint;
   /**
+   * YED's per-payment cap in cents (spend controls; default 100 = $1.00, core's USD default, X-F43).
+   * It caps a YED `exact` price and a YED channel's per-request ceiling.
+   */
+  maxPaymentYedCents?: string;
+  /** YED channels: D of a new channel, cents; default amount × 100, capped as below. */
+  yedChannelDepositCents?: bigint;
+  /** YED channels: the most this agent locks in one channel, cents (the client's maxDeposit for YED; default $50). */
+  yedChannelMaxDepositCents?: bigint;
+  /**
    * Coins held by this payer's signed, unconfirmed spends (a file shared by every agent process
    * of the same payer, so the next run never reselects a coin the last one spent). Default: a
    * file in the OS temp directory named after the payer (loadAgentConfig); absent, in memory.
@@ -63,6 +72,14 @@ export function loadSigner(env: Env, network: YcashNetwork): AgentSigner {
   throw new Error(`AGENT_SIGNER must be "wif" or "node", got ${JSON.stringify(kind)}`);
 }
 
+/** A YED channel amount in cents: at least $1.00 (a YED channel holds at least the pre-paid dollar, X-7). */
+function cents(env: Env, name: string): bigint | undefined {
+  const v = env[name];
+  if (v === undefined || v === "") return undefined;
+  if (!/^[1-9]\d{0,7}$/.test(v) || BigInt(v) < 100n || BigInt(v) > 10_000_000n) throw new Error(`${name} must be a whole number of cents in 100..10000000`);
+  return BigInt(v);
+}
+
 export function loadAgentConfig(env: Env = process.env): AgentConfig {
   const network = (env.X402_NETWORK ?? "ycash:regtest") as YcashNetwork;
   if (!YCASH_NETWORKS.includes(network)) throw new Error(`X402_NETWORK must be one of ${YCASH_NETWORKS.join(", ")}`);
@@ -77,6 +94,10 @@ export function loadAgentConfig(env: Env = process.env): AgentConfig {
   if (deposit !== undefined && !/^[1-9]\d{0,15}$/.test(deposit)) throw new Error("AGENT_CHANNEL_DEPOSIT_ZAT must be a positive whole number of zatoshis");
   const maxDeposit = env.AGENT_CHANNEL_MAX_DEPOSIT_ZAT;
   if (maxDeposit !== undefined && !/^[1-9]\d{0,15}$/.test(maxDeposit)) throw new Error("AGENT_CHANNEL_MAX_DEPOSIT_ZAT must be a positive whole number of zatoshis");
+  const maxPaymentYedCents = env.MAX_PAYMENT_YED_CENTS ?? "100";
+  if (!/^[1-9]\d{0,9}$/.test(maxPaymentYedCents)) throw new Error("MAX_PAYMENT_YED_CENTS must be a positive whole number of cents");
+  const yedDeposit = cents(env, "AGENT_YED_CHANNEL_DEPOSIT_CENTS");
+  const yedMaxDeposit = cents(env, "AGENT_YED_CHANNEL_MAX_DEPOSIT_CENTS");
   const payerId = signer.kind === "wif" ? signer.address : `node-${createHash("sha256").update(node.url).digest("hex").slice(0, 16)}`;
   return {
     url: env.RESOURCE_URL ?? "http://127.0.0.1:4021/exact/quote",
@@ -89,6 +110,9 @@ export function loadAgentConfig(env: Env = process.env): AgentConfig {
     ...(env.AGENT_CHANNEL_STORE ? { channelStorePath: env.AGENT_CHANNEL_STORE } : {}),
     ...(deposit ? { channelDepositZat: BigInt(deposit) } : {}),
     ...(maxDeposit ? { channelMaxDepositZat: BigInt(maxDeposit) } : {}),
+    maxPaymentYedCents,
+    ...(yedDeposit !== undefined ? { yedChannelDepositCents: yedDeposit } : {}),
+    ...(yedMaxDeposit !== undefined ? { yedChannelMaxDepositCents: yedMaxDeposit } : {}),
     reservationsPath: env.AGENT_RESERVATIONS ?? join(tmpdir(), `x402-ycash-reservations-${payerId}.json`),
   };
 }

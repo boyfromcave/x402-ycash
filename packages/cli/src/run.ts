@@ -43,7 +43,7 @@ export async function run(argv: string[], env: Record<string, string | undefined
         case "status":
           return await channelStatus(client, a1, io.out);
         case "close":
-          return await channelClose(client, need(a1, "<url>"), a2, io.out, f);
+          return await channelClose(client, need(a1, "<url>"), a2, io.out, f, config.asset);
         case "refund":
           return await channelRefund(client, config, need(a1, "<channelId>"), io.out);
       }
