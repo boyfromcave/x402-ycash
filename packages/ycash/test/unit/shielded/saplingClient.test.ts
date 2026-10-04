@@ -112,6 +112,12 @@ describe("the builder contract", () => {
     await expect(new CommandSaplingBuilder("echo not-json").build({ to: "", amountZat: "1", memoHex: "" })).rejects.toThrow(/not JSON/);
   });
 
+  it("reports the exit status, not EPIPE, when the command exits without reading stdin", async () => {
+    // 1 MB exceeds any pipe buffer, so the write is certain to hit the closed pipe (EPIPE).
+    const big = { to: "", amountZat: "1", memoHex: "ab".repeat(512 * 1024) };
+    await expect(new CommandSaplingBuilder("exit 3").build(big)).rejects.toThrow(/exited 3/);
+  });
+
   it("validates the answer and picks the builder from the configuration string", () => {
     expect(() => parseBuildResult({ txHex: "AB", txid: "00".repeat(32) }, "x")).toThrow(/txHex/);
     expect(() => parseBuildResult({ txHex: "ab", txid: "00" }, "x")).toThrow(/txid/);

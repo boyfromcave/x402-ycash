@@ -21,7 +21,8 @@ COPY packages/facilitator packages/facilitator
 RUN npm run build --workspace x402-ycash-mechanism --workspace x402-ycash-facilitator
 
 FROM manifests AS deps
-RUN npm ci --omit=dev --workspace x402-ycash-mechanism --workspace x402-ycash-facilitator
+RUN npm ci --omit=dev --workspace x402-ycash-mechanism --workspace x402-ycash-facilitator \
+ && mkdir -p packages/ycash/node_modules packages/facilitator/node_modules
 
 FROM node:22-slim
 ENV NODE_ENV=production \
@@ -31,8 +32,14 @@ ENV NODE_ENV=production \
     X402_CHANNEL_STORE=/data/channels.json
 WORKDIR /app
 COPY --from=deps /app/node_modules node_modules
+# npm nests a workspace's dependency there when another package needs a different major
+# (@noble/curves 2.x for the mechanism vs 1.x elsewhere), so the workspace trees are copied too.
+COPY --from=deps /app/packages/ycash/node_modules packages/ycash/node_modules
+COPY --from=deps /app/packages/facilitator/node_modules packages/facilitator/node_modules
 COPY --from=build /app/packages/ycash/package.json packages/ycash/
 COPY --from=build /app/packages/ycash/dist packages/ycash/dist
+# The lightwalletd protos, loaded at run time by the lwd client (src/lwd/client.ts).
+COPY --from=build /app/packages/ycash/proto packages/ycash/proto
 COPY --from=build /app/packages/facilitator/package.json packages/facilitator/
 COPY --from=build /app/packages/facilitator/dist packages/facilitator/dist
 RUN mkdir -p /data && chown node:node /data

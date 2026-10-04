@@ -140,6 +140,9 @@ export class CommandSaplingBuilder implements SaplingTransactionBuilder {
           reject(e instanceof SyntaxError ? new Error(`${this.description}: stdout is not JSON`) : e);
         }
       });
+      // A command that exits without reading stdin closes the pipe; the write then fails with EPIPE.
+      // The exit status (handled on "close") is the real outcome, so the write error is ignored here.
+      child.stdin.on("error", () => undefined);
       child.stdin.end(JSON.stringify(request));
     });
   }
