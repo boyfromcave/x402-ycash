@@ -13,7 +13,7 @@ describe("configuration", () => {
   it("takes flags over the environment, with defaults", () => {
     const c = loadCliConfig(parseCli(["pay", "http://x", "--count", "3", "--network", "ycash:testnet", "--channels", "/c.json"]), { ...devnetEnv, X402_NETWORK: "ycash:mainnet", X402_CHANNEL_STORE: "/env.json" });
     expect(c).toMatchObject({ network: "ycash:testnet", count: 3, channelStorePath: "/c.json", maxPaymentZat: 1_000_000n });
-    expect(c.node.url).toBe("http://127.0.0.1:1/");
+    expect(c.node?.url).toBe("http://127.0.0.1:1/");
     expect(loadCliConfig(parseCli(["pay", "x"]), { ...devnetEnv, X402_WIF: wif, X402_MAX_PAYMENT_ZAT: "5000" })).toMatchObject({ wif, maxPaymentZat: 5000n });
   });
 

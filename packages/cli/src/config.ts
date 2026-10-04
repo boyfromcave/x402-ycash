@@ -1,14 +1,20 @@
-// The CLI's configuration: flags first, then the environment, then defaults. The node is a
-// yellowback-devnet devnet.json entry or an RPC URL with credentials; the payer is a WIF key or
-// the node's own wallet.
+// The CLI's configuration: flags first, then the environment, then defaults. The chain is read from
+// a node (a yellowback-devnet devnet.json entry or an RPC URL with credentials) or from a
+// lightwalletd server (--lwd); the payer is a WIF key or the node's own wallet.
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
-import { ASSET_YEC, ASSET_YED, tx, YCASH_NETWORKS, YcashRpc, type YcashAsset, type YcashNetwork } from "x402-ycash-mechanism";
+import { ASSET_YEC, ASSET_YED, LwdClient, tx, YCASH_NETWORKS, YcashRpc, type YcashAsset, type YcashNetwork } from "x402-ycash-mechanism";
 
 export interface CliConfig {
   network: YcashNetwork;
-  node: YcashRpc;
+  /** The node: the payer's wallet when there is no WIF key, and the chain unless `lwd` is set. */
+  node?: YcashRpc;
+  /**
+   * `--lwd`: read coins, YED outputs and the tip through lightwalletd and broadcast refunds through
+   * it, with no node RPC. Needs a WIF key; sapling-proof still needs a node wallet.
+   */
+  lwd?: LwdClient;
   /** A WIF key pays transparent payments and channel funding; absent, the node's wallet does. */
   wif?: string;
   /** sapling-proof: the z_sendmany source (a Sapling address for tier P1). */
@@ -55,6 +61,8 @@ export const USAGE = `usage:
 node (flag / env):   --devnet FILE / X402_DEVNET_JSON, --node N / X402_DEVNET_NODE (default 0)
                      --rpc-url / X402_RPC_URL with --rpc-user + --rpc-password (X402_RPC_USER, X402_RPC_PASSWORD)
                      or --rpc-cookie / X402_RPC_COOKIE_FILE
+                     or --lwd HOST:PORT / X402_LWD_URL: a lightwalletd server instead of a node (needs --wif;
+                     grpc://… plaintext, grpcs://… TLS, a bare host:port is TLS unless loopback)
 payer:               --wif / X402_WIF (a local key; default: the node's wallet signs)
                      --shielded-from / X402_SHIELDED_FROM (pays sapling-proof routes from this address)
 other:               --network / X402_NETWORK (default ycash:regtest), --channels FILE / X402_CHANNEL_STORE
@@ -81,6 +89,7 @@ const OPTIONS = {
   "rpc-user": { type: "string" },
   "rpc-password": { type: "string" },
   "rpc-cookie": { type: "string" },
+  lwd: { type: "string" },
   wif: { type: "string" },
   "shielded-from": { type: "string" },
   channels: { type: "string" },
@@ -134,7 +143,7 @@ function assetOf(v: string | undefined): YcashAsset | undefined {
   return a;
 }
 
-function nodeOf(f: Record<string, string | undefined>, env: Env): YcashRpc {
+function nodeOf(f: Record<string, string | undefined>, env: Env): YcashRpc | undefined {
   const devnet = f.devnet ?? env.X402_DEVNET_JSON;
   if (devnet) {
     const n = f.node ?? env.X402_DEVNET_NODE ?? "0";
@@ -150,7 +159,17 @@ function nodeOf(f: Record<string, string | undefined>, env: Env): YcashRpc {
     if (user && password) return new YcashRpc({ url, user, password });
     throw new UsageError("--rpc-url needs --rpc-user and --rpc-password, or --rpc-cookie");
   }
-  throw new UsageError("no node: pass --devnet devnet.json, or --rpc-url with credentials (or set X402_DEVNET_JSON / X402_RPC_URL)");
+  return undefined;
+}
+
+function lwdOf(f: Record<string, string | undefined>, env: Env): LwdClient | undefined {
+  const url = f.lwd ?? env.X402_LWD_URL;
+  if (!url) return undefined;
+  try {
+    return new LwdClient(url);
+  } catch (e) {
+    throw new UsageError(`--lwd: ${(e as Error).message}`);
+  }
 }
 
 export function loadCliConfig(args: ParsedArgs, env: Env = process.env, node?: YcashRpc): CliConfig {
@@ -185,9 +204,15 @@ export function loadCliConfig(args: ParsedArgs, env: Env = process.env, node?: Y
   const maxDepositZat = zat("--max-deposit", f["max-deposit"] ?? env.X402_MAX_DEPOSIT_ZAT);
   const maxCloseFeeZat = zat("--max-close-fee", f["max-close-fee"] ?? env.X402_MAX_CLOSE_FEE_ZAT);
   const channelStorePath = f.channels ?? env.X402_CHANNEL_STORE ?? join(homedir(), ".x402-ycash", "channels.json");
+  const rpc = node ?? nodeOf(f, env);
+  const lwd = lwdOf(f, env);
+  if (!rpc && !lwd) throw new UsageError("no node: pass --devnet devnet.json, --rpc-url with credentials, or --lwd host:port (or set X402_DEVNET_JSON / X402_RPC_URL / X402_LWD_URL)");
+  if (lwd && !wif) throw new UsageError("--lwd needs --wif: lightwalletd holds no wallet, so a local key pays");
+  if (shieldedFrom && !rpc) throw new UsageError("--shielded-from needs a node wallet (--devnet or --rpc-url): lightwalletd cannot pay sapling-proof");
   return {
     network,
-    node: node ?? nodeOf(f, env),
+    ...(rpc ? { node: rpc } : {}),
+    ...(lwd ? { lwd } : {}),
     channelStorePath,
     reservationsPath: f.reservations ?? env.X402_RESERVATIONS ?? join(dirname(channelStorePath), "reservations.json"),
     maxPaymentZat: zat("--max-payment", f["max-payment"] ?? env.X402_MAX_PAYMENT_ZAT) ?? 1_000_000n,

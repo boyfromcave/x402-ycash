@@ -1,7 +1,7 @@
 // The commands. Each writes JSON lines to `out` and returns the process exit code.
 import type { PaymentPayload, PaymentRequired, PaymentRequirements, SettleResponse } from "@x402/core/types";
 import { decodePaymentResponseHeader, wrapFetchWithPayment } from "@x402/fetch";
-import { ASSET_YED, batch as B, tx, yed } from "x402-ycash-mechanism";
+import { ASSET_YED, batch as B, LwdChain, tx, yed } from "x402-ycash-mechanism";
 import type { PayingClient } from "./client.js";
 import { UsageError, type CliConfig } from "./config.js";
 
@@ -116,7 +116,15 @@ async function legacyRefundScript(config: CliConfig, isYed: boolean): Promise<Ui
     const { privKey, compressed } = tx.decodeWif(config.wif, config.network);
     return tx.p2pkhScript(tx.hash160(tx.pubkeyFromPriv(privKey, compressed)));
   }
+  if (!config.node) throw new UsageError("a refund without --wif or --to needs the node's wallet for its address");
   return tx.addressToScript(await config.node.call<string>(isYed ? "yed_getnewaddress" : "getrawchangeaddress"), config.network);
+}
+
+/** A transaction's hex, from lightwalletd or the node. */
+function rawTransaction(config: CliConfig, txid: string): Promise<string> {
+  if (config.lwd) return new LwdChain(config.lwd).getRawTransaction(txid);
+  if (!config.node) throw new UsageError("no node or lightwalletd to read the transaction from");
+  return config.node.call<string>("getrawtransaction", [txid]);
 }
 
 /** `channel refund <channelId>`: the client alone, from height t. A YED refund carries a TRANSFER of all of D. */
@@ -134,7 +142,7 @@ export async function channelRefund(c: PayingClient, config: CliConfig, channelI
   const record: Record<string, unknown> = { msg: "refunded", channelId, asset: rec.asset, transaction: txid };
   if (isYed) {
     // The TRANSFER as broadcast (vout 1 is the refund output): proof the YED came back, nothing burned.
-    const hex = await config.node.call<string>("getrawtransaction", [txid]);
+    const hex = await rawTransaction(config, txid);
     const found = yed.findPayload(tx.parseTx(hex).vout);
     record.transfer = found && "payload" in found ? found.payload : found;
     record.to = tx.encodeAddress(config.network, "yed", tx.p2pkhHash(toScript) as Uint8Array);

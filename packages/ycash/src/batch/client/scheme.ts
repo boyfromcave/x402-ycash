@@ -26,7 +26,7 @@ import type { ChannelFunder } from "./funder.js";
 
 /** The node calls the client needs: tip and branch id, and broadcasting its refund. */
 export interface ClientChain {
-  getBlockchainInfo(): Promise<BlockchainInfo>;
+  getBlockchainInfo(): Promise<Pick<BlockchainInfo, "blocks" | "consensus">>;
   getTxOut(txid: string, n: number, includeMempool: boolean): Promise<TxOutInfo | null>;
   sendRawTransaction(hex: string): Promise<string>;
 }

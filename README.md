@@ -20,7 +20,7 @@ The plan is `docs/plans/x402-agent-payments-plan.md` in the
 ## Layout
 
 ```
-packages/ycash/   the x402 mechanism (TypeScript, on @x402/core v2): tx, yed, channel, exact, batch, node, store
+packages/ycash/   the x402 mechanism (TypeScript, on @x402/core v2): tx, yed, channel, exact, batch, node, store, lwd
 packages/facilitator/  the standalone facilitator service: /verify, /settle, /supported, /healthz
 packages/cli/     the `x402-ycash` command: pay a route, open, list, close and refund channels
 examples/         merchant-express (an @x402/express server) and agent-client (an @x402/fetch agent)
@@ -37,6 +37,7 @@ npm run typecheck
 npm test           # unit tests
 npm run test:devnet   # against a running yellowback-devnet (see the plan, §6)
 npm run test:devnet:http   # the HTTP path only: facilitator, merchant, agent and CLI as processes
+                           # (+ X402_LWD_URL=host:port of a lightwalletd on node 0: the light-agent suite)
 ```
 
 ## Quick start on the devnet
@@ -163,7 +164,8 @@ be used, with the same keys in camelCase; the environment wins over the file.
 - `examples/agent-client` calls a paid route `REQUESTS` times with `@x402/fetch` and pays each 402
   automatically, capped at `MAX_PAYMENT_ZAT` per payment (YEC is allowed explicitly; it is not a
   USD asset). It reads its node (`AGENT_DEVNET_JSON` or `AGENT_RPC_*`) and signs with a key it
-  holds (`AGENT_WIF`, its coins listed by the node) or with the node's wallet. It pays exact
+  holds (`AGENT_WIF`, its coins listed by the node, or by lightwalletd with `AGENT_LWD_URL` and no
+  node at all) or with the node's wallet. It pays exact
   routes, channels (`AGENT_CHANNEL_STORE`, `AGENT_CHANNEL_DEPOSIT_ZAT`) and, with
   `AGENT_SHIELDED_FROM`, sapling-proof routes. Run it with `npm start -w x402-ycash-example-agent-client`.
 
@@ -190,6 +192,37 @@ be used, with the same keys in camelCase; the environment wins over the file.
   signer uses the same file for its YED outputs, which `lockunspent` cannot mark (the Yellowback
   wallet keeps every YED output locked).
 
+### Light agents: lightwalletd instead of a node
+
+An agent that holds a WIF key needs no node of its own: with `AGENT_LWD_URL` (the agent) or
+`--lwd host:port` / `X402_LWD_URL` (the CLI) it reads its coins, its YED outputs, the tip and the
+branch id from a lightwalletd server and broadcasts its refunds through it. That covers transparent
+YEC and YED `exact` payments, channel funding (YEC and YED), `channel status|close|refund`. The
+address forms are `grpc://host:port` (plaintext), `grpcs://host:port` (TLS), or a bare `host:port`,
+which is TLS unless the host is loopback.
+
+```
+# after `yellowback-devnet lightwalletd start --extra=--yellowback` (port 9067) on the devnet:
+RESOURCE_URL=http://127.0.0.1:4021/exact/quote AGENT_WIF=<key> AGENT_LWD_URL=127.0.0.1:9067 npm start -w x402-ycash-example-agent-client
+npm start -s -w x402-ycash-cli -- channel refund <channelId> --lwd 127.0.0.1:9067 --wif <key> --channels $PWD/scratch/c.json
+```
+
+The server must be lightwalletd-dd (`packages/ycash/proto/` is vendored from it) run with
+`--yellowback` for YED: `GetAddressTokens` answers the token lookups, and without it YED outputs
+cannot be told apart from plain coins, as on a stock node. Its node needs `-insightexplorer` and
+`-txindex` (the devnet sets both on node 0). Three things differ from a node:
+
+- **Shielded payments still need a node wallet.** `sapling-proof` pays with `z_sendmany`;
+  lightwalletd holds no wallet, and this SDK has no Sapling builder, so `AGENT_SHIELDED_FROM` and
+  `--shielded-from` need `AGENT_DEVNET_JSON`/`AGENT_RPC_*` or `--devnet`/`--rpc-url`.
+- **Mempool spends are invisible.** `GetAddressUtxos` and `GetAddressTokens` read the node's
+  indexes, which hold confirmed outputs and are not updated by mempool spends, and `GetMempoolTx`
+  sends only transactions with Sapling parts. The agent's reservation file is what keeps it off a
+  coin it already spent; a spend of the same key from elsewhere shows up only as the facilitator's
+  broadcast refusal. Change of an unconfirmed payment is spendable once it is mined.
+- **The branch id is the tip's.** `GetLightdInfo` reports `consensus.chaintip`, not `nextblock`, so
+  on the one block before a network upgrade activates a payment signed now would be refused.
+
 ## CLI
 
 `packages/cli` is the `x402-ycash` command (`npm start -s -w x402-ycash-cli -- <args>` with absolute paths, or `x402-ycash`
@@ -204,8 +237,9 @@ x402-ycash channel refund <channelId> [--to A]   the client alone, from the refu
 ```
 
 It reads its node from `--devnet devnet.json [--node N]` or `--rpc-url` with `--rpc-user` and
-`--rpc-password` (or `--rpc-cookie`), and pays with `--wif` or the node's wallet; the same
-settings come from `X402_DEVNET_JSON`, `X402_RPC_*`, `X402_WIF`, `X402_SHIELDED_FROM`,
+`--rpc-password` (or `--rpc-cookie`), or a lightwalletd server from `--lwd host:port` (with `--wif`;
+see "Light agents" above), and pays with `--wif` or the node's wallet; the same
+settings come from `X402_DEVNET_JSON`, `X402_RPC_*`, `X402_LWD_URL`, `X402_WIF`, `X402_SHIELDED_FROM`,
 `X402_CHANNEL_STORE` (default `~/.x402-ycash/channels.json`, a wallet file: it holds channel keys),
 `X402_MAX_PAYMENT_ZAT`, `X402_MAX_DEPOSIT_ZAT` (`--max-deposit`, the most one channel may lock;
 default 1 YEC), `X402_MAX_CLOSE_FEE_ZAT` (`--max-close-fee`, the largest server `closeFee` a channel

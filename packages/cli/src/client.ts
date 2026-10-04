@@ -10,6 +10,8 @@ import {
   exact,
   FileClientChannelStorage,
   FileCoinReservationStore,
+  LwdChain,
+  LwdUtxoSource,
   rpcWalletFunder,
   ShieldedExactClient,
   tx,
@@ -38,6 +40,12 @@ export function depositFor(config: Pick<CliConfig, "depositZat" | "depositCents"
   };
 }
 
+/** loadCliConfig guarantees a node wherever there is no WIF key and lightwalletd. */
+function mustNode<T>(node: T | undefined): T {
+  if (node === undefined) throw new Error("this needs a node (--devnet or --rpc-url)");
+  return node;
+}
+
 export interface PayingClient {
   client: x402Client;
   http: x402HTTPClient;
@@ -50,18 +58,20 @@ export function buildClient(config: CliConfig): PayingClient {
   const storage = new FileClientChannelStorage(config.channelStorePath);
   const node = config.node;
   const held = { reservations: new FileCoinReservationStore(config.reservationsPath) };
-  const source = config.wif ? new exact.RpcUtxoSource(node, { importAddress: true, ...held }) : undefined;
-  const transparent = new exact.ExactYcashScheme(config.wif && source ? new exact.LocalKeySigner(config.wif, source) : new exact.RpcWalletSigner(node, held));
-  const shielded = config.shieldedFrom ? new ShieldedExactClient({ rpc: node, from: config.shieldedFrom }) : undefined;
+  // A WIF key reads its coins from lightwalletd (--lwd) or from the node, which watches its address.
+  const source = config.wif ? (config.lwd ? new LwdUtxoSource(config.lwd, held) : new exact.RpcUtxoSource(mustNode(node), { importAddress: true, ...held })) : undefined;
+  const transparent = new exact.ExactYcashScheme(config.wif && source ? new exact.LocalKeySigner(config.wif, source) : new exact.RpcWalletSigner(mustNode(node), held));
+  const shielded = config.shieldedFrom ? new ShieldedExactClient({ rpc: mustNode(node), from: config.shieldedFrom }) : undefined;
   // Both assets; the channel's remainder returns to the WIF key's address or a new wallet address.
-  const funder = config.wif && source ? utxoSourceFunder(tx.decodeWif(config.wif, config.network).privKey, source) : rpcWalletFunder(node, held);
+  const funder = config.wif && source ? utxoSourceFunder(tx.decodeWif(config.wif, config.network).privKey, source) : rpcWalletFunder(mustNode(node), held);
   const deposit = depositFor(config);
   const maxDeposit = {
     ...(config.maxDepositZat !== undefined ? { [ASSET_YEC]: config.maxDepositZat } : {}),
     ...(config.maxDepositCents !== undefined ? { [ASSET_YED]: config.maxDepositCents } : {}),
   };
   const channels = new BatchYcashClientScheme({
-    chain: node,
+    // The tip, the channel output's state and the refund's broadcast: lightwalletd or the node.
+    chain: config.lwd ? new LwdChain(config.lwd) : mustNode(node),
     funder,
     storage,
     ...(deposit ? { deposit } : {}),
