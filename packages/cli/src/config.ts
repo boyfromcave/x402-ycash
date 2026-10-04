@@ -4,7 +4,7 @@
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
-import { tx, YCASH_NETWORKS, YcashRpc, type YcashNetwork } from "x402-ycash-mechanism";
+import { ASSET_YEC, ASSET_YED, tx, YCASH_NETWORKS, YcashRpc, type YcashAsset, type YcashNetwork } from "x402-ycash-mechanism";
 
 export interface CliConfig {
   network: YcashNetwork;
@@ -16,8 +16,16 @@ export interface CliConfig {
   /** Channel records, with their keys: a wallet file. */
   channelStorePath: string;
   maxPaymentZat: bigint;
-  /** D for a channel this CLI opens; default the scheme's (amount × 100, capped at maxDeposit). */
+  /** YED's per-payment cap, cents (spend controls; default 100 = $1.00, core's USD default, X-F43). */
+  maxPaymentYedCents: bigint;
+  /** `--asset`: pay and open only requirements in this asset; default whichever the route offers first. */
+  asset?: YcashAsset;
+  /** D for a YEC channel this CLI opens; default the scheme's (amount × 100, capped at maxDeposit). */
   depositZat?: bigint;
+  /** D for a YED channel this CLI opens (`--asset YED --deposit CENTS`), cents. */
+  depositCents?: bigint;
+  /** The most a YED channel this CLI opens may lock, cents (the client's maxDeposit for YED; default $50). */
+  maxDepositCents?: bigint;
   /** The most a channel this CLI opens may lock, zatoshis; default 1 YEC, whatever the server allows. */
   maxDepositZat?: bigint;
   /** Coins held by signed, unconfirmed spends, shared by every run (default next to the channel store). */
@@ -36,10 +44,10 @@ export class UsageError extends Error {
 }
 
 export const USAGE = `usage:
-  x402-ycash pay <url> [--count N]
-  x402-ycash channel open <url> [--deposit ZAT] [--max-deposit ZAT]
+  x402-ycash pay <url> [--count N] [--asset YEC|YED]
+  x402-ycash channel open <url> [--asset YEC|YED] [--deposit ZAT|CENTS] [--max-deposit ZAT] [--max-deposit-yed CENTS]
   x402-ycash channel status [channelId]
-  x402-ycash channel close <url> [channelId]
+  x402-ycash channel close <url> [channelId] [--asset YEC|YED]
   x402-ycash channel refund <channelId> [--to ADDRESS]
 
 node (flag / env):   --devnet FILE / X402_DEVNET_JSON, --node N / X402_DEVNET_NODE (default 0)
@@ -50,7 +58,12 @@ payer:               --wif / X402_WIF (a local key; default: the node's wallet s
 other:               --network / X402_NETWORK (default ycash:regtest), --channels FILE / X402_CHANNEL_STORE
                      (default ~/.x402-ycash/channels.json), --max-payment ZAT / X402_MAX_PAYMENT_ZAT (default 1000000),
                      --max-deposit ZAT / X402_MAX_DEPOSIT_ZAT (default 100000000, 1 YEC), --reservations FILE /
-                     X402_RESERVATIONS (default reservations.json next to the channel store)`;
+                     X402_RESERVATIONS (default reservations.json next to the channel store)
+YED:                 --asset YED picks a route's YED requirements; --deposit is then in cents (at least 100).
+                     --max-payment-yed CENTS / X402_MAX_PAYMENT_YED_CENTS (default 100, $1.00),
+                     --max-deposit-yed CENTS / X402_MAX_DEPOSIT_YED_CENTS (default 5000, $50).
+                     A YED refund carries a TRANSFER of all of D; without --to it goes to the WIF key's
+                     address or a new yed_getnewaddress of the node's wallet.`;
 
 type Env = Record<string, string | undefined>;
 
@@ -68,6 +81,9 @@ const OPTIONS = {
   "max-payment": { type: "string" },
   deposit: { type: "string" },
   "max-deposit": { type: "string" },
+  "max-payment-yed": { type: "string" },
+  "max-deposit-yed": { type: "string" },
+  asset: { type: "string" },
   reservations: { type: "string" },
   count: { type: "string" },
   to: { type: "string" },
@@ -95,6 +111,20 @@ function zat(name: string, v: string | undefined): bigint | undefined {
   if (v === undefined) return undefined;
   if (!/^[1-9]\d{0,15}$/.test(v)) throw new UsageError(`${name} must be a positive whole number of zatoshis`);
   return BigInt(v);
+}
+
+/** A YED amount in cents: at least $1.00 (a YED output below it burns; a YED channel holds at least $1.00). */
+function cents(name: string, v: string | undefined, min: bigint): bigint | undefined {
+  if (v === undefined) return undefined;
+  if (!/^[1-9]\d{0,7}$/.test(v) || BigInt(v) < min || BigInt(v) > 10_000_000n) throw new UsageError(`${name} must be a whole number of cents in ${min}..10000000`);
+  return BigInt(v);
+}
+
+function assetOf(v: string | undefined): YcashAsset | undefined {
+  if (v === undefined) return undefined;
+  const a = v.toUpperCase();
+  if (a !== ASSET_YEC && a !== ASSET_YED) throw new UsageError("--asset must be YEC or YED");
+  return a;
 }
 
 function nodeOf(f: Record<string, string | undefined>, env: Env): YcashRpc {
@@ -140,7 +170,11 @@ export function loadCliConfig(args: ParsedArgs, env: Env = process.env, node?: Y
     }
   }
   const shieldedFrom = f["shielded-from"] ?? env.X402_SHIELDED_FROM;
-  const depositZat = zat("--deposit", f.deposit);
+  const asset = assetOf(f.asset);
+  // --deposit is in the asset's unit: zatoshis for YEC, cents for YED.
+  const depositZat = asset === ASSET_YED ? undefined : zat("--deposit", f.deposit);
+  const depositCents = asset === ASSET_YED ? cents("--deposit", f.deposit, 100n) : undefined;
+  const maxDepositCents = cents("--max-deposit-yed", f["max-deposit-yed"] ?? env.X402_MAX_DEPOSIT_YED_CENTS, 100n);
   const maxDepositZat = zat("--max-deposit", f["max-deposit"] ?? env.X402_MAX_DEPOSIT_ZAT);
   const channelStorePath = f.channels ?? env.X402_CHANNEL_STORE ?? join(homedir(), ".x402-ycash", "channels.json");
   return {
@@ -149,7 +183,11 @@ export function loadCliConfig(args: ParsedArgs, env: Env = process.env, node?: Y
     channelStorePath,
     reservationsPath: f.reservations ?? env.X402_RESERVATIONS ?? join(dirname(channelStorePath), "reservations.json"),
     maxPaymentZat: zat("--max-payment", f["max-payment"] ?? env.X402_MAX_PAYMENT_ZAT) ?? 1_000_000n,
+    maxPaymentYedCents: cents("--max-payment-yed", f["max-payment-yed"] ?? env.X402_MAX_PAYMENT_YED_CENTS, 1n) ?? 100n,
     count: Number(count),
+    ...(asset ? { asset } : {}),
+    ...(depositCents !== undefined ? { depositCents } : {}),
+    ...(maxDepositCents !== undefined ? { maxDepositCents } : {}),
     ...(wif ? { wif } : {}),
     ...(shieldedFrom ? { shieldedFrom } : {}),
     ...(depositZat !== undefined ? { depositZat } : {}),

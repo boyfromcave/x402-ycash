@@ -31,6 +31,21 @@ export interface ShieldedConfig {
   confirmations: number;
 }
 
+/**
+ * The YED routes (plan X3): `exact` at ≥ $1.00 and a YED channel. Configured here, served only when
+ * the facilitator lists YED in /supported (its node runs the overlay; see yed.ts).
+ */
+export interface YedConfig {
+  /** The Yellowback address (`ye…` mainnet, `yt…`/`yr…`) receiving YED on both routes. */
+  payTo: string;
+  /** The exact route's price as "$d.cc": whole cents, at least $1.00 (a smaller YED output burns). */
+  priceReport: string;
+  /** The channel route's per-request ceiling as "$d.cc"; may be below $1.00 (the dollar floor is per voucher). */
+  priceStream: string;
+  /** The largest YED channel deposit D accepted, cents. */
+  maxDepositCents: bigint;
+}
+
 export interface MerchantConfig {
   host: string;
   port: number;
@@ -50,6 +65,7 @@ export interface MerchantConfig {
   wallet?: YcashRpc;
   channel?: ChannelConfig;
   shielded?: ShieldedConfig;
+  yed?: YedConfig;
 }
 
 type Env = Record<string, string | undefined>;
@@ -112,6 +128,33 @@ function shieldedOf(env: Env, network: YcashNetwork, wallet: YcashRpc | undefine
   return { registryPath, confirmations: int(env, "MERCHANT_SHIELDED_CONFIRMATIONS", -1, 20) ?? 1, ...(baseAddress ? { baseAddress } : {}) };
 }
 
+/** A dollar price ("$2", "2.00", "$0.01") as "$d.cc" and whole cents, at least `minCents`. */
+export function dollars(env: Env, name: string, fallback: string, minCents: bigint): { price: string; cents: bigint } {
+  const v = (env[name] ?? fallback).trim();
+  const m = /^\$?(\d{1,9})(?:\.(\d{1,2}))?$/.exec(v);
+  if (!m) throw new Error(`${name} must be a dollar amount in whole cents, like "$2" or "$0.01"`);
+  const cents = BigInt(m[1] as string) * 100n + BigInt(((m[2] ?? "") + "00").slice(0, 2));
+  if (cents < minCents) throw new Error(`${name} must be at least $${minCents / 100n}.${String(minCents % 100n).padStart(2, "0")}`);
+  return { price: `$${cents / 100n}.${String(cents % 100n).padStart(2, "0")}`, cents };
+}
+
+/** YED exact outputs are $1.00 to $100,000 (ycash-dd/src/yellowback/params.cpp:18-19, both lines). */
+const YED_MIN_CENTS = 100n;
+const YED_MAX_CENTS = 10_000_000n;
+
+function yedOf(env: Env, network: YcashNetwork): YedConfig | undefined {
+  const payTo = env.MERCHANT_YED_PAY_TO;
+  if (!payTo) return undefined;
+  if (tx.decodeAddress(payTo, network).kind !== "yed") throw new Error("MERCHANT_YED_PAY_TO must be a Yellowback (ye…/yt…/yr…) address");
+  const report = dollars(env, "PRICE_YED_REPORT", "$2", YED_MIN_CENTS);
+  if (report.cents > YED_MAX_CENTS) throw new Error("PRICE_YED_REPORT must be at most $100,000");
+  const maxDeposit = env.MERCHANT_MAX_DEPOSIT_CENTS ?? "10000";
+  if (!/^[1-9]\d{0,7}$/.test(maxDeposit) || BigInt(maxDeposit) < YED_MIN_CENTS || BigInt(maxDeposit) > YED_MAX_CENTS) {
+    throw new Error("MERCHANT_MAX_DEPOSIT_CENTS must be a whole number of cents in 100..10000000");
+  }
+  return { payTo, priceReport: report.price, priceStream: dollars(env, "PRICE_YED_STREAM", "$0.01", 1n).price, maxDepositCents: BigInt(maxDeposit) };
+}
+
 export function loadMerchantConfig(env: Env = process.env): MerchantConfig {
   const network = (env.X402_NETWORK ?? "ycash:regtest") as YcashNetwork;
   if (!YCASH_NETWORKS.includes(network)) throw new Error(`X402_NETWORK must be one of ${YCASH_NETWORKS.join(", ")}`);
@@ -128,6 +171,7 @@ export function loadMerchantConfig(env: Env = process.env): MerchantConfig {
   const priceTickerZat = zat(env, "PRICE_TICKER_ZAT", "10000");
   const channel = channelOf(env, wallet);
   const shieldedConfig = shieldedOf(env, network, wallet);
+  const yed = yedOf(env, network);
 
   return {
     host: env.HOST ?? "127.0.0.1",
@@ -144,6 +188,7 @@ export function loadMerchantConfig(env: Env = process.env): MerchantConfig {
     ...(wallet ? { wallet } : {}),
     ...(channel ? { channel } : {}),
     ...(shieldedConfig ? { shielded: shieldedConfig } : {}),
+    ...(yed ? { yed } : {}),
   };
 }
 
@@ -156,5 +201,6 @@ export function describeConfig(c: MerchantConfig): Record<string, unknown> {
     node: c.wallet?.url ?? "(none)",
     channel: c.channel ? { maxDeposit: c.channel.maxDeposit.toString(), store: c.channel.storePath, confirmations: c.channel.confirmations, serverKey: "(set)" } : "(off)",
     shielded: c.shielded ? { registry: c.shielded.registryPath, confirmations: c.shielded.confirmations } : "(off)",
+    yed: c.yed ? { payTo: c.yed.payTo, report: c.yed.priceReport, stream: c.yed.priceStream, maxDepositCents: c.yed.maxDepositCents.toString() } : "(off)",
   };
 }

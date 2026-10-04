@@ -6,7 +6,7 @@ import { loadAgentConfig } from "./config.js";
 const config = loadAgentConfig();
 const agent = createAgent(config);
 const who = config.signer.kind === "wif" ? `wif ${config.signer.address}` : `node wallet ${config.node.url}`;
-console.log(JSON.stringify({ msg: "agent", url: config.url, requests: config.requests, network: config.network, signer: who, schemes: agent.schemes }));
+console.log(JSON.stringify({ msg: "agent", url: config.url, requests: config.requests, network: config.network, signer: who, schemes: agent.schemes, maxPaymentZat: config.maxPaymentZat, maxPaymentYedCents: config.maxPaymentYedCents }));
 
 let paid = 0;
 for (let i = 1; i <= config.requests; i++) {

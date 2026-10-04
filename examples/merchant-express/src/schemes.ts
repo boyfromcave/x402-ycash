@@ -2,7 +2,7 @@
 // a payment mode's route is served only once its scheme is registered (app.ts).
 import type { HTTPRequestContext } from "@x402/core/server";
 import type { x402ResourceServer } from "@x402/express";
-import { BatchYcashServerScheme, exact, FileChannelStore, FileIssuedAddressRegistry, shielded, type YcashNetwork, type YcashRpc } from "x402-ycash-mechanism";
+import { ASSET_YED, BatchYcashServerScheme, exact, FileChannelStore, FileIssuedAddressRegistry, shielded, type YcashNetwork, type YcashRpc } from "x402-ycash-mechanism";
 import type { ChannelConfig, ShieldedConfig } from "./config.js";
 import { ShieldedRouteIssuer } from "./shielded.js";
 
@@ -14,6 +14,18 @@ export interface PaymentModes {
   channel: boolean;
   /** `exact`, `sapling-proof` YEC: a shielded payment to a fresh address per request (plan X4a). */
   shielded: boolean;
+  /** `exact`, `transparent` YED at ≥ $1.00 (plan X3); only when the facilitator lists YED. */
+  yedExact: boolean;
+  /** `batch-settlement`: a YED channel under the dollar floor (plan X3); only when the facilitator lists YED. */
+  yedChannel: boolean;
+}
+
+/** Which YED modes the merchant may serve (yed.ts probes the facilitator and the node at startup). */
+export interface YedModes {
+  exact: boolean;
+  channel: boolean;
+  /** The largest YED channel deposit accepted, cents. */
+  maxDepositCents: bigint;
 }
 
 export interface ServerSchemeDeps {
@@ -24,6 +36,7 @@ export interface ServerSchemeDeps {
   zeroConfCapZat?: bigint;
   channel?: ChannelConfig;
   shielded?: ShieldedConfig & { amount: string; maxTimeoutSeconds: number };
+  yed?: YedModes;
   log?: (msg: string, fields?: Record<string, unknown>) => void;
 }
 
@@ -38,7 +51,7 @@ export interface ServerSchemes {
 export type RegisterServerSchemes = (server: x402ResourceServer, deps: ServerSchemeDeps) => ServerSchemes;
 
 export const registerServerSchemes: RegisterServerSchemes = (server, deps) => {
-  const modes: PaymentModes = { exact: false, channel: false, shielded: false };
+  const modes: PaymentModes = { exact: false, channel: false, shielded: false, yedExact: false, yedChannel: false };
   const out: ServerSchemes = { modes };
 
   // exact: transparent YEC always; sapling-proof when the merchant's wallet issues addresses.
@@ -59,9 +72,12 @@ export const registerServerSchemes: RegisterServerSchemes = (server, deps) => {
     new exact.ExactYcashServerScheme({
       ...(deps.zeroConfCapZat !== undefined ? { zeroConfCapZat: deps.zeroConfCapZat } : {}),
       ...(issuer ? { shielded: issuer } : {}),
+      // "$2" on the YED route means 200 YED cents; the YEC routes price in zatoshis, so they are unaffected.
+      ...(deps.yed?.exact ? { usdAsset: ASSET_YED } : {}),
     }),
   );
   modes.exact = true;
+  modes.yedExact = deps.yed?.exact === true;
 
   // batch-settlement: the server holds S and the channel state, verifies each voucher before the
   // handler, and closes on idle, margin, exhaustion or the client's close.
@@ -77,6 +93,7 @@ export const registerServerSchemes: RegisterServerSchemes = (server, deps) => {
       ...(c.minLockBlocks !== undefined ? { minLockBlocks: c.minLockBlocks } : {}),
       ...(c.closeMarginBlocks !== undefined ? { closeMarginBlocks: c.closeMarginBlocks } : {}),
       ...(c.idleMs !== undefined ? { idleMs: c.idleMs } : {}),
+      ...(deps.yed?.channel ? { usdAsset: ASSET_YED, maxDepositCents: deps.yed.maxDepositCents } : {}),
       onClose: (e) => deps.log?.("channel closed", { channelId: e.channelId, reason: e.reason, txid: e.txid, cumulative: e.cumulative.toString() }),
     });
     server.register(deps.network, scheme);
@@ -84,6 +101,9 @@ export const registerServerSchemes: RegisterServerSchemes = (server, deps) => {
     watcher.start();
     out.close = () => watcher.stop();
     modes.channel = true;
+    // YED vouchers are checkable only against confirmed token records (plan X-F14): no mempool funding.
+    if (deps.yed?.channel && c.confirmations < 0) deps.log?.("YED channel route off", { reason: "MERCHANT_CHANNEL_CONFIRMATIONS is -1; YED channels need funding in a block" });
+    modes.yedChannel = deps.yed?.channel === true && c.confirmations >= 0;
   }
 
   return out;

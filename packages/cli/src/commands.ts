@@ -1,7 +1,7 @@
 // The commands. Each writes JSON lines to `out` and returns the process exit code.
 import type { PaymentPayload, PaymentRequired, PaymentRequirements, SettleResponse } from "@x402/core/types";
 import { decodePaymentResponseHeader, wrapFetchWithPayment } from "@x402/fetch";
-import { batch as B, tx } from "x402-ycash-mechanism";
+import { ASSET_YED, batch as B, tx, yed } from "x402-ycash-mechanism";
 import type { PayingClient } from "./client.js";
 import { UsageError, type CliConfig } from "./config.js";
 
@@ -45,9 +45,10 @@ async function paymentRequired(c: PayingClient, url: string, baseFetch: typeof f
   return c.http.getPaymentRequiredResponse((n) => res.headers.get(n), body);
 }
 
-function batchAccept(pr: PaymentRequired, url: string): PaymentRequirements {
-  const accept = pr.accepts.find((a) => a.scheme === BATCH);
-  if (!accept) throw new UsageError(`${url} offers no ${BATCH} (it offers ${pr.accepts.map((a) => a.scheme).join(", ") || "nothing"})`);
+function batchAccept(pr: PaymentRequired, url: string, asset?: string): PaymentRequirements {
+  const accept = pr.accepts.find((a) => a.scheme === BATCH && (asset === undefined || a.asset === asset));
+  const offered = pr.accepts.map((a) => `${a.scheme} ${a.asset}`).join(", ") || "nothing";
+  if (!accept) throw new UsageError(`${url} offers no ${BATCH}${asset ? ` in ${asset}` : ""} (it offers ${offered})`);
   return accept;
 }
 
@@ -55,7 +56,7 @@ const offerOf = (a: PaymentRequirements): string => B.client.offerKeyOf(a.networ
 
 /** `channel open <url>`: pays the route's first request on a channel, opening one when none is live. */
 export async function channelOpen(c: PayingClient, config: CliConfig, url: string, out: Out, baseFetch: typeof fetch = fetch): Promise<number> {
-  const accept = batchAccept(await paymentRequired(c, url, baseFetch), url);
+  const accept = batchAccept(await paymentRequired(c, url, baseFetch), url, config.asset);
   const code = await pay(c, { ...config, count: 1 }, url, out, baseFetch);
   const rec = await c.storage.findLive(offerOf(accept));
   if (!rec) {
@@ -72,7 +73,7 @@ export async function channelStatus(c: PayingClient, channelId: string | undefin
   for (const id of ids) {
     const rec = await c.storage.get(id);
     if (!rec) throw new UsageError(`no channel ${id} in the store`);
-    out({ ...(await c.batch.status(id)), payTo: rec.payTo, ...(rec.closeTxid ? { closeTxid: rec.closeTxid } : {}), ...(rec.refundTxid ? { refundTxid: rec.refundTxid } : {}) });
+    out({ ...(await c.batch.status(id)), asset: rec.asset, payTo: rec.payTo, ...(rec.closeTxid ? { closeTxid: rec.closeTxid } : {}), ...(rec.refundTxid ? { refundTxid: rec.refundTxid } : {}) });
   }
   if (ids.length === 0) out({ msg: "no channels in the store" });
   return 0;
@@ -83,9 +84,9 @@ export async function channelStatus(c: PayingClient, channelId: string | undefin
  * charged total (spec "`close` (optional, client-initiated)"); the server broadcasts it at once and
  * the client's remainder comes back without waiting for t.
  */
-export async function channelClose(c: PayingClient, url: string, channelId: string | undefined, out: Out, baseFetch: typeof fetch = fetch): Promise<number> {
+export async function channelClose(c: PayingClient, url: string, channelId: string | undefined, out: Out, baseFetch: typeof fetch = fetch, asset?: string): Promise<number> {
   const pr = await paymentRequired(c, url, baseFetch);
-  const accept = batchAccept(pr, url);
+  const accept = batchAccept(pr, url, asset);
   const rec = channelId ? await c.storage.get(channelId) : await c.storage.findLive(offerOf(accept));
   if (!rec) throw new UsageError(channelId ? `no channel ${channelId} in the store` : `no live channel for ${url}`);
   if (rec.offerKey !== offerOf(accept)) throw new UsageError(`channel ${rec.channelId} is not a channel of ${url}'s offer`);
@@ -99,14 +100,40 @@ export async function channelClose(c: PayingClient, url: string, channelId: stri
     return 1;
   }
   await c.batch.markClosed(rec.channelId, settlement.transaction);
-  out({ msg: "closed", channelId: rec.channelId, cumulative: rec.charged, transaction: settlement.transaction, settlement });
+  // The close voucher's cumulative: the charged total, or $1.00 for a YED channel charged less (X-F41).
+  out({ msg: "closed", channelId: rec.channelId, asset: rec.asset, charged: rec.charged, cumulative: String(close.payload.cumulative), transaction: settlement.transaction, settlement });
   return 0;
 }
 
-/** `channel refund <channelId>`: the client alone, from height t. */
+/**
+ * Where a YED refund goes without `--to`: the WIF key's address, or a new Yellowback address of the
+ * node's wallet. The channel key C (the scheme's default) lives only in the channel store, where
+ * no wallet sees the YED.
+ */
+async function yedRefundScript(c: PayingClient, config: CliConfig): Promise<Uint8Array> {
+  if (config.wif) {
+    const { privKey, compressed } = tx.decodeWif(config.wif, config.network);
+    return tx.p2pkhScript(tx.hash160(tx.pubkeyFromPriv(privKey, compressed)));
+  }
+  return tx.addressToScript(await config.node.call<string>("yed_getnewaddress"), config.network);
+}
+
+/** `channel refund <channelId>`: the client alone, from height t. A YED refund carries a TRANSFER of all of D. */
 export async function channelRefund(c: PayingClient, config: CliConfig, channelId: string, out: Out): Promise<number> {
-  const toScript = config.refundTo ? tx.addressToScript(config.refundTo, config.network) : undefined;
+  const rec = await c.storage.get(channelId);
+  if (!rec) throw new UsageError(`no channel ${channelId} in the store`);
+  const isYed = rec.asset === ASSET_YED;
+  if (isYed && config.refundTo && tx.decodeAddress(config.refundTo, config.network).kind === "p2sh") throw new UsageError("--to: a YED refund pays a P2PKH (ye…) address");
+  const toScript = config.refundTo ? tx.addressToScript(config.refundTo, config.network) : isYed ? await yedRefundScript(c, config) : undefined;
   const txid = await c.batch.refund(channelId, toScript ? { toScript } : {});
-  out({ msg: "refunded", channelId, transaction: txid });
+  const record: Record<string, unknown> = { msg: "refunded", channelId, asset: rec.asset, transaction: txid };
+  if (isYed) {
+    // The TRANSFER as broadcast (vout 1 is the refund output): proof the YED came back, nothing burned.
+    const hex = await config.node.call<string>("getrawtransaction", [txid]);
+    const found = yed.findPayload(tx.parseTx(hex).vout);
+    record.transfer = found && "payload" in found ? found.payload : found;
+    record.to = tx.encodeAddress(config.network, "yed", tx.p2pkhHash(toScript as Uint8Array) as Uint8Array);
+  }
+  out(record);
   return 0;
 }

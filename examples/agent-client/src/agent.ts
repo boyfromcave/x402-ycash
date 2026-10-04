@@ -3,7 +3,7 @@
 import { decodePaymentResponseHeader, wrapFetchWithPayment, x402Client } from "@x402/fetch";
 import { decodePaymentRequiredHeader } from "@x402/core/http";
 import type { SettleResponse } from "@x402/core/types";
-import { exact } from "x402-ycash-mechanism";
+import { ASSET_YED, exact } from "x402-ycash-mechanism";
 import type { AgentConfig } from "./config.js";
 import { registerClientSchemes, type ClientSchemes, type RegisterClientSchemes } from "./schemes.js";
 
@@ -28,8 +28,14 @@ export interface Agent {
 export function createAgent(config: AgentConfig, register: RegisterClientSchemes = registerClientSchemes, baseFetch: typeof fetch = fetch): Agent {
   const client = new x402Client();
   // YEC is not USD-pegged, so it is not a default asset: it is allowed explicitly with a cap in
-  // zatoshis (YED, a dollar, falls under core's USD cap). Without this the client refuses every YEC 402.
-  client.setSpendControls({ allowedAssets: [exact.yecSpendControl(config.network, BigInt(config.maxPaymentZat))] });
+  // zatoshis. Without this the client refuses every YEC 402. YED is a default asset with core's $1
+  // cap (X-F43); its entry sets the agent's own cap in cents, so a $2 route is payable when allowed.
+  client.setSpendControls({
+    allowedAssets: [
+      exact.yecSpendControl(config.network, BigInt(config.maxPaymentZat)),
+      { network: config.network, asset: ASSET_YED, maxAmountPerPayment: config.maxPaymentYedCents ?? "100" },
+    ],
+  });
   const registered = register(client, {
     network: config.network,
     node: config.node,
@@ -39,6 +45,8 @@ export function createAgent(config: AgentConfig, register: RegisterClientSchemes
     ...(config.channelDepositZat !== undefined ? { channelDepositZat: config.channelDepositZat } : {}),
     ...(config.channelMaxDepositZat !== undefined ? { channelMaxDepositZat: config.channelMaxDepositZat } : {}),
     ...(config.reservationsPath ? { reservationsPath: config.reservationsPath } : {}),
+    ...(config.yedChannelDepositCents !== undefined ? { yedChannelDepositCents: config.yedChannelDepositCents } : {}),
+    ...(config.yedChannelMaxDepositCents !== undefined ? { yedChannelMaxDepositCents: config.yedChannelMaxDepositCents } : {}),
   });
   const paidFetch = wrapFetchWithPayment(baseFetch, client);
 
