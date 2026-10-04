@@ -3,11 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { x402Facilitator } from "@x402/core/facilitator";
-import { InMemorySettlementStore, type NodeCapabilities } from "x402-ycash-mechanism";
+import { InMemoryIssuedAddressRegistry, InMemorySettlementStore, SaplingProofHandler, type NodeCapabilities } from "x402-ycash-mechanism";
 import { resolveConfig, type FacilitatorConfig } from "../src/config.js";
 import { createLogger } from "../src/logger.js";
 import { ChainMismatchError, waitForNode } from "../src/node.js";
-import { registerSchemes, type SchemeDeps } from "../src/schemes.js";
+import { facilitatorHalf, registerSchemes, type SchemeDeps } from "../src/schemes.js";
 import { startFacilitator, type RunningFacilitator } from "../src/server.js";
 import { body, FakeFacilitatorScheme } from "./fakeScheme.js";
 import { startFakeNode, type FakeNode } from "./fakeNode.js";
@@ -44,14 +44,26 @@ describe("startFacilitator", () => {
     logs.length = 0;
   });
 
-  it("starts against a node (UTF-8 credentials), registers nothing by default, and answers /supported and /healthz", async () => {
+  it("starts against a node (UTF-8 credentials), registers exact and batch-settlement, and answers /supported and /healthz", async () => {
     node = await startFakeNode();
     running = await startFacilitator(config(node), { logger });
-    const supported = await (await fetch(`${running.url}/supported`)).json();
-    expect(supported).toEqual({ kinds: [], extensions: [], signers: {} });
+    const supported = (await (await fetch(`${running.url}/supported`)).json()) as { kinds: { scheme: string; network: string; extra: Record<string, unknown> }[]; signers: unknown };
+    expect(supported.kinds.map(k => `${k.scheme}@${k.network}`)).toEqual(["exact@ycash:regtest", "batch-settlement@ycash:regtest"]);
+    // without sapling-proof configured, exact offers transparent only, at the operator's range
+    expect(supported.kinds[0]?.extra).toMatchObject({ assetTransferMethods: ["transparent"], confirmations: { minimum: 0, maximum: 20 } });
+    expect(supported.signers).toEqual({});
     const health = await (await fetch(`${running.url}/healthz`)).json();
-    expect(health).toMatchObject({ status: "ok", node: { line: "v4", chain: "regtest", yellowback: true } });
-    expect(logs.some(l => l.includes("no scheme registered"))).toBe(true);
+    expect(health).toMatchObject({ status: "ok", node: { line: "v4", chain: "regtest", yellowback: true }, kinds: ["exact@ycash:regtest", "batch-settlement@ycash:regtest"] });
+    expect(logs.some(l => l.includes("no scheme registered"))).toBe(false);
+  });
+
+  it("offers sapling-proof when a receipt key and the issued-address registry are configured", async () => {
+    node = await startFakeNode();
+    const dir = mkdtempSync(join(tmpdir(), "x402-fac-sp-"));
+    running = await startFacilitator(config(node, { X402_RECEIPT_KEY: "11".repeat(32), X402_ISSUED_REGISTRY: join(dir, "issued.json") }), { logger });
+    const supported = (await (await fetch(`${running.url}/supported`)).json()) as { kinds: { scheme: string; extra: Record<string, unknown> }[] };
+    expect(supported.kinds.find(k => k.scheme === "exact")?.extra).toMatchObject({ assetTransferMethods: ["transparent", "sapling-proof"] });
+    expect(logs.join("\n")).not.toContain("11".repeat(32)); // the receipt key never reaches a log line
   });
 
   it("refuses to start when the node's chain is not the network's", async () => {
@@ -111,17 +123,36 @@ describe("waitForNode", () => {
 });
 
 describe("registerSchemes", () => {
-  it("registers no Ycash scheme until the mechanism chunks are wired (update this test then)", () => {
+  const deps = {
+    network: "ycash:regtest",
+    rpc: {} as SchemeDeps["rpc"], // registration makes no node call
+    settlementStore: new InMemorySettlementStore(),
+    confirmations: { minimum: -1, maximum: 6 },
+    capabilities: { line: "v4", subversion: "", version: 0, yellowback: true, chain: "regtest" },
+    logger,
+  } satisfies SchemeDeps;
+
+  it("registers exact (transparent) and batch-settlement on the configured network", () => {
     const f = new x402Facilitator();
-    const deps = {
-      network: "ycash:regtest",
-      rpc: {} as SchemeDeps["rpc"], // never called by an empty registration
-      settlementStore: new InMemorySettlementStore(),
-      confirmations: { minimum: 0, maximum: 20 },
-      capabilities: { line: "v4", subversion: "", version: 0, yellowback: true, chain: "regtest" },
-      logger,
-    } satisfies SchemeDeps;
-    expect(registerSchemes(f, deps)).toEqual([]);
-    expect(f.getSupported().kinds).toEqual([]);
+    expect(registerSchemes(f, deps)).toEqual(["exact (transparent)", "batch-settlement"]);
+    const kinds = f.getSupported().kinds;
+    expect(kinds.map(k => [k.scheme, k.network])).toEqual([["exact", "ycash:regtest"], ["batch-settlement", "ycash:regtest"]]);
+    expect(kinds[0]?.extra).toMatchObject({ assets: ["YEC"], assetTransferMethods: ["transparent"], areFeesSponsored: false, confirmations: { minimum: -1, maximum: 6 } });
+    expect(kinds[1]?.extra).toEqual({ confirmations: { minimum: -1, maximum: 6 } });
+  });
+
+  it("adds sapling-proof to exact when configured, and the facilitator half refuses to issue", async () => {
+    const f = new x402Facilitator();
+    const sp = { receiptKey: "22".repeat(32), registry: new InMemoryIssuedAddressRegistry() };
+    expect(registerSchemes(f, { ...deps, saplingProof: sp })).toEqual(["exact (transparent, sapling-proof)", "batch-settlement"]);
+    expect(f.getSupported().kinds[0]?.extra).toMatchObject({ assetTransferMethods: ["transparent", "sapling-proof"] });
+    const half = facilitatorHalf(new SaplingProofHandler({ ...deps, ...sp }));
+    await expect(half.enhanceRequirements({} as never, {} as never, [])).rejects.toThrow(/merchant's server/);
+  });
+
+  it("refuses a sapling-proof handler whose node is on another chain", () => {
+    const f = new x402Facilitator();
+    const sp = { receiptKey: "22".repeat(32), registry: new InMemoryIssuedAddressRegistry() };
+    expect(() => registerSchemes(f, { ...deps, capabilities: { ...deps.capabilities, chain: "main" }, saplingProof: sp })).toThrow(/regtest/);
   });
 });
