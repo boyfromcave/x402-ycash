@@ -166,7 +166,7 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
    */
   async verify(payload: PaymentPayload, requirements: PaymentRequirements, context?: FacilitatorContext): Promise<VerifyResponse> {
     if (isShieldedMethod(requirements.extra)) {
-      if (!this.shielded) return { isValid: false, invalidReason: ERR_ASSET_TRANSFER_METHOD, invalidMessage: "sapling-proof is not configured", payer: "" };
+      if (!this.shielded) return { isValid: false, invalidReason: ERR_ASSET_TRANSFER_METHOD, invalidMessage: "no shielded method is configured", payer: "" };
       if (!this.shielded.verify) return { isValid: false, invalidReason: ERR_PAYMENT_FLOW, invalidMessage: "sapling-proof is upfront: settle, not verify", payer: "" };
       return this.shielded.verify(payload, requirements, context);
     }
@@ -191,7 +191,7 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
    */
   async settle(payload: PaymentPayload, requirements: PaymentRequirements, context?: FacilitatorContext): Promise<SettleResponse> {
     if (isShieldedMethod(requirements.extra)) {
-      if (!this.shielded) return failure(ERR_ASSET_TRANSFER_METHOD, requirements.network, "", "sapling-proof is not configured");
+      if (!this.shielded) return failure(ERR_ASSET_TRANSFER_METHOD, requirements.network, "", "no shielded method is configured");
       return this.shielded.settle(payload, requirements, context);
     }
     const network = requirements.network;

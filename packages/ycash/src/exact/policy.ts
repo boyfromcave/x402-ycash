@@ -14,7 +14,7 @@ import {
   type YcashNetwork,
 } from "../constants.js";
 import { decodeAddress } from "../tx/index.js";
-import { ATM_SAPLING_PROOF, ATM_SAPLING_RESERVED, ATM_TRANSPARENT, FLOW_AUTHORIZATION, type ConfirmationPolicy } from "./types.js";
+import { ATM_SAPLING, ATM_SAPLING_PROOF, ATM_TRANSPARENT, FLOW_AUTHORIZATION, type ConfirmationPolicy } from "./types.js";
 
 /** Dust threshold of a P2PKH/P2SH output at the default relay fee (plan S-5, X-F15). */
 export const DUST_ZAT = 54n;
@@ -52,13 +52,15 @@ export function assetTransferMethodOf(extra: Record<string, unknown> | undefined
 }
 
 /**
- * Whether a requirement selects the Sapling-proof (shielded) transfer method.
+ * Whether a requirement selects a shielded transfer method (`sapling-proof` or `sapling`), which the
+ * exact scheme routes to its shielded handler.
  *
  * @param extra - The requirement's `extra`.
- * @returns True for the shielded method.
+ * @returns True for a shielded method.
  */
 export function isShieldedMethod(extra: Record<string, unknown> | undefined): boolean {
-  return assetTransferMethodOf(extra) === ATM_SAPLING_PROOF;
+  const m = assetTransferMethodOf(extra);
+  return m === ATM_SAPLING_PROOF || m === ATM_SAPLING;
 }
 
 /**
@@ -195,7 +197,7 @@ export function checkTransparentRequirements(req: PaymentRequirements): string |
  */
 export function checkTransparentMethod(extra: Record<string, unknown> | undefined): { reason: "method" | "flow" | "fees"; message: string } | null {
   const method = assetTransferMethodOf(extra);
-  if (method === ATM_SAPLING_RESERVED) return { reason: "method", message: "assetTransferMethod sapling is reserved, not yet specified" };
+  if (method === ATM_SAPLING) return { reason: "method", message: "assetTransferMethod sapling is a shielded method (src/shielded), not transparent" };
   if (method !== ATM_TRANSPARENT) return { reason: "method", message: `unknown assetTransferMethod ${String(method)}` };
   const flow = extra?.paymentFlow;
   if (flow !== undefined && flow !== FLOW_AUTHORIZATION) return { reason: "flow", message: `paymentFlow must be absent or ${FLOW_AUTHORIZATION} for transparent` };

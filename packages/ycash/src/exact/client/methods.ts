@@ -3,8 +3,8 @@
 // that picks by `extra.assetTransferMethod`, as ExactYcashServerScheme and the facilitator route
 // to their `shielded` handler.
 import type { PaymentPayloadContext, PaymentPayloadResult, PaymentRequirements, SchemeNetworkClient } from "@x402/core/types";
-import { isShieldedMethod } from "../policy.js";
-import { SCHEME_EXACT } from "../types.js";
+import { assetTransferMethodOf, isShieldedMethod } from "../policy.js";
+import { ATM_SAPLING, SCHEME_EXACT } from "../types.js";
 import { findYcashDefaultAsset } from "./scheme.js";
 
 /** The `sapling-proof` payer: pays from a Sapling wallet and presents the txid (src/shielded ShieldedExactClient). */
@@ -57,6 +57,8 @@ export class ExactYcashMethodRouter implements SchemeNetworkClient {
    */
   createPaymentPayload(x402Version: number, requirements: PaymentRequirements, context?: PaymentPayloadContext): Promise<PaymentPayloadResult> {
     if (isShieldedMethod(requirements.extra)) {
+      // `sapling` needs a signed-but-unbroadcast Sapling transaction: the Rust light client's `build` (pending).
+      if (assetTransferMethodOf(requirements.extra) === ATM_SAPLING) return Promise.reject(new Error("this client cannot pay sapling: it needs a Sapling transaction builder"));
       if (!this.config.shielded) return Promise.reject(new Error("this client has no Sapling wallet configured for sapling-proof"));
       return this.config.shielded.createPaymentPayload(x402Version, requirements);
     }

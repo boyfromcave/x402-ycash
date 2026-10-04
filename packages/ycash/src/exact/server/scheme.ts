@@ -58,7 +58,9 @@ export class ExactYcashServerScheme implements SchemeNetworkServer {
    */
   constructor(private readonly config: ExactYcashServerConfig = {}) {
     const flows: Record<string, PaymentFlowConfig> = { [ATM_TRANSPARENT]: { supported: [FLOW_AUTHORIZATION], default: FLOW_AUTHORIZATION } };
-    if (config.shielded) flows[ATM_SAPLING_PROOF] = { supported: [FLOW_UPFRONT], default: FLOW_UPFRONT };
+    if (config.shielded) {
+      for (const [m, f] of Object.entries(config.shielded.flows ?? { [ATM_SAPLING_PROOF]: FLOW_UPFRONT })) flows[m] = { supported: [f], default: f };
+    }
     this.paymentFlows = flows;
   }
 
