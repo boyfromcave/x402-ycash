@@ -27,7 +27,7 @@ zip32 = "0.2"
 bip0039 = "0.12"
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
-tonic = { version = "0.14", default-features = false, features = ["transport", "codegen", "tls-ring", "tls-native-roots"] }
+tonic = { version = "0.14", default-features = false, features = ["transport", "codegen", "tls-ring", "tls-native-roots", "tls-webpki-roots"] }
 tonic-prost = "0.14"
 prost = "0.14"
 futures-util = "0.3"
@@ -45,6 +45,10 @@ clap = { version = "4", features = ["derive", "env"] }
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+# `router` for the unit tests' in-process fake lightwalletd (src/fake_lwd.rs); test builds only.
+tonic = { version = "0.14", default-features = false, features = ["router"] }
 
 # Mirror of ref/ycash6/Cargo.toml:122-133 so every transitive zcash_* crate resolves to the same
 # Ycash-aware source as ycashd 6.21.0 (one revision, one set of branch ids and HRPs).

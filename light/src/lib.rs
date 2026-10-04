@@ -9,7 +9,9 @@
 //! - [`wallet`]: the store, balances, build/prove/sign and broadcast.
 //!
 //! The spending key is injected by the embedding application (`wallet::Options::spending_key`,
-//! `Wallet::register_key`); the `x402-light` binary adds the JSON-RPC server and key file on top.
+//! `Wallet::register_key`), and so can the lightwalletd channel (`wallet::Options::channel`, for a
+//! host with its own TLS: a pinned certificate, webpki roots on iOS). The `x402-light` binary adds
+//! the JSON-RPC server and key file on top.
 
 pub mod keys;
 pub mod lwd;
@@ -17,6 +19,9 @@ pub mod net;
 pub mod spend;
 pub mod sync;
 pub mod wallet;
+
+#[cfg(test)]
+mod fake_lwd;
 
 pub use net::YcashNetwork;
 pub use wallet::{Options, Wallet};

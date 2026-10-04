@@ -44,6 +44,8 @@ use sapling::note_encryption::{try_sapling_compact_note_decryption, CompactOutpu
 use sapling::zip32::ExtendedSpendingKey;
 use zip32::Scope;
 
+use tonic::transport::Channel;
+
 use crate::keys;
 use crate::lwd::{self, Client};
 use crate::net::YcashNetwork;
@@ -61,17 +63,47 @@ pub struct Wallet {
     params_dir: Option<PathBuf>,
     prover: Option<LocalTxProver>,
     pub(crate) client: Client,
-    channel: tonic::transport::Channel,
+    channel: Channel,
     pub(crate) lwd_addr: String,
 }
 
 pub struct Options {
     pub data_dir: PathBuf,
+    /// The lightwalletd address (`grpc://h:p`, `grpcs://h:p`, `h:p`), dialed with `tls_roots`
+    /// when `channel` is `None`. With a channel it is only the label `status` reports.
     pub lwd: String,
     pub params: YcashNetwork,
     pub proving_params_dir: Option<PathBuf>,
     /// The Sapling extended spending key whose account this wallet holds, if already known.
     pub spending_key: Option<ExtendedSpendingKey>,
+    /// A channel built by the host (its own TLS: a pinned certificate, webpki roots, a proxy).
+    /// When set, every lightwalletd call goes over it (sync, GetTreeState, GetLightdInfo,
+    /// GetChainInfo, GetMempoolTx, SendTransaction) and `lwd` is not dialed. Timeouts are the
+    /// host's: the URL path sets 10 s connect and 600 s per request, and a long `GetBlockRange`
+    /// stream needs a request timeout at least that generous.
+    pub channel: Option<Channel>,
+    /// Root store for the URL path when it uses TLS; ignored with `channel`.
+    pub tls_roots: lwd::TlsRoots,
+}
+
+impl Options {
+    /// The URL path with the platform-default roots, no proving parameters and no key; set the
+    /// other fields with struct update syntax (`Options { channel: Some(ch), ..Options::new(..) }`).
+    pub fn new(
+        data_dir: impl Into<PathBuf>,
+        lwd_addr: impl Into<String>,
+        params: YcashNetwork,
+    ) -> Self {
+        Options {
+            data_dir: data_dir.into(),
+            lwd: lwd_addr.into(),
+            params,
+            proving_params_dir: None,
+            spending_key: None,
+            channel: None,
+            tls_roots: lwd::TlsRoots::default(),
+        }
+    }
 }
 
 /// One confirmation, the ycashd default for `z_sendmany` on both lines.
@@ -99,7 +131,10 @@ impl Wallet {
 
         let extsk = opts.spending_key;
 
-        let (client, channel) = lwd::connect(&opts.lwd).await?;
+        let (client, channel) = match opts.channel {
+            Some(channel) => (lwd::client(channel.clone()), channel),
+            None => lwd::connect(&opts.lwd, opts.tls_roots).await?,
+        };
         Ok(Wallet {
             params: opts.params,
             db,
@@ -113,6 +148,12 @@ impl Wallet {
             channel,
             lwd_addr: opts.lwd,
         })
+    }
+
+    /// The lightwalletd channel every call of this wallet uses (injected or dialed), for a host
+    /// that makes calls of its own (e.g. `GetTransaction`) over the same connection.
+    pub fn channel(&self) -> &Channel {
+        &self.channel
     }
 
     // ------------------------------------------------------------------ keys and account

@@ -14,7 +14,7 @@ use clap::{Args, Parser, Subcommand};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use x402_ycash_light::{keys, sync, Options, Wallet, YcashNetwork};
+use x402_ycash_light::{keys, lwd, sync, Options, Wallet, YcashNetwork};
 
 #[derive(Parser)]
 #[command(
@@ -41,6 +41,10 @@ struct Common {
     /// mainnet, testnet or regtest
     #[arg(long, env = "X402_LIGHT_NETWORK", default_value = "mainnet")]
     network: YcashNetwork,
+    /// TLS root store for grpcs:// and non-loopback host:port: native (the platform's) or webpki
+    /// (the Mozilla bundle; the default on iOS and Android)
+    #[arg(long, env = "X402_LIGHT_TLS_ROOTS")]
+    tls_roots: Option<lwd::TlsRoots>,
     /// Regtest activation heights, e.g. "canopy=1,nu5=none" (default: every upgrade through Canopy at 1)
     #[arg(long, env = "X402_LIGHT_UPGRADES")]
     upgrades: Option<String>,
@@ -103,6 +107,8 @@ async fn open(common: &Common) -> Result<Wallet, String> {
         params: network,
         proving_params_dir: common.params.clone(),
         spending_key,
+        channel: None,
+        tls_roots: common.tls_roots.unwrap_or_default(),
     })
     .await
     .map_err(|e| e.to_string())

@@ -41,8 +41,11 @@ x402-light serve --data ~/.x402-light --lwd 127.0.0.1:9067 --params ~/.zcash-par
 x402-light once  --data ~/.x402-light --lwd 127.0.0.1:9067 --network regtest status
 ```
 
-- `--lwd`: `grpc://h:p` (plaintext), `grpcs://h:p` (TLS, system roots), or `h:p` (TLS unless
-  loopback), as the SDK's `--lwd` (README "Light agents").
+- `--lwd`: `grpc://h:p` (plaintext), `grpcs://h:p` (TLS), or `h:p` (TLS unless loopback), as
+  the SDK's `--lwd` (README "Light agents").
+- `--tls-roots native|webpki`: the root store TLS trusts. `native` is the platform's
+  (`rustls-native-certs`), `webpki` the Mozilla bundle compiled in (`webpki-roots`). Default:
+  `webpki` on iOS and Android, `native` elsewhere. Both stores are always compiled in.
 - `--network mainnet|testnet|regtest`; `--upgrades "canopy=1,nu5=none"` sets regtest activation
   heights (default: every upgrade through Canopy at height 1, the devnet's). `sync` and `build`
   refuse to run when these disagree with the server's branch id.
@@ -54,7 +57,7 @@ x402-light once  --data ~/.x402-light --lwd 127.0.0.1:9067 --network regtest sta
   `8e48ffd23abb3a5fd9c5589204f32d9c31285a04b78096ba40a79b75677efc13` / `2f0ebbcbb9bb0bcffe95a397e7eba89c29eb4dde6191c339db88570e3f3fb0e4`).
   Only `build`/`send` need them; `serve` starts without them.
 - Environment: `X402_LIGHT_DATA`, `X402_LIGHT_LWD`, `X402_LIGHT_PARAMS`, `X402_LIGHT_NETWORK`,
-  `X402_LIGHT_UPGRADES`.
+  `X402_LIGHT_UPGRADES`, `X402_LIGHT_TLS_ROOTS`.
 
 `serve` syncs in the background every `--sync-every` seconds (15). All methods, params and error
 codes are in [`schema.json`](schema.json); `once METHOD 'PARAMS_JSON'` runs any of them:
@@ -72,6 +75,34 @@ codes are in [`schema.json`](schema.json); `once METHOD 'PARAMS_JSON'` runs any 
 
 The key file: `<data>/spending.key` (bech32, mode 0600), written by `import_key`. The data
 directory also holds `wallet.sqlite` and `cache/`.
+
+## Embedding: bring your own channel
+
+A host with its own TLS policy (YEW pins the server's certificate, and iOS has no native root
+store) builds the `tonic::transport::Channel` itself and injects it. Every lightwalletd call of the
+wallet then goes over that channel: sync (`GetBlockRange`, `GetLatestBlock`, `GetLightdInfo`),
+`GetTreeState`, `GetChainInfo`, `GetMempoolTx` and `SendTransaction`; `lwd` is not dialed and is
+only the label `status` reports. `Wallet::channel()` hands the channel back for the host's own
+calls (e.g. `GetTransaction`).
+
+```rust
+use x402_ycash_light::{Options, Wallet};
+let channel = Endpoint::from_shared("https://lwd.example:9067")?
+    .tls_config(ClientTlsConfig::new().ca_certificate(Certificate::from_pem(pin)))?
+    .timeout(Duration::from_secs(600))     // a long GetBlockRange stream runs under it
+    .connect_lazy();
+let wallet = Wallet::open(Options {
+    channel: Some(channel),
+    spending_key: Some(extsk),
+    ..Options::new(data_dir, "lwd.example:9067", network)
+}).await?;
+```
+
+The channel type is tonic 0.14's; the crate links `tls-ring`, `tls-native-roots` and
+`tls-webpki-roots`, the same features YEW's `tonic =0.14.6` enables, so one tonic is in the graph.
+Without a channel, `Options::tls_roots` (`lwd::TlsRoots::{Native, Webpki}`, default per target as
+above) picks the root store for the URL path; `lwd::endpoint(addr, roots)` returns that endpoint
+unconnected for a host that only wants to adjust it.
 
 ## How sync works, and why
 

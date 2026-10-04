@@ -80,26 +80,74 @@ pub fn endpoint_url(addr: &str) -> String {
     }
 }
 
-pub async fn connect(addr: &str) -> Result<(Client, Channel), Error> {
+/// The root store a URL-path TLS connection trusts. A host that needs anything else (a pinned
+/// certificate, a client certificate, a proxy) builds its own [`Channel`] and injects it
+/// (`wallet::Options::channel`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TlsRoots {
+    /// The platform's store (`rustls-native-certs`). It has no iOS backend: every handshake
+    /// fails there.
+    Native,
+    /// The Mozilla bundle compiled in (`webpki-roots`); works on every target.
+    Webpki,
+}
+
+impl Default for TlsRoots {
+    /// `Webpki` on iOS and Android (no usable native store from Rust), `Native` elsewhere.
+    fn default() -> Self {
+        if cfg!(any(target_os = "ios", target_os = "android")) {
+            TlsRoots::Webpki
+        } else {
+            TlsRoots::Native
+        }
+    }
+}
+
+impl std::str::FromStr for TlsRoots {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "native" => Ok(TlsRoots::Native),
+            "webpki" => Ok(TlsRoots::Webpki),
+            _ => Err(format!("{s}: expected native or webpki")),
+        }
+    }
+}
+
+/// The endpoint for an address in the SDK's forms, with TLS from `roots` when the scheme asks
+/// for it. Not connected.
+pub fn endpoint(addr: &str, roots: TlsRoots) -> Result<Endpoint, Error> {
     let url = endpoint_url(addr);
     let mut endpoint = Endpoint::from_shared(url.clone())
         .map_err(|e| Error::Address(format!("{url}: {e}")))?
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(600));
     if url.starts_with("https://") {
+        let tls = tonic::transport::ClientTlsConfig::new();
+        let tls = match roots {
+            TlsRoots::Native => tls.with_native_roots(),
+            TlsRoots::Webpki => tls.with_webpki_roots(),
+        };
         endpoint = endpoint
-            .tls_config(tonic::transport::ClientTlsConfig::new().with_native_roots())
+            .tls_config(tls)
             .map_err(|e| Error::Address(format!("tls: {e}")))?;
     }
-    let channel = endpoint
+    Ok(endpoint)
+}
+
+/// Dials `addr` (the URL path, used by the `x402-light` binary).
+pub async fn connect(addr: &str, roots: TlsRoots) -> Result<(Client, Channel), Error> {
+    let channel = endpoint(addr, roots)?
         .connect()
         .await
-        .map_err(|e| Error::Connect(url, e.to_string()))?;
+        .map_err(|e| Error::Connect(endpoint_url(addr), e.to_string()))?;
+    Ok((client(channel.clone()), channel))
+}
+
+/// The `CompactTxStreamer` client over a channel, dialed here or injected by the host.
+pub fn client(channel: Channel) -> Client {
     // Compact blocks are small; raw transactions and tree states are too. 64 MiB like lwdprobe.
-    Ok((
-        CompactTxStreamerClient::new(channel.clone()).max_decoding_message_size(64 << 20),
-        channel,
-    ))
+    CompactTxStreamerClient::new(channel).max_decoding_message_size(64 << 20)
 }
 
 pub async fn info(client: &mut Client) -> Result<LightdInfo, Error> {
