@@ -1,2 +1,5 @@
-// x402-ycash: store — see docs/plans/x402-agent-payments-plan.md §5 in the yellowback workspace.
-export {};
+// x402-ycash: store — dedup and consumption stores (plan §5.6 "Duplicate submission", §5.7).
+export * from "./settlementStore.js";
+export * from "./fileSettlementStore.js";
+export * from "./channelStore.js";
+export { JsonFile, type JsonFileOptions } from "./jsonFile.js";
