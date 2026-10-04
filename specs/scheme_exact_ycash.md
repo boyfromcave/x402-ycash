@@ -574,7 +574,10 @@ It then presents the txid. It MAY pay from a transparent source (tier P0) or a s
 3. Check that `payload.txid` is 64 lowercase hex characters (`invalid_exact_ycash_txid_malformed`).
 4. Call `z_listreceivedbyaddress(payTo, 0)` and keep the notes whose `txid` equals
    `payload.txid`. None: `invalid_exact_ycash_not_received` (still reachable: the payment may not
-   have reached the merchant's node yet; nothing is claimed).
+   have reached the merchant's node yet; nothing is claimed). Over HTTP the client presents the
+   txid as soon as its wallet has broadcast the payment, before it has crossed the network to the
+   merchant's node, so a facilitator SHOULD poll this step for a bounded time (a few seconds, well
+   inside the resource server's settle timeout) before answering `not_received`.
 5. **Memo.** At least one kept note's memo, with trailing zero bytes removed, equals the UTF-8
    bytes of `extra.memo` (`invalid_exact_ycash_memo_mismatch`).
 6. **Amount.** The sum of the kept notes' `amountZat` is ≥ `amount`
