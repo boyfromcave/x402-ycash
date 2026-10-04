@@ -119,6 +119,17 @@ verify each voucher before the handler (skipping the facilitator) and commit the
 voucher (split at vout 2, verdict `ok`, burned 0, yedIn = D), and no voucher carries less than
 $1.00 (the first one pre-pays it).
 
+Every `open` names the client's `returnAddress` (a transparent P2PKH or P2SH address for YEC, a
+P2PKH `s…` or `ye…` address for YED, never `payTo`). The server records it with the channel and
+refuses any voucher whose client output pays elsewhere. The facilitator records it for the opens it
+relays and binds it in those channels' later vouchers and claims. For a channel it never saw open,
+it takes the client script from the voucher's vout 1. The server refuses a funding transaction that
+is not yet in a block and whose non-zero `nExpiryHeight` is below tip + 3 + the policy depth.
+
+A closed channel's records are retired for `closed_retention_ms` (default 30 days) and then
+pruned. `ChannelStore.list()` prunes first, so a restarted server's `resume()` only walks the open
+channels and the retention window. An open or closing channel is never retired.
+
 ## Design notes
 
 - **Sync protocols, async node client.** Upstream's Python scheme protocols are synchronous:
@@ -143,7 +154,7 @@ $1.00 (the first one pre-pays it).
 .venv/bin/python -m pytest              # unit and vector tests (tests/unit)
 ```
 
-`tests/unit/test_*_vectors.py`, `test_channel.py`, `test_channel_yed.py` and `test_batch.py` replay
+`tests/unit/test_*_vectors.py`, `test_channel.py`, `test_channel_yed.py`, `test_batch.py` and `test_batch_return.py` replay
 `../vectors/tx`, `../vectors/yed`, `../vectors/channel`, `../vectors/yed-channel` and
 `../vectors/shielded` exactly as the TypeScript vector tests do.
 

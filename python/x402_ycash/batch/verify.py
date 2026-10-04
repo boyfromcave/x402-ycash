@@ -19,7 +19,14 @@ from ..channel import (
     yec_voucher_outputs,
 )
 from ..channel.yed import YED_TRANSFER_VOUT, yed_channel_value, yed_voucher_assignments, yed_voucher_layout
-from ..constants import ASSET_YEC, ASSET_YED, YED_MAX_OUTPUT_CENTS, YED_MIN_OUTPUT_CENTS, chain_of_network
+from ..constants import (
+    ASSET_YEC,
+    ASSET_YED,
+    TX_EXPIRING_SOON_THRESHOLD,
+    YED_MAX_OUTPUT_CENTS,
+    YED_MIN_OUTPUT_CENTS,
+    chain_of_network,
+)
 from ..node import RPC_METHOD_NOT_FOUND, RpcError, VerifyScriptsResult
 from ..tx import OutPoint, Tx, address_to_script, fee_floor, parse_tx, tx_fee, txid
 from ..yed import (
@@ -32,7 +39,8 @@ from ..yed import (
     validate_transfer_assignments,
 )
 from .errors import BatchError, BatchSettlementError
-from .types import BatchTerms
+from .return_address import return_script_of
+from .types import BatchTerms, required_depth
 
 T = TypeVar("T")
 
@@ -160,13 +168,23 @@ class VerifiedOpen:
     funding_txid: str
     deposit: int
     """D, in the asset's unit."""
+    return_script: bytes
+    """The client's output script in every voucher, from ``returnAddress``."""
     already_broadcast: bool
     """The funding output already exists (in the mempool or a block)."""
 
 
+def min_funding_expiry(tip: int, confirmations: int) -> int:
+    """The least funding ``nExpiryHeight`` a server accepts at ``tip`` (0, never, is also accepted): the
+    funding must still relay at the next block, which refuses an expiry below next + 3
+    (TX_EXPIRING_SOON_THRESHOLD; ycash-dd/src/main.cpp:742, ycash6 :799), and leave one block per
+    confirmation of the policy depth."""
+    return tip + TX_EXPIRING_SOON_THRESHOLD + required_depth(confirmations)
+
+
 async def verify_open(p: dict[str, Any], terms: BatchTerms, chain: ChainView, ctx: ChainContext) -> VerifiedOpen:
-    """Open rules 2–6, and voucher rules 4–6 for the first voucher. Read-only: nothing is relayed.
-    Rule 1 (the envelope) is the caller's."""
+    """Open rules 2–8, and voucher rules 4–6 for the first voucher (rule 9). Read-only: nothing is
+    relayed. Rule 1 (the envelope) is the caller's."""
     yed = terms.asset == ASSET_YED
     if yed:
         yed_chain(chain)
@@ -188,8 +206,10 @@ async def verify_open(p: dict[str, Any], terms: BatchTerms, chain: ChainView, ct
     if vout >= len(funding.vout) or funding.vout[vout].script_pubkey != channel_script_pubkey(rs):
         raise BatchSettlementError(BatchError.FUNDING, f"vout {vout} does not pay the channel script")
     funding_txid = txid(funding)
-    channel = Channel.from_script(OutPoint(funding_txid, vout), rs, funding.vout[vout].value, terms.close_fee,
-                                  address_to_script(terms.pay_to, terms.network))
+    pay_to_script = address_to_script(terms.pay_to, terms.network)
+    # 7. the return address
+    return_script = return_script_of(p["returnAddress"], terms.network, terms.asset, pay_to_script)
+    channel = Channel.from_script(OutPoint(funding_txid, vout), rs, funding.vout[vout].value, terms.close_fee, pay_to_script)
     # 4. the deposit: V − closeFee for YEC; for YED the cents the funding TRANSFER assigns the channel
     deposit = _yed_funding_deposit(funding, vout, channel.value, terms.close_fee) if yed else channel.yec_deposit
     if deposit <= 0:
@@ -198,6 +218,11 @@ async def verify_open(p: dict[str, Any], terms: BatchTerms, chain: ChainView, ct
         raise BatchSettlementError(BatchError.DEPOSIT_TOO_LARGE, f"D = {deposit} > {terms.max_deposit}")
     # 5–6. unspent inputs, fee floor, scripts — or the funding output already exists
     existing = await chain.get_tx_out(funding_txid, vout, True)
+    # 8. the funding expiry: until the funding is in a block, it must be able to land and reach the
+    # policy depth before it expires (an unrelayed funding then frees the client's coins by height).
+    least = min_funding_expiry(ctx.tip, terms.confirmations)
+    if (not existing or int(existing["confirmations"]) == 0) and funding.expiry_height != 0 and funding.expiry_height < least:
+        raise BatchSettlementError(BatchError.FUNDING, f"the funding expires at {funding.expiry_height}, before {least}")
     if not existing:
         values: list[int] = []
         for i in funding.vin:
@@ -216,11 +241,12 @@ async def verify_open(p: dict[str, Any], terms: BatchTerms, chain: ChainView, ct
     # broadcast, or in the mempool). Once mined, the first voucher's yedIn = D is the check.
     if yed and (not existing or int(existing["confirmations"]) == 0):
         await _check_yed_funding(chain, p["fundingTx"], vout, deposit)
-    # 7. the first voucher, rules 4–6 (charged is 0)
+    # 9. the first voucher, rules 4–6 (charged is 0), its client output paying returnAddress
     cumulative = int(p["voucher"]["cumulative"])
     check_voucher(decode_tx(p["voucher"]["tx"], BatchError.VOUCHER_SHAPE), channel, cumulative, charged=0, amount=terms.amount,
-                  deposit=deposit, branch_id=ctx.branch_id, layout=layout_for(terms.asset, deposit), floor=cumulative_floor(terms.asset))
-    return VerifiedOpen(channel, channel_id_of(channel.outpoint), funding, funding_txid, deposit, existing is not None)
+                  deposit=deposit, branch_id=ctx.branch_id, layout=layout_for(terms.asset, deposit), floor=cumulative_floor(terms.asset),
+                  return_script=return_script)
+    return VerifiedOpen(channel, channel_id_of(channel.outpoint), funding, funding_txid, deposit, return_script, existing is not None)
 
 
 def _yed_funding_deposit(funding: Tx, vout: int, value: int, close_fee: int) -> int:
@@ -255,14 +281,16 @@ async def _check_yed_funding(chain: Any, hex_tx: str, vout: int, deposit: int) -
 
 
 def check_voucher(tx: Tx, channel: Channel, cumulative: int, *, charged: int, amount: int, deposit: int, branch_id: int,
-                  layout: VoucherLayout = yec_voucher_outputs, allow_completed: bool = False, floor: int | None = None) -> None:
+                  layout: VoucherLayout = yec_voucher_outputs, allow_completed: bool = False, floor: int | None = None,
+                  return_script: bytes | None = None) -> None:
     """Voucher rules 4 (shape), 5 (charged + amount ≤ cumulative ≤ D, plan X-F16) and 6 (sigC); YED adds
-    the floor (cumulative ≥ $1.00, X-7)."""
+    the floor (cumulative ≥ $1.00, X-7). ``return_script`` is the channel's bound client script (from
+    ``returnAddress``); only a verifier that never saw the open leaves it out."""
     if cumulative > deposit:
         raise BatchSettlementError(BatchError.CUMULATIVE_EXCEEDS_DEPOSIT, f"{cumulative} > D = {deposit}")
     if floor is not None and cumulative < floor:
         raise BatchSettlementError(BatchError.YED_FLOOR, f"cumulative {cumulative} is below the $1.00 floor")
-    shape = check_voucher_shape(tx, channel, cumulative, layout, allow_completed)
+    shape = check_voucher_shape(tx, channel, cumulative, layout, allow_completed, return_script)
     if shape is not None:
         raise BatchSettlementError(BatchError.VOUCHER_SHAPE, shape)
     if cumulative < charged + amount:

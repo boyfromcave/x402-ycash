@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from ..constants import TOKEN_VALUE_ZAT
-from ..tx import Tx, TxOut
+from ..tx import Tx, TxOut, p2pkh_hash
 from ..yed import Assignment, yed_channel_split
 from ..yed.build import BuiltYedTransfer, TokenCoin, TransferRecipient, YecCoin, build_yed_transfer
 from ..yed.script import transfer_op_return_script
@@ -43,7 +43,8 @@ def yed_voucher_assignments(deposit_cents: int, cumulative: int) -> list[Assignm
 
 def yed_voucher_layout(deposit_cents: int) -> VoucherLayout:
     """The YED voucher layout of a channel holding D cents. Constant shape (three outputs whatever the
-    split), so the fee is always V − 2 × TOKEN_VALUE = closeFee."""
+    split), so the fee is always V − 2 × TOKEN_VALUE = closeFee. Refuses a client script that is
+    missing, not P2PKH or payTo's, or a cumulative that breaks the dollar floor."""
 
     def layout(channel: Channel, cumulative: int, client_script: bytes | None) -> list[TxOut]:
         if channel.value != yed_channel_value(channel.close_fee):
@@ -51,6 +52,9 @@ def yed_voucher_layout(deposit_cents: int) -> VoucherLayout:
                              f"not {channel.value}")
         if client_script is None:
             raise ValueError("a YED voucher always has a client output script")
+        # A YED holder is a key hash: there is no P2SH Yellowback address (plan Y-8).
+        if p2pkh_hash(client_script) is None:
+            raise ValueError("a YED voucher returns the client's YED to a P2PKH script")
         if client_script == channel.pay_to_script:
             raise ValueError("the client output must not pay payTo")
         return [TxOut(TOKEN_VALUE_ZAT, channel.pay_to_script), TxOut(TOKEN_VALUE_ZAT, client_script),

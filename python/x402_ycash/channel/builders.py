@@ -216,10 +216,13 @@ def parse_close_script_sig(script_sig: bytes) -> CloseScriptSig | None:
 
 
 def check_voucher_shape(tx: Tx, channel: Channel, cumulative: int, layout: VoucherLayout = yec_voucher_outputs,
-                        allow_completed: bool = False) -> str | None:
+                        allow_completed: bool = False, client_script: bytes | None = None) -> str | None:
     """Voucher rule 4: one input spending the channel outpoint with the close skeleton, nLockTime 0,
-    nExpiryHeight 0, transparent only, exactly the layout's outputs at ``cumulative``. Returns
-    inputs, script_sig, redeem_script, lock_time, expiry, shielded or outputs; None when well formed."""
+    nExpiryHeight 0, transparent only, exactly the layout's outputs at ``cumulative``. The client's
+    script is the channel's bound return script (``client_script``, from the open's returnAddress);
+    only a verifier that never saw the open (a stateless facilitator) leaves it out, and then it is
+    read from vout 1. Returns inputs, script_sig, redeem_script, lock_time, expiry, shielded or
+    outputs; None when well formed."""
     if len(tx.vin) != 1 or tx.vin[0].prevout != channel.outpoint:
         return "inputs"
     ss = parse_close_script_sig(tx.vin[0].script_sig)
@@ -234,7 +237,9 @@ def check_voucher_shape(tx: Tx, channel: Channel, cumulative: int, layout: Vouch
     if tx.has_shielded() or tx.value_balance != 0:
         return "shielded"
     try:
-        expected = layout(channel, cumulative, tx.vout[1].script_pubkey if len(tx.vout) > 1 else None)
+        if client_script is None and len(tx.vout) > 1:
+            client_script = tx.vout[1].script_pubkey
+        expected = layout(channel, cumulative, client_script)
     except ValueError:
         return "outputs"
     if [(o.value, o.script_pubkey) for o in expected] != [(o.value, o.script_pubkey) for o in tx.vout]:

@@ -26,6 +26,8 @@ class BatchError:
     YED_FLOOR = "invalid_batch_settlement_ycash_yed_floor"
     YED_VERDICT = "invalid_batch_settlement_ycash_yed_verdict"
     YED_NODE_REQUIRED = "invalid_batch_settlement_ycash_yed_node_required"
+    RETURN_ADDRESS = "invalid_batch_settlement_ycash_return_address"
+    """``returnAddress`` missing, of another network, payTo's, or not P2PKH for YED."""
     CHANNEL_BUSY = "invalid_batch_settlement_ycash_channel_busy"
     """Another voucher of this channel is being served (one in flight per channel)."""
 

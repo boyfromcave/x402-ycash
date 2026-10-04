@@ -8,6 +8,9 @@
   x402ResourceServer with the scheme's hooks), closed by Python;
 - one YED channel of 20 one-cent requests, closed by Python.
 
+Both channels check the open's ``returnAddress`` (a node 0 wallet address): the close pays the
+client's remainder there, node 0's wallet sees it, and nothing pays the channel key C.
+
     scripts/devnet.sh up dd 241      (or: up 6 243), with X402_SCRATCH set
     X402_DEVNET_JSON=$X402_SCRATCH/dd-241/devnet.json python/.venv/bin/python -m pytest python/tests/devnet/test_parity.py
 """
@@ -291,16 +294,17 @@ async def python_batch_server(node: YcashRpc, tmp_path: Path, **config: Any) -> 
     return server, scheme, closes
 
 
-async def run_channel(d: Devnet, server: Any, session: BatchSession, req: PaymentRequirements, n: int) -> str:
+async def run_channel(d: Devnet, server: Any, session: BatchSession, req: PaymentRequirements, n: int) -> tuple[str, dict[str, Any]]:
     """The open (refused below the funding depth, accepted once mined), then n − 1 vouchers, each
-    verified by the Python server's hooks before the handler and settled after it."""
+    verified by the Python server's hooks before the handler and settled after it. Returns the
+    channel id and the open payload."""
     from x402.schemas import PaymentAbortedError
 
     def wrap(payload: dict[str, Any]) -> PaymentPayload:
         return PaymentPayload(x402_version=2, accepted=req.model_copy(deep=True), payload=payload)
 
     first = wrap(session.pay(req))
-    assert first.payload["type"] == "open"
+    assert first.payload["type"] == "open" and first.payload["returnAddress"]
     with pytest.raises(PaymentAbortedError, match="funding_depth"):
         await server.verify_payment(first, req)
     await mine_with(d, txid(first.payload["fundingTx"]))
@@ -313,7 +317,45 @@ async def run_channel(d: Devnet, server: Any, session: BatchSession, req: Paymen
         s = await server.settle_payment(p, req)
         assert s.success, s
         session.apply(s)
-    return channel_id
+    return channel_id, first.payload
+
+
+def c_hash_of(open_payload: dict[str, Any]) -> bytes:
+    """The channel key C's key hash, from the open's redeem script: no output may pay it."""
+    from x402_ycash.channel import parse_channel_script
+
+    script = parse_channel_script(bytes.fromhex(open_payload["redeemScript"]))
+    assert script is not None
+    return hash160(script.client_pubkey)
+
+
+async def remainder_home(d: Devnet, open_payload: dict[str, Any], close_txid: str, want: int) -> dict[str, Any]:
+    """YEC: the close pays ``want`` zatoshis to the open's returnAddress, node 0's wallet received
+    them there, and no output pays C."""
+    from x402_ycash.tx import address_to_script, p2pkh_script, parse_tx
+
+    home = open_payload["returnAddress"]
+    tx = parse_tx(await d.stock.call("getrawtransaction", [close_txid]))
+    assert all(o.script_pubkey != p2pkh_script(c_hash_of(open_payload)) for o in tx.vout)
+    assert sum(o.value for o in tx.vout if o.script_pubkey == address_to_script(home, NETWORK)) == want
+    got = await wait_for(lambda: _received(d.wallet, home, want), timeout=30, what=f"node 0 to receive {want} at {home}")
+    return {"returnAddress": home, "remainderZat": got}
+
+
+async def yed_home(d: Devnet, open_payload: dict[str, Any], close_txid: str, cents: int) -> dict[str, Any]:
+    """YED: the open's returnAddress (yr…, node 0's yed_getnewaddress) holds the close's vout 1 with
+    the client's cents, node 0's YED wallet lists it, and nothing sits at C's Yellowback address."""
+    home = open_payload["returnAddress"]
+    assert home.startswith("yr")
+    assert await tokens_of(d, encode_address(NETWORK, "yed", c_hash_of(open_payload))) == []
+    held = await tokens_of(d, home)
+    assert [(t["txid"], t["vout"], t["cents"]) for t in held] == [(close_txid, 1, cents)]
+
+    async def listed() -> bool | None:
+        rows = await d.wallet.call("yed_listunspent")
+        return True if any((u["txid"], u["vout"], u["cents"]) == (close_txid, 1, cents) for u in rows) else None
+    await wait_for(listed, timeout=30, what=f"node 0's YED wallet to list {close_txid}:1")
+    return {"returnAddress": home, "cents": cents}
 
 
 async def test_ts_batch_client_50_yec_requests_against_python_server(devnet: Devnet, tmp_path: Path):
@@ -330,7 +372,7 @@ async def test_ts_batch_client_50_yec_requests_against_python_server(devnet: Dev
         SupportedKind(x402_version=2, scheme="batch-settlement", network=NETWORK), [])
     session = BatchSession(d.json, WALLET, 100_000)
     try:
-        channel_id = await run_channel(d, server, session, req, 50)
+        channel_id, opened = await run_channel(d, server, session, req, 50)
     finally:
         session.close()
     state = await scheme.manager.channel_state(channel_id)
@@ -341,7 +383,9 @@ async def test_ts_batch_client_50_yec_requests_against_python_server(devnet: Dev
     received = await wait_for(lambda: _received(d.stock, pay_to, 50_000), timeout=30, what="payTo to receive the close")
     out = await d.stock.get_tx_out(close_txid, 0, False)
     assert out is not None and out["value_zat"] == 50_000
-    record(line, "pyparity YEC channel", {"requests": 50, "charged": state["chargedCumulative"], "closeTxid": close_txid, "received": received})
+    home = await remainder_home(d, opened, close_txid, int(state["deposit"]) - 50_000)
+    record(line, "pyparity YEC channel", {"requests": 50, "charged": state["chargedCumulative"], "closeTxid": close_txid, "received": received,
+                                          **home})
 
 
 async def _received(node: YcashRpc, address: str, want: int) -> int | None:
@@ -366,7 +410,7 @@ async def test_ts_batch_client_yed_channel_20_one_cent_requests(devnet: Devnet, 
         SupportedKind(x402_version=2, scheme="batch-settlement", network=NETWORK), [])
     session = BatchSession(d.json, WALLET, 500)
     try:
-        channel_id = await run_channel(d, server, session, req, 20)
+        channel_id, opened = await run_channel(d, server, session, req, 20)
     finally:
         session.close()
     state = await scheme.manager.channel_state(channel_id)
@@ -378,6 +422,7 @@ async def test_ts_batch_client_yed_channel_20_one_cent_requests(devnet: Devnet, 
     assert decoded["opReturnIndex"] == 2 and decoded["assignments"] == [{"vout": 0, "cents": 100}, {"vout": 1, "cents": 400}]
     await mine_with(d, close_txid)
     assert [t["cents"] for t in await tokens_of(d, pay_to)] == [100]
+    home = await yed_home(d, opened, close_txid, 400)
     assert await supply(d) == before
     record(line, "pyparity YED channel", {"requests": 20, "charged": state["chargedCumulative"], "signed": state["signedCumulative"],
-                                          "closeTxid": close_txid, "closeAssignments": decoded["assignments"]})
+                                          "closeTxid": close_txid, "closeAssignments": decoded["assignments"], **home})
