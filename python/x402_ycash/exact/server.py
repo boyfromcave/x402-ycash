@@ -99,7 +99,9 @@ class ExactYcashServerScheme:
         # literals, not FLOW_AUTHORIZATION: PaymentFlowConfig's fields are Literal-typed
         flows: dict[str, PaymentFlowConfig] = {ATM_TRANSPARENT: self._TRANSPARENT_FLOWS}
         if shielded is not None:
-            flows[ATM_SAPLING_PROOF] = self._UPFRONT_FLOWS
+            # A handler naming its flows (a ShieldedMethodRouter) is advertised as such; otherwise sapling-proof.
+            for m, f in getattr(shielded, "flows", {ATM_SAPLING_PROOF: "upfront"}).items():
+                flows[m] = self._UPFRONT_FLOWS if f == "upfront" else self._TRANSPARENT_FLOWS
         self.payment_flows: Mapping[str, PaymentFlowConfig] = flows
 
     def register_money_parser(self, parser: MoneyParser) -> ExactYcashServerScheme:

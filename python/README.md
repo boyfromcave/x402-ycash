@@ -79,6 +79,24 @@ A YED requirement is refused against a facilitator whose `/supported` does not l
 `areFeesSponsored: false` and a confirmation policy: −1 up to the zero-confirmation cap (default
 $1.00 through the price source), else 1.
 
+## sapling
+
+```python
+from x402_ycash.shielded import SaplingHandler, SaplingProofHandler, ShieldedMethodRouter
+
+sapling = SaplingHandler("ycash:regtest", viewing_key_node_rpc, store, viewing_key="zxviewregtestsapling1…",
+                         receipt_key=receipt_priv_key, registry=registry)
+router = ShieldedMethodRouter({"sapling-proof": proof_handler, "sapling": sapling})
+facilitator = register_exact_ycash_facilitator(x402Facilitator(), rpc, "ycash:regtest", shielded=router)
+```
+
+The facilitator-submitted method: the client's unbroadcast Sapling transaction is trial-decrypted
+offline with the merchant's incoming viewing key (pure-Python Jubjub, Pedersen and BLAKE2;
+ChaCha20-Poly1305 from `cryptography`), checked against rules 1–11, then claimed, broadcast and
+observed in the viewing-key wallet. The primitives reproduce `vectors/sapling` (the Zcash test vectors
+and both node lines' wallet-built notes). `ycash:mainnet` needs `mainnet_ok=True` or
+`X402_SAPLING_MAINNET_OK=1`, as the TypeScript service does.
+
 ## sapling-proof
 
 ```python
