@@ -5,9 +5,11 @@ import { buildFundingTx, signFundingTx, type FundingInput } from "../../channel/
 import type { YcashNetwork } from "../../constants.js";
 import type { YcashRpc } from "../../node/rpc.js";
 import { yecToZat } from "../../node/amount.js";
-import { addressToScript } from "../../tx/address.js";
-import { hexToBytes } from "../../tx/bytes.js";
-import { p2pkhHash } from "../../tx/script.js";
+import { addressToScript, encodeAddress } from "../../tx/address.js";
+import { equalBytes, hexToBytes } from "../../tx/bytes.js";
+import { hash160 } from "../../tx/hash.js";
+import { pubkeyFromPriv } from "../../tx/keys.js";
+import { p2pkhHash, p2pkhScript } from "../../tx/script.js";
 import { serializeTxHex } from "../../tx/tx.js";
 
 export interface FundingRequest {
@@ -61,6 +63,45 @@ export function localKeyFunder(coins: readonly FundingInput[], privKeys: readonl
     async fund(req) {
       const tx = buildFundingTx({ inputs: coins, redeemScript: req.redeemScript, value: req.value, changeScript });
       return serializeTxHex(signFundingTx(tx, coins, privKeys, req.branchId));
+    },
+  };
+}
+
+/** Where `utxoSourceFunder` lists the key's coins (exact's RpcUtxoSource fits). */
+export interface FundingCoinSource {
+  listCoins(address: string): Promise<{ txid: string; vout: number; value: bigint; scriptPubKey: Uint8Array }[]>;
+}
+
+/**
+ * Funds from one local P2PKH key's coins as a UtxoSource lists them (largest first, until they
+ * cover V and the fee), change back to the key. The localKeyFunder for an agent that holds a WIF
+ * and reads its coins from a node or a light client. Coins it signed are kept out of the next
+ * selection, since the server, not the funder, broadcasts the funding transaction.
+ */
+export function utxoSourceFunder(privKey: Uint8Array, source: FundingCoinSource, compressed = true): ChannelFunder {
+  const pub = pubkeyFromPriv(privKey, compressed);
+  const script = p2pkhScript(hash160(pub));
+  const used = new Set<string>();
+  return {
+    async fund(req) {
+      const address = encodeAddress(req.network, "p2pkh", hash160(pub));
+      const coins = (await source.listCoins(address))
+        .filter((c) => equalBytes(c.scriptPubKey, script) && !used.has(`${c.txid}:${c.vout}`))
+        .sort((a, b) => (a.value > b.value ? -1 : a.value < b.value ? 1 : 0))
+        .map((c) => ({ outpoint: { txid: c.txid, vout: c.vout }, value: c.value, scriptPubKey: c.scriptPubKey }));
+      for (let n = 1; n <= coins.length; n++) {
+        const picked = coins.slice(0, n);
+        let hex: string;
+        try {
+          hex = await localKeyFunder(picked, picked.map(() => privKey), script).fund(req);
+        } catch (e) {
+          if (/cannot pay/.test((e as Error).message)) continue;
+          throw e;
+        }
+        for (const c of picked) used.add(`${c.outpoint.txid}:${c.outpoint.vout}`);
+        return hex;
+      }
+      throw new Error(`the coins of ${address} cannot fund ${req.value} zatoshis`);
     },
   };
 }

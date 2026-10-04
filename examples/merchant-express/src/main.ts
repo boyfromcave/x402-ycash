@@ -1,14 +1,17 @@
 // Run: FACILITATOR_URL=http://127.0.0.1:4022 MERCHANT_PAY_TO=sm… npm start -w x402-ycash-example-merchant-express
+// (the README's "Quick start on the devnet" has every variable).
 import { createMerchant } from "./app.js";
-import { loadMerchantConfig } from "./config.js";
+import { describeConfig, loadMerchantConfig } from "./config.js";
 
 const config = loadMerchantConfig();
-const { app, modes } = createMerchant(config);
-const server = app.listen(config.port, config.host, () => {
-  console.log(JSON.stringify({ msg: "merchant listening", url: `http://${config.host}:${config.port}`, network: config.network, facilitator: config.facilitatorUrl, modes }));
+const merchant = createMerchant(config);
+const server = merchant.app.listen(config.port, config.host, () => {
+  const addr = server.address();
+  const port = typeof addr === "object" && addr ? addr.port : config.port;
+  console.log(JSON.stringify({ msg: "merchant listening", url: `http://${config.host}:${port}`, modes: merchant.modes, config: describeConfig(config) }));
 });
 const stop = (): void => {
-  server.close(() => process.exit(0));
+  void merchant.close().finally(() => server.close(() => process.exit(0)));
   server.closeIdleConnections();
 };
 process.on("SIGTERM", stop);

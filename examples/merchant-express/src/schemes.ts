@@ -1,9 +1,12 @@
 // Where the Ycash server-side schemes plug into the merchant. One `server.register` call per scheme;
 // a payment mode's route is served only once its scheme is registered (app.ts).
+import type { HTTPRequestContext } from "@x402/core/server";
 import type { x402ResourceServer } from "@x402/express";
-import type { YcashNetwork, YcashRpc } from "x402-ycash-mechanism";
+import { BatchYcashServerScheme, exact, FileChannelStore, FileIssuedAddressRegistry, shielded, type YcashNetwork, type YcashRpc } from "x402-ycash-mechanism";
+import type { ChannelConfig, ShieldedConfig } from "./config.js";
+import { ShieldedRouteIssuer } from "./shielded.js";
 
-/** The three payment modes this example sells, one route each. */
+/** The three payment modes this example sells. */
 export interface PaymentModes {
   /** `exact`, `transparent` YEC: pay-per-request, facilitator-submitted (plan X1). */
   exact: boolean;
@@ -15,29 +18,73 @@ export interface PaymentModes {
 
 export interface ServerSchemeDeps {
   network: YcashNetwork;
-  /** The merchant's own node wallet; only the shielded mode needs it (fresh diversified addresses). */
+  /** The merchant's own node: the channel server's chain view and the shielded wallet. */
   wallet?: YcashRpc;
+  /** exact YEC payments up to this many zatoshis default to policy −1. */
+  zeroConfCapZat?: bigint;
+  channel?: ChannelConfig;
+  shielded?: ShieldedConfig & { amount: string; maxTimeoutSeconds: number };
+  log?: (msg: string, fields?: Record<string, unknown>) => void;
 }
 
-export type RegisterServerSchemes = (server: x402ResourceServer, deps: ServerSchemeDeps) => PaymentModes;
+export interface ServerSchemes {
+  modes: PaymentModes;
+  /** The shielded route's dynamic payTo (a fresh diversified address per request). */
+  shieldedPayTo?: (context: HTTPRequestContext) => Promise<string>;
+  /** Stops background work (the channel close watcher). */
+  close?: () => Promise<void>;
+}
+
+export type RegisterServerSchemes = (server: x402ResourceServer, deps: ServerSchemeDeps) => ServerSchemes;
 
 export const registerServerSchemes: RegisterServerSchemes = (server, deps) => {
   const modes: PaymentModes = { exact: false, channel: false, shielded: false };
-  void server;
-  void deps;
+  const out: ServerSchemes = { modes };
 
-  // ── SLOT 1: exact, transparent YEC ────────────────────────────────────────────────────────────
-  //   server.register(deps.network, new ExactYcashScheme());   // x402-ycash-mechanism exact/server
-  //   modes.exact = true;
+  // exact: transparent YEC always; sapling-proof when the merchant's wallet issues addresses.
+  let issuer: ShieldedRouteIssuer | undefined;
+  if (deps.shielded && deps.wallet) {
+    const server = new shielded.ShieldedExactServer({
+      rpc: deps.wallet,
+      registry: new FileIssuedAddressRegistry(deps.shielded.registryPath),
+      defaultConfirmations: deps.shielded.confirmations,
+      ...(deps.shielded.baseAddress ? { baseAddress: deps.shielded.baseAddress } : {}),
+    });
+    issuer = new ShieldedRouteIssuer(server, { network: deps.network, amount: deps.shielded.amount, maxTimeoutSeconds: deps.shielded.maxTimeoutSeconds, confirmations: deps.shielded.confirmations });
+    out.shieldedPayTo = issuer.payTo;
+    modes.shielded = true;
+  }
+  server.register(
+    deps.network,
+    new exact.ExactYcashServerScheme({
+      ...(deps.zeroConfCapZat !== undefined ? { zeroConfCapZat: deps.zeroConfCapZat } : {}),
+      ...(issuer ? { shielded: issuer } : {}),
+    }),
+  );
+  modes.exact = true;
 
-  // ── SLOT 2: batch-settlement (YEC channel) ────────────────────────────────────────────────────
-  //   server.register(deps.network, new BatchSettlementYcashScheme({ channelStore }));
-  //   modes.channel = true;
+  // batch-settlement: the server holds S and the channel state, verifies each voucher before the
+  // handler, and closes on idle, margin, exhaustion or the client's close.
+  if (deps.channel && deps.wallet) {
+    const c = deps.channel;
+    const scheme = new BatchYcashServerScheme({
+      chain: deps.wallet,
+      serverPrivKey: c.serverPrivKey,
+      store: new FileChannelStore(c.storePath),
+      maxDeposit: c.maxDeposit,
+      confirmations: c.confirmations,
+      fundingWaitMs: c.fundingWaitMs,
+      ...(c.minLockBlocks !== undefined ? { minLockBlocks: c.minLockBlocks } : {}),
+      ...(c.closeMarginBlocks !== undefined ? { closeMarginBlocks: c.closeMarginBlocks } : {}),
+      ...(c.idleMs !== undefined ? { idleMs: c.idleMs } : {}),
+      onClose: (e) => deps.log?.("channel closed", { channelId: e.channelId, reason: e.reason, txid: e.txid, cumulative: e.cumulative.toString() }),
+    });
+    server.register(deps.network, scheme);
+    const watcher = scheme.manager.watcher({ pollMs: c.watcherPollMs, warn: (m) => deps.log?.("channel watcher", { warning: m }) });
+    watcher.start();
+    out.close = () => watcher.stop();
+    modes.channel = true;
+  }
 
-  // ── SLOT 3: exact, sapling-proof YEC ──────────────────────────────────────────────────────────
-  // The same exact server scheme serves this transfer method; it needs the merchant's wallet to
-  // issue a fresh diversified address per request (YcashRpc.zGetNewDiversifiedAddress, X-F11).
-  //   if (deps.wallet) modes.shielded = true;   // once SLOT 1 is registered with a payTo source
-
-  return modes;
+  return out;
 };

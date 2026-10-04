@@ -6,11 +6,11 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { x402Facilitator } from "@x402/core/facilitator";
 import { decodePaymentRequiredHeader } from "@x402/core/http";
-import { tx, type NodeCapabilities } from "x402-ycash-mechanism";
+import { tx, YcashRpc, type NodeCapabilities } from "x402-ycash-mechanism";
 import { createApp as createFacilitatorApp, silentLogger } from "x402-ycash-facilitator";
 import { createAgent } from "../../agent-client/src/agent.js";
 import { createMerchant, PAID_ROUTES } from "../src/app.js";
-import { loadMerchantConfig } from "../src/config.js";
+import { describeConfig, loadMerchantConfig } from "../src/config.js";
 import { FAKE_TXID, FakeExactClient, FakeExactFacilitator, FakeExactServer } from "./fakeExact.js";
 
 const NETWORK = "ycash:regtest" as const;
@@ -38,7 +38,7 @@ describe("agent → merchant → facilitator", () => {
     const merchant = createMerchant(config, {
       register: (server, deps) => {
         server.register(deps.network, new FakeExactServer());
-        return { exact: true, channel: false, shielded: false };
+        return { modes: { exact: true, channel: false, shielded: false } };
       },
     });
     shop = await listen(merchant.app);
@@ -66,10 +66,10 @@ describe("agent → merchant → facilitator", () => {
 
   it("pays automatically: verify, handler, settle, PAYMENT-RESPONSE", async () => {
     const agent = createAgent(
-      { url: `${shop.url}/exact/quote`, requests: 1, network: NETWORK, signer: { kind: "wif", privKey: new Uint8Array(32).fill(1), address: "smAgent" }, maxPaymentZat: "1000000" },
+      { url: `${shop.url}/exact/quote`, requests: 1, network: NETWORK, node: new YcashRpc({ url: "http://127.0.0.1:1", user: "u", password: "p" }), signer: { kind: "node" }, maxPaymentZat: "1000000" },
       (client, deps) => {
         client.register(deps.network, clientScheme);
-        return ["exact"];
+        return { names: ["exact"] };
       },
     );
     const before = facScheme.calls.length;
@@ -82,20 +82,20 @@ describe("agent → merchant → facilitator", () => {
 
   it("refuses to pay above the agent's cap", async () => {
     const agent = createAgent(
-      { url: `${shop.url}/exact/quote`, requests: 1, network: NETWORK, signer: { kind: "wif", privKey: new Uint8Array(32).fill(1), address: "smAgent" }, maxPaymentZat: "1000" },
+      { url: `${shop.url}/exact/quote`, requests: 1, network: NETWORK, node: new YcashRpc({ url: "http://127.0.0.1:1", user: "u", password: "p" }), signer: { kind: "node" }, maxPaymentZat: "1000" },
       (client, deps) => {
         client.register(deps.network, new FakeExactClient());
-        return ["exact"];
+        return { names: ["exact"] };
       },
     );
     await expect(agent.call()).rejects.toThrow(/spendControls|maxAmountPerPayment|exceeds/i);
   });
 
-  it("serves a 501, never the content, on a mode whose scheme is not wired, in any path spelling", async () => {
+  it("serves a 501, never the content, on a mode that is not configured, in any path spelling", async () => {
     for (const path of ["/channel/search", "/CHANNEL/search", "/channel/search/", "/shielded/report"]) {
       const res = await fetch(`${shop.url}${path}`);
       expect(res.status, path).toBe(501);
-      expect(await res.json()).toMatchObject({ error: "payment mode not wired yet" });
+      expect(await res.json()).toMatchObject({ error: "payment mode not configured" });
     }
   });
 
@@ -103,20 +103,23 @@ describe("agent → merchant → facilitator", () => {
     const res = await fetch(shop.url);
     expect(await res.json()).toEqual({
       network: NETWORK,
-      routes: { [PAID_ROUTES.exact]: "paid", [PAID_ROUTES.channel]: "not wired", [PAID_ROUTES.shielded]: "not wired" },
+      routes: { [PAID_ROUTES.exact]: "paid", [PAID_ROUTES.ticker]: "paid", [PAID_ROUTES.channel]: "not wired", [PAID_ROUTES.shielded]: "not wired" },
     });
   });
 });
 
-describe("merchant with nothing wired (today's default)", () => {
-  it("starts and refuses every paid route with 501", async () => {
+describe("merchant with the production schemes and no node", () => {
+  it("sells exact YEC (both routes) and answers 501 on the channel and shielded routes", async () => {
     const config = loadMerchantConfig({ X402_NETWORK: NETWORK, MERCHANT_PAY_TO: PAY_TO, FACILITATOR_URL: "http://127.0.0.1:9" });
     const merchant = createMerchant(config);
-    expect(merchant.modes).toEqual({ exact: false, channel: false, shielded: false });
+    expect(merchant.modes).toEqual({ exact: true, channel: false, shielded: false });
     const shopNow = await listen(merchant.app);
     try {
-      expect((await fetch(`${shopNow.url}/exact/quote`)).status).toBe(501);
+      expect((await fetch(`${shopNow.url}/channel/search`)).status).toBe(501);
+      expect((await fetch(`${shopNow.url}/shielded/report`)).status).toBe(501);
+      expect(await (await fetch(shopNow.url)).json()).toMatchObject({ routes: { [PAID_ROUTES.exact]: "paid", [PAID_ROUTES.ticker]: "paid", [PAID_ROUTES.channel]: "not wired" } });
     } finally {
+      await merchant.close();
       await new Promise<void>(r => shopNow.server.close(() => r()));
     }
   });
@@ -133,5 +136,25 @@ describe("loadMerchantConfig", () => {
     expect(() => loadMerchantConfig({ X402_NETWORK: NETWORK, MERCHANT_PAY_TO: yed })).toThrow(/YED/);
     expect(() => loadMerchantConfig({ X402_NETWORK: NETWORK, MERCHANT_PAY_TO: PAY_TO, PRICE_EXACT_ZAT: "0.5" })).toThrow(/zatoshis/);
     expect(() => loadMerchantConfig({ X402_NETWORK: NETWORK })).toThrow(/MERCHANT_PAY_TO/);
+  });
+  const base = { X402_NETWORK: NETWORK, MERCHANT_PAY_TO: PAY_TO };
+  const node = { MERCHANT_RPC_URL: "http://127.0.0.1:1", MERCHANT_RPC_USER: "u", MERCHANT_RPC_PASSWORD: "p" };
+  it("turns the channel route on with a server key and a node, with defaults for the terms", () => {
+    const c = loadMerchantConfig({ ...base, ...node, MERCHANT_CHANNEL_KEY: "5a".repeat(32), MERCHANT_MIN_LOCK_BLOCKS: "40", MERCHANT_CHANNEL_CONFIRMATIONS: "-1" });
+    expect(c.channel).toMatchObject({ maxDeposit: 100_000_000n, storePath: "merchant-channels.json", minLockBlocks: 40, confirmations: -1, fundingWaitMs: 60_000 });
+    expect(() => loadMerchantConfig({ ...base, MERCHANT_CHANNEL_KEY: "5a".repeat(32) })).toThrow(/needs the merchant's node/);
+    expect(() => loadMerchantConfig({ ...base, ...node, MERCHANT_CHANNEL_KEY: "00".repeat(32) })).toThrow(/private key/);
+    expect(() => loadMerchantConfig({ ...base, ...node, MERCHANT_CHANNEL_KEY: "5a".repeat(32), MERCHANT_CHANNEL_CONFIRMATIONS: "21" })).toThrow(/-1..20/);
+  });
+  it("turns the shielded route on with the registry and a wallet; never shows the channel key", () => {
+    const c = loadMerchantConfig({ ...base, ...node, MERCHANT_ISSUED_REGISTRY: "/r.json", MERCHANT_CHANNEL_KEY: "5a".repeat(32) });
+    expect(c.shielded).toEqual({ registryPath: "/r.json", confirmations: 1 });
+    expect(() => loadMerchantConfig({ ...base, ...node, MERCHANT_ISSUED_REGISTRY: "/r.json", MERCHANT_SAPLING_BASE_ADDRESS: "ys1abc" })).toThrow(/regtest Sapling/);
+    expect(() => loadMerchantConfig({ ...base, MERCHANT_ISSUED_REGISTRY: "/r.json" })).toThrow(/wallet node/);
+    expect(JSON.stringify(describeConfig(c))).not.toContain("5a".repeat(32));
+  });
+  it("defaults the zero-confirmation cap to the ticker price", () => {
+    expect(loadMerchantConfig({ ...base, PRICE_TICKER_ZAT: "20000" }).zeroConfCapZat).toBe(20_000n);
+    expect(loadMerchantConfig({ ...base, MERCHANT_ZERO_CONF_CAP_ZAT: "5" }).zeroConfCapZat).toBe(5n);
   });
 });

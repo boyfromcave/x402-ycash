@@ -2,6 +2,7 @@
 # Run a Yellowback regtest devnet of either node line for the x402 devnet suite.
 #
 #   scripts/devnet.sh {up|down|status} {dd|6} <seed>
+#   scripts/devnet.sh cli {dd|6} <seed> [--node N] -- <rpc> [args…]   (e.g. -- getnewaddress)
 #
 # dd = the v4.5.0 line (ycash-dd, BITCOIND), 6 = the 6.21.0 line (ycash6, ZCASHD). The devnet is the
 # light five-node form (`up --no-attest --lean --no-viz`): node 0 funded wallet with -yellowback,
@@ -12,10 +13,11 @@
 # (default: $YELLOWBACK_WORKSPACE/wt/scratch/x402), PYTHON (default: the workspace .venv).
 set -euo pipefail
 
-usage() { echo "usage: $0 {up|down|status} {dd|6} <seed>" >&2; exit 2; }
-[ $# -eq 3 ] || usage
+usage() { echo "usage: $0 {up|down|status} {dd|6} <seed>  |  $0 cli {dd|6} <seed> [--node N] -- <rpc> [args…]" >&2; exit 2; }
+[ $# -ge 3 ] || usage
 action=$1 line=$2 seed=$3
-case $action in up|down|status) ;; *) usage ;; esac
+shift 3
+case $action in up|down|status) [ $# -eq 0 ] || usage ;; cli) ;; *) usage ;; esac
 [[ $seed =~ ^[0-9]+$ ]] || usage
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -48,4 +50,5 @@ case $action in
     ;;
   down)   [ -f "$dir/devnet.json" ] && "$python" "$cli" down || echo "no devnet in $dir" ;;
   status) [ -f "$dir/devnet.json" ] && "$python" "$cli" status || { echo "no devnet in $dir"; exit 1; } ;;
+  cli)    [ -f "$dir/devnet.json" ] || { echo "no devnet in $dir" >&2; exit 1; }; "$python" "$cli" cli "$@" ;;
 esac

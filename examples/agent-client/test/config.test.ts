@@ -7,9 +7,11 @@ const priv = new Uint8Array(32).fill(3);
 const wifRegtest = tx.encodeWif(priv, "ycash:regtest");
 const wifMainnet = tx.encodeWif(priv, "ycash:mainnet");
 
+const node = { AGENT_RPC_URL: "http://127.0.0.1:18232", AGENT_RPC_USER: "u", AGENT_RPC_PASSWORD: "p" };
+
 describe("loadAgentConfig", () => {
   it("builds a WIF signer and derives its sm… address on regtest", () => {
-    const c = loadAgentConfig({ AGENT_WIF: wifRegtest });
+    const c = loadAgentConfig({ ...node, AGENT_WIF: wifRegtest });
     expect(c).toMatchObject({ url: "http://127.0.0.1:4021/exact/quote", requests: 1, network: "ycash:regtest", maxPaymentZat: "1000000" });
     expect(c.signer.kind).toBe("wif");
     if (c.signer.kind === "wif") {
@@ -19,25 +21,43 @@ describe("loadAgentConfig", () => {
   });
 
   it("refuses a mainnet WIF on regtest", () => {
-    expect(() => loadAgentConfig({ AGENT_WIF: wifMainnet })).toThrow(/not for ycash:regtest/);
+    expect(() => loadAgentConfig({ ...node, AGENT_WIF: wifMainnet })).toThrow(/not for ycash:regtest/);
   });
 
   it("builds a node-wallet signer from RPC settings", () => {
-    const c = loadAgentConfig({ AGENT_SIGNER: "node", AGENT_RPC_URL: "http://127.0.0.1:18232", AGENT_RPC_USER: "u", AGENT_RPC_PASSWORD: "p" });
+    const c = loadAgentConfig({ AGENT_SIGNER: "node", ...node });
     expect(c.signer.kind).toBe("node");
+    expect(c.node.url).toBe("http://127.0.0.1:18232/");
+  });
+
+  it("takes the sapling-proof source, the channel store and the deposit", () => {
+    const c = loadAgentConfig({ ...node, AGENT_SHIELDED_FROM: "yregtestsapling1x", AGENT_CHANNEL_STORE: "/c.json", AGENT_CHANNEL_DEPOSIT_ZAT: "200000" });
+    expect(c).toMatchObject({ shieldedFrom: "yregtestsapling1x", channelStorePath: "/c.json", channelDepositZat: 200_000n });
+    expect(() => loadAgentConfig({ ...node, AGENT_CHANNEL_DEPOSIT_ZAT: "-1" })).toThrow(/DEPOSIT/);
   });
 
   it("requires a signer and sane numbers", () => {
-    expect(() => loadAgentConfig({})).toThrow(/AGENT_SIGNER=node needs/);
-    expect(() => loadAgentConfig({ AGENT_SIGNER: "hsm" })).toThrow(/"wif" or "node"/);
-    expect(() => loadAgentConfig({ AGENT_WIF: wifRegtest, REQUESTS: "0" })).toThrow(/REQUESTS/);
-    expect(() => loadAgentConfig({ AGENT_WIF: wifRegtest, MAX_PAYMENT_ZAT: "$1" })).toThrow(/MAX_PAYMENT_ZAT/);
-    expect(() => loadAgentConfig({ AGENT_WIF: wifRegtest, X402_NETWORK: "ycash:devnet" })).toThrow(/X402_NETWORK/);
+    expect(() => loadAgentConfig({})).toThrow(/needs its node/);
+    expect(() => loadAgentConfig({ AGENT_WIF: wifRegtest })).toThrow(/needs its node/);
+    expect(() => loadAgentConfig({ ...node, AGENT_SIGNER: "hsm" })).toThrow(/"wif" or "node"/);
+    expect(() => loadAgentConfig({ ...node, AGENT_WIF: wifRegtest, REQUESTS: "0" })).toThrow(/REQUESTS/);
+    expect(() => loadAgentConfig({ ...node, AGENT_WIF: wifRegtest, MAX_PAYMENT_ZAT: "$1" })).toThrow(/MAX_PAYMENT_ZAT/);
+    expect(() => loadAgentConfig({ ...node, AGENT_WIF: wifRegtest, X402_NETWORK: "ycash:devnet" })).toThrow(/X402_NETWORK/);
   });
 });
 
 describe("createAgent", () => {
-  it("registers no Ycash client scheme until the mechanism chunks are wired (update this test then)", () => {
-    expect(createAgent(loadAgentConfig({ AGENT_WIF: wifRegtest })).schemes).toEqual([]);
+  it("registers exact (transparent) and batch-settlement; sapling-proof joins exact with a Sapling source", () => {
+    const a = createAgent(loadAgentConfig({ ...node, AGENT_WIF: wifRegtest }));
+    expect(a.schemes).toEqual(["exact (transparent)", "batch-settlement"]);
+    expect(a.batch).toBeDefined();
+    expect(createAgent(loadAgentConfig({ ...node, AGENT_SHIELDED_FROM: "yregtestsapling1x" })).schemes).toEqual(["exact (transparent, sapling-proof)", "batch-settlement"]);
+  });
+
+  it("allows YEC with an atomic cap (YEC is not a default asset) and refuses a 402 above it", async () => {
+    const required = { x402Version: 2, resource: { url: "http://x/r", description: "", mimeType: "" }, accepts: [{ scheme: "exact", network: "ycash:regtest", asset: "YEC", amount: "2000000", payTo: "sm", maxTimeoutSeconds: 60, extra: {} }] };
+    const res = new Response(JSON.stringify(required), { status: 402, headers: { "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(required)).toString("base64") } });
+    const a = createAgent(loadAgentConfig({ ...node, AGENT_WIF: wifRegtest, MAX_PAYMENT_ZAT: "1000000" }), undefined, async () => res.clone());
+    await expect(a.call("http://x/r")).rejects.toThrow(/maxAmountPerPayment|spendControls/);
   });
 });

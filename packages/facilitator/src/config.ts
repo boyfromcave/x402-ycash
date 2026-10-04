@@ -2,7 +2,7 @@
 // environment variables, validated once at startup. A bad value stops the service before it binds.
 import { readFileSync } from "node:fs";
 import { z } from "@x402/core/schemas";
-import { YCASH_NETWORKS, type YcashNetwork } from "x402-ycash-mechanism";
+import { shielded, YCASH_NETWORKS, type YcashNetwork } from "x402-ycash-mechanism";
 import { LOG_LEVELS, type LogLevel } from "./logger.js";
 
 /** The confirmation range this facilitator settles (plan §5.5; scheme_exact_ycash.md "Confirmation policy"). */
@@ -16,12 +16,31 @@ export type RpcSource =
   | { kind: "cookie"; url: string; cookieFile: string; timeoutMs?: number }
   | { kind: "devnet"; path: string; node: number; timeoutMs?: number };
 
+/**
+ * The self-hosted `sapling-proof` method (scheme_exact_ycash.md "Viewing-key custody"): the node is
+ * the merchant's wallet, and the registry file is the one the merchant's server issues into.
+ */
+export interface SaplingProofConfig {
+  /** The merchant's base Sapling address; default: the wallet makes one (`z_getnewaddress sapling`). */
+  baseAddress?: string;
+  /** The receipt key: 32-byte secp256k1 private key, 64 hex characters. A secret. */
+  receiptKey: string;
+  /** The issued-address registry file shared with the merchant's server. */
+  registryPath: string;
+  /** How long settle waits for a just-sent note to reach the wallet (default 10 s). */
+  noteWaitMs?: number;
+}
+
 export interface FacilitatorConfig {
   host: string;
   port: number;
   network: YcashNetwork;
   rpc: RpcSource;
   settlementStorePath: string;
+  /** The batch-settlement facilitator's channel audit file (FileChannelStore). */
+  channelStorePath: string;
+  /** Set when sapling-proof is configured (receipt key and registry path both given). */
+  saplingProof?: SaplingProofConfig;
   confirmations: ConfirmationLimits;
   /** express.json body limit, e.g. "512kb": a transparent tx of a few hundred inputs fits. */
   bodyLimit: string;
@@ -64,6 +83,11 @@ const fileSchema = z
     rpc: rpcSchema,
     devnet: devnetSchema,
     settlementStorePath: z.string().min(1),
+    channelStorePath: z.string().min(1),
+    saplingBaseAddress: z.string().min(1),
+    receiptKey: z.string().regex(/^[0-9a-fA-F]{64}$/, "must be 64 hex characters"),
+    issuedAddressRegistryPath: z.string().min(1),
+    saplingNoteWaitMs: z.number().int().min(0).max(60_000),
     confirmations: confirmationsSchema,
     bodyLimit: z.string().regex(/^\d+(b|kb|mb)$/),
     logLevel: z.enum(LOG_LEVELS as [LogLevel, ...LogLevel[]]),
@@ -87,6 +111,7 @@ export const DEFAULTS = {
   host: "127.0.0.1",
   port: 4022,
   settlementStorePath: "x402-ycash-settlements.json",
+  channelStorePath: "x402-ycash-channels.json",
   // −1 is opt-in for the operator (the spec's "MAY refuse −1 unless its operator opted in").
   confirmations: { minimum: 0, maximum: CONF_MAX },
   bodyLimit: "512kb",
@@ -152,6 +177,7 @@ export function resolveConfig(file: z.output<typeof fileSchema>, env: Env): Faci
     host: strEnv(env, "X402_HOST") ?? file.host ?? DEFAULTS.host,
     port: intEnv(env, "X402_PORT") ?? intEnv(env, "PORT") ?? file.port ?? DEFAULTS.port,
     settlementStorePath: strEnv(env, "X402_SETTLEMENT_STORE") ?? file.settlementStorePath ?? DEFAULTS.settlementStorePath,
+    channelStorePath: strEnv(env, "X402_CHANNEL_STORE") ?? file.channelStorePath ?? DEFAULTS.channelStorePath,
     bodyLimit: strEnv(env, "X402_BODY_LIMIT") ?? file.bodyLimit ?? DEFAULTS.bodyLimit,
     logLevel: strEnv(env, "X402_LOG_LEVEL") ?? file.logLevel ?? DEFAULTS.logLevel,
     shutdownTimeoutMs: intEnv(env, "X402_SHUTDOWN_TIMEOUT_MS") ?? file.shutdownTimeoutMs ?? DEFAULTS.shutdownTimeoutMs,
@@ -162,13 +188,38 @@ export function resolveConfig(file: z.output<typeof fileSchema>, env: Env): Faci
   const checked = fileSchema.safeParse(Object.fromEntries(Object.entries(merged).filter(([, v]) => v !== undefined)));
   if (!checked.success) throw new ConfigError(issues(checked.error));
 
+  const saplingProof = resolveSaplingProof(file, env, network as YcashNetwork);
   return {
     ...merged,
     logLevel: merged.logLevel as LogLevel,
     network: network as YcashNetwork,
     rpc,
     confirmations: conf.data,
+    ...(saplingProof ? { saplingProof } : {}),
   };
+}
+
+/** secp256k1's group order: a receipt key must be in [1, n − 1]. */
+const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+
+/** sapling-proof is on when a receipt key and a registry path are both given; one alone is an error. */
+function resolveSaplingProof(file: z.output<typeof fileSchema>, env: Env, network: YcashNetwork): SaplingProofConfig | undefined {
+  const receiptKey = strEnv(env, "X402_RECEIPT_KEY") ?? file.receiptKey;
+  const registryPath = strEnv(env, "X402_ISSUED_REGISTRY") ?? file.issuedAddressRegistryPath;
+  const baseAddress = strEnv(env, "X402_SAPLING_BASE_ADDRESS") ?? file.saplingBaseAddress;
+  if (!receiptKey && !registryPath && !baseAddress) return undefined;
+  if (!receiptKey || !registryPath) {
+    throw new ConfigError("sapling-proof needs both X402_RECEIPT_KEY (receiptKey) and X402_ISSUED_REGISTRY (issuedAddressRegistryPath)");
+  }
+  if (!/^[0-9a-fA-F]{64}$/.test(receiptKey)) throw new ConfigError("X402_RECEIPT_KEY must be 64 hex characters (a secp256k1 private key)");
+  const k = BigInt("0x" + receiptKey);
+  if (k === 0n || k >= SECP256K1_N) throw new ConfigError("X402_RECEIPT_KEY is not a valid secp256k1 private key");
+  // The network comes from config; a base address of another network's HRP is a wrong wallet (X-F1).
+  const hrp = shielded.SAPLING_HRP[network] + "1";
+  if (baseAddress && !baseAddress.startsWith(hrp)) throw new ConfigError(`X402_SAPLING_BASE_ADDRESS must be a ${network} Sapling address (${hrp}…)`);
+  const noteWaitMs = intEnv(env, "X402_SAPLING_NOTE_WAIT_MS") ?? file.saplingNoteWaitMs;
+  if (noteWaitMs !== undefined && (noteWaitMs < 0 || noteWaitMs > 60_000)) throw new ConfigError("X402_SAPLING_NOTE_WAIT_MS must be 0..60000");
+  return { receiptKey: receiptKey.toLowerCase(), registryPath, ...(baseAddress ? { baseAddress } : {}), ...(noteWaitMs !== undefined ? { noteWaitMs } : {}) };
 }
 
 function resolveRpc(file: z.output<typeof fileSchema>, env: Env): RpcSource {
@@ -207,6 +258,11 @@ export function redactConfig(c: FacilitatorConfig): Record<string, unknown> {
       : c.rpc.kind === "cookie"
         ? { kind: c.rpc.kind, url: c.rpc.url, cookieFile: c.rpc.cookieFile }
         : { kind: c.rpc.kind, path: c.rpc.path, node: c.rpc.node };
-  const { apiKey, ...rest } = c;
-  return { ...rest, rpc, apiKey: apiKey ? "(set)" : "(unset)" };
+  const { apiKey, saplingProof, ...rest } = c;
+  return {
+    ...rest,
+    rpc,
+    apiKey: apiKey ? "(set)" : "(unset)",
+    saplingProof: saplingProof ? { baseAddress: saplingProof.baseAddress ?? "(wallet)", registryPath: saplingProof.registryPath, noteWaitMs: saplingProof.noteWaitMs, receiptKey: "(set)" } : "(off)",
+  };
 }

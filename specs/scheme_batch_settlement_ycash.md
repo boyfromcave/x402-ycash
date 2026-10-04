@@ -71,11 +71,13 @@ Byte for byte:
 - The script is 115 bytes for a three-byte t. The funding output is the P2SH script
   `a9 14 <HASH160(redeemScript)> 87`.
 
-Example, with illustrative keys C = `02c1…c1`, S = `035e…5e` and t = 3,101,234 (`32522f`):
+Example, with t = 3,101,234 (`32522f`) and two valid compressed keys, C = `03efe7…4ba6` and
+S = `0289bb…8435` (the public keys of the private keys SHA-256("x402-ycash spec example client key C")
+and SHA-256("x402-ycash spec example server key S")):
 
 ```text
-63522102c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c121035e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e52ae670332522fb1752102c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1ac68
-HASH160 = 2a658b51612cf2df64fe5375e8253bdec61f3c64
+63522103efe7ffc36c3fed9fcd4f1b8de29a5a5a44faa7bf8418334518cf3a765df54ba6210289bb2b0ac2056bbc117fcee21dc12b8147066cea2d6ff9a1a650b8e44437843552ae670332522fb1752103efe7ffc36c3fed9fcd4f1b8de29a5a5a44faa7bf8418334518cf3a765df54ba6ac68
+HASH160 = f702ca5dbbc301abd62ca7a92a563789b9721b86
 ```
 
 ### Spends
@@ -101,6 +103,13 @@ ZIP-243 signature hash with the redeem script as the script code, the channel ou
 amount, and the consensus branch id current at signing. The node's stock signer cannot sign a
 non-template script, so the client and server SDKs compute the hash and assemble both scriptSigs
 themselves, as Ycash's own atomic-swap code does.
+
+**Vouchers are bound to the consensus branch id.** The ZIP-243 hash commits to the branch id
+current at signing, and the node verifies a spend under the branch id of the block it would
+enter. A voucher signed before a network-upgrade activation height cannot be completed and mined
+after it. A server MUST therefore close every channel before the activation height of the next
+network upgrade (it can treat that height like t for its margin), or a client MUST choose t below
+that height. The refund is signed when it is broadcast, so it is unaffected.
 
 The refund is a script branch, not a pre-signed transaction. Nothing depends on a txid before it
 is mined, so transaction malleability does not matter, and the binding needs no CSV.
@@ -156,7 +165,7 @@ sequenceDiagram
   "payTo": "s1VgKr7cDvKvW2T4Lg3xJbWhAa2UZxnZQ3m",
   "maxTimeoutSeconds": 300,
   "extra": {
-    "serverPubKey": "035e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+    "serverPubKey": "0289bb2b0ac2056bbc117fcee21dc12b8147066cea2d6ff9a1a650b8e444378435",
     "minLockBlocks": 1152,
     "closeMarginBlocks": 96,
     "maxDeposit": "100000000",
@@ -195,12 +204,12 @@ close fee.
 ```json
 {
   "x402Version": 2,
-  "accepted": { "scheme": "batch-settlement", "network": "ycash:mainnet", "asset": "YEC", "amount": "2000", "payTo": "s1VgKr7cDvKvW2T4Lg3xJbWhAa2UZxnZQ3m", "maxTimeoutSeconds": 300, "extra": { "serverPubKey": "035e…5e", "minLockBlocks": 1152, "closeMarginBlocks": 96, "maxDeposit": "100000000", "closeFee": "1500" } },
+  "accepted": { "scheme": "batch-settlement", "network": "ycash:mainnet", "asset": "YEC", "amount": "2000", "payTo": "s1VgKr7cDvKvW2T4Lg3xJbWhAa2UZxnZQ3m", "maxTimeoutSeconds": 300, "extra": { "serverPubKey": "0289bb…8435", "minLockBlocks": 1152, "closeMarginBlocks": 96, "maxDeposit": "100000000", "closeFee": "1500" } },
   "payload": {
     "type": "open",
     "fundingTx": "0400008085202f8901…",
     "vout": 0,
-    "redeemScript": "63522102c1…c1ac68",
+    "redeemScript": "63522103efe7…4ba6ac68",
     "voucher": {
       "tx": "0400008085202f89019f…",
       "cumulative": "2000"
@@ -273,6 +282,12 @@ The server (or a facilitator's `/verify`) MUST check:
 1. The envelope, as in [`exact`](./scheme_exact_ycash.md#facilitator-verification-rules-transparent) rule 1.
 2. `redeemScript` parses as exactly the channel script; its S equals `extra.serverPubKey`; C is a
    compressed key different from S; t is a height with t ≥ tip + `minLockBlocks`.
+
+   A client MUST choose t with slack, t = tip + `minLockBlocks` + a few blocks (the TypeScript
+   SDK adds 10). A stateless facilitator, or a server that has not recorded the channel yet,
+   re-checks t ≥ tip + `minLockBlocks` against its own tip on every retried `open` (for example
+   while the funding transaction waits for its depth), and a t chosen at exactly tip +
+   `minLockBlocks` fails that check as soon as one block is found.
 3. `fundingTx` decodes as in `exact` rule 3, and its output `vout` is the P2SH script of
    `redeemScript` with value V.
 4. The deposit D (V − `closeFee` for YEC; the assigned cents for YED) is at most `maxDeposit`.
@@ -304,7 +319,9 @@ rules 1 to 3 and 8 (and, for YED, the overlay checks) are applied at that point.
    ZIP-243 hash (script code the redeem script, amount V).
 7. **Complete.** With sigS added, `signrawtransaction hex [] []` returns `complete: true`.
 8. **Store.** Compare-and-set: the voucher is stored only if `cumulative` is at least the stored
-   voucher's, and only one voucher per channel is in flight at a time.
+   voucher's, and only one voucher per channel is in flight at a time: a voucher for a channel
+   whose previous voucher has not yet settled or been released is refused
+   (`invalid_batch_settlement_ycash_channel_busy`), and the client retries it.
 
 After the handler succeeds, the server adds the actual charge (≤ `amount`) to charged. If the
 handler fails, the charged total is unchanged and the client may resend the same voucher.
@@ -482,6 +499,7 @@ The core codes apply. Scheme-specific codes:
 | `invalid_batch_settlement_ycash_cumulative_mismatch` | `cumulative` is below charged + `amount` (corrective 402) |
 | `invalid_batch_settlement_ycash_cumulative_exceeds_deposit` | `cumulative` above D |
 | `invalid_batch_settlement_ycash_stale_voucher` | `cumulative` below the stored voucher's |
+| `invalid_batch_settlement_ycash_channel_busy` | another voucher of this channel is in flight (one at a time); retry |
 | `invalid_batch_settlement_ycash_voucher_signature` | sigC invalid, high-S or not `SIGHASH_ALL` |
 | `invalid_batch_settlement_ycash_script` | the completed voucher fails the node's script verifier |
 | `invalid_batch_settlement_ycash_yed_floor` | a YED voucher breaks the dollar floor or its split |
@@ -500,6 +518,9 @@ The core codes apply. Scheme-specific codes:
 - **Burned YED.** Every YED spend of the channel carries a TRANSFER that assigns all of D; the
   server's verify refuses any other verdict, and the client's refund builder never omits the
   payload.
+- **Network upgrades.** Vouchers are signed under the current consensus branch id (ZIP-243), so
+  a voucher cannot be mined after the next upgrade's activation height. Servers close every
+  channel before it, or clients choose t below it (see [Spends](#spends)).
 - **Key handling.** Channel keys are SDK keys. They are never imported into a node wallet (whose
   signer cannot spend the channel script anyway).
 

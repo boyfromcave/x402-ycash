@@ -4,3 +4,4 @@ export { RpcWalletSigner, type RpcWalletSignerOptions, type RpcWalletSignerRpc }
 export { RpcUtxoSource, type RpcUtxoSourceOptions, type UtxoSource, type UtxoSourceRpc } from "./utxoSource.js";
 export { selectCoins, draftFee, type Coin, type Selection } from "./coinSelection.js";
 export { chainStateOf, type ChainState, type PaymentOrder, type SignedPayment, type YcashClientSigner } from "./signer.js";
+export { ExactYcashMethodRouter, type ExactYcashMethodRouterConfig, type ShieldedExactPayer } from "./methods.js";

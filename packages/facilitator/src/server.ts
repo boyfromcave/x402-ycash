@@ -2,7 +2,7 @@
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { x402Facilitator } from "@x402/core/facilitator";
-import { FileSettlementStore } from "x402-ycash-mechanism";
+import { FileChannelStore, FileIssuedAddressRegistry, FileSettlementStore } from "x402-ycash-mechanism";
 import { createApp } from "./app.js";
 import { redactConfig, type FacilitatorConfig } from "./config.js";
 import { createLogger, type Logger } from "./logger.js";
@@ -36,7 +36,19 @@ export async function startFacilitator(config: FacilitatorConfig, opts: StartOpt
 
   const settlementStore = new FileSettlementStore(config.settlementStorePath);
   const facilitator = new x402Facilitator();
-  const deps: SchemeDeps = { network: config.network, rpc, settlementStore, confirmations: config.confirmations, capabilities, logger };
+  const sp = config.saplingProof;
+  const deps: SchemeDeps = {
+    network: config.network,
+    rpc,
+    settlementStore,
+    confirmations: config.confirmations,
+    capabilities,
+    logger,
+    channelStore: new FileChannelStore(config.channelStorePath),
+    ...(sp
+      ? { saplingProof: { receiptKey: sp.receiptKey, registry: new FileIssuedAddressRegistry(sp.registryPath), ...(sp.baseAddress ? { baseAddress: sp.baseAddress } : {}), ...(sp.noteWaitMs !== undefined ? { noteWaitMs: sp.noteWaitMs } : {}) } }
+      : {}),
+  };
   const registered = (opts.register ?? registerSchemes)(facilitator, deps);
   logger.info("schemes registered", { schemes: registered, kinds: facilitator.getSupported().kinds.length });
   if (registered.length === 0) logger.warn("no scheme registered: /verify and /settle answer unsupported_scheme");
