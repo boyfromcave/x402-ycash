@@ -31,10 +31,25 @@ export interface SignedPayment {
   inputs: OutPoint[];
 }
 
+/**
+ * One YED payment: a TRANSFER assigning exactly `amountCents` to `payTo` (a `ye…` address), the
+ * rest of the selected token inputs to the payer's YED change, never a burn.
+ */
+export interface YedPaymentOrder {
+  network: YcashNetwork;
+  payTo: string;
+  amountCents: number;
+  expiryHeight: number;
+  tip: number;
+  branchId: number;
+}
+
 export interface YcashClientSigner {
   chainState(): Promise<ChainState>;
   /** Selects coins, builds and signs (SIGHASH_ALL, nLockTime 0); never broadcasts. */
   signPayment(order: PaymentOrder): Promise<SignedPayment>;
+  /** The YED form (plan X3); a signer without it cannot pay YED. */
+  signYedPayment?(order: YedPaymentOrder): Promise<SignedPayment>;
 }
 
 /** `getblockchaininfo` → ChainState. */

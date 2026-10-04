@@ -2,7 +2,8 @@
 // trusts; a light-client source (lightwalletd GetAddressUtxos + GetAddressTokens) fits the same
 // interface.
 import { RPC_METHOD_NOT_FOUND, RpcError, yecToZat, type YcashRpc } from "../../node/index.js";
-import { hexToBytes } from "../../tx/index.js";
+import { addressToScript, hexToBytes } from "../../tx/index.js";
+import type { TokenCoin } from "../../yed/index.js";
 import type { Coin } from "./coinSelection.js";
 import { chainStateOf, type ChainState } from "./signer.js";
 
@@ -10,6 +11,11 @@ export interface UtxoSource {
   chainState(): Promise<ChainState>;
   /** Spendable coins paying `address`: confirmed, unspent also in the mempool, and holding no YED. */
   listCoins(address: string): Promise<Coin[]>;
+  /**
+   * The YED outputs paying `address` (its `ye…` or transparent form): token records, so confirmed
+   * by construction, and unspent also in the mempool. Optional: only a YED payer needs it.
+   */
+  listTokens?(address: string): Promise<TokenCoin[]>;
 }
 
 export type UtxoSourceRpc = Pick<YcashRpc, "getBlockchainInfo" | "listUnspent" | "getTxOut" | "capabilities" | "call">;
@@ -23,10 +29,13 @@ export interface RpcUtxoSourceOptions {
   importAddress?: boolean | "rescan";
 }
 
-/** One token record of `yed_listtokens` (plan Y-9; ycash-dd/src/rpc/yellowback.cpp:1185). */
+/** One token record of `yed_listtokens` (plan Y-9; ycash-dd/src/rpc/yellowback.cpp:1185, :1246-1254). */
 interface TokenRow {
   txid: string;
   vout: number;
+  cents: number;
+  valueZat: number;
+  address: string;
 }
 
 /**
@@ -64,6 +73,17 @@ export class RpcUtxoSource implements UtxoSource {
       });
     }
     return coins;
+  }
+
+  async listTokens(address: string): Promise<TokenCoin[]> {
+    if (!(await this.rpc.capabilities()).yellowback) throw new Error("listing YED outputs needs a Yellowback node (-experimentalfeatures -yellowback)");
+    const rows = await this.rpc.call<TokenRow[]>("yed_listtokens", [[address]]);
+    const tokens: TokenCoin[] = [];
+    for (const r of rows) {
+      if (!(await this.rpc.getTxOut(r.txid, r.vout, true))) continue; // spent in the mempool (X-F13)
+      tokens.push({ outpoint: { txid: r.txid, vout: r.vout }, cents: r.cents, value: BigInt(r.valueZat), scriptPubKey: addressToScript(r.address) });
+    }
+    return tokens;
   }
 
   private async ensureImported(address: string): Promise<void> {

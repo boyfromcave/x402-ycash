@@ -20,3 +20,6 @@ export const ERR_EXPIRY = "invalid_exact_ycash_expiry";
 export const ERR_SCRIPT = "invalid_exact_ycash_script";
 export const ERR_YED_INPUT = "invalid_exact_ycash_yed_input";
 export const ERR_YED_NODE_REQUIRED = "invalid_exact_ycash_yed_node_required";
+export const ERR_YED_PAYLOAD = "invalid_exact_ycash_yed_payload";
+export const ERR_YED_VERDICT = "invalid_exact_ycash_yed_verdict";
+export const ERR_YED_UNCONFIRMED_INPUT = "invalid_exact_ycash_yed_unconfirmed_input";

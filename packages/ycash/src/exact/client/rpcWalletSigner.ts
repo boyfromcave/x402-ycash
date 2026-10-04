@@ -1,9 +1,10 @@
 // Signer backend (b): the keys stay in a node wallet. `listunspent` + `createrawtransaction`
 // (with the expiry) + `signrawtransaction`, which both lines have (plan §5.6).
 import { RPC_METHOD_NOT_FOUND, RpcError, yecToZat, type YcashRpc } from "../../node/index.js";
-import { addressToScript, hexToBytes, txid, type OutPoint } from "../../tx/index.js";
+import { addressToScript, hexToBytes, serializeTxHex, txid, type OutPoint } from "../../tx/index.js";
+import { buildYedTransfer, selectTokenCoins, type TokenCoin } from "../../yed/index.js";
 import { selectCoins, type Coin } from "./coinSelection.js";
-import { chainStateOf, type ChainState, type PaymentOrder, type SignedPayment, type YcashClientSigner } from "./signer.js";
+import { chainStateOf, type ChainState, type PaymentOrder, type SignedPayment, type YcashClientSigner, type YedPaymentOrder } from "./signer.js";
 
 export type RpcWalletSignerRpc = Pick<
   YcashRpc,
@@ -17,10 +18,16 @@ export interface RpcWalletSignerOptions {
   changeAddress?: string;
 }
 
-/** `yed_listunspent` row (ycash-dd/src/rpc/yellowbackwallet.cpp:699). */
+/** `yed_listunspent` row (ycash-dd/src/rpc/yellowbackwallet.cpp:699-718). */
 interface YedCoinRow {
   txid: string;
   vout: number;
+  cents: number;
+  valueZat: number;
+  address: string;
+  confirmations: number;
+  spentUnconfirmed: boolean;
+  locked: boolean;
 }
 
 /**
@@ -32,6 +39,12 @@ interface YedCoinRow {
  */
 export class RpcWalletSigner implements YcashClientSigner {
   private readonly retries: number;
+  /**
+   * YED outputs in signed, not yet settled payments, until their expiry. The Yellowback wallet keeps
+   * every YED output `lockunspent`-locked against plain YEC spends (ycash-dd/src/yellowback/wallet.cpp:404-410,
+   * 450-465), so a lock cannot mark one as taken: the signer tracks its own.
+   */
+  private readonly reservedTokens = new Map<string, number>();
 
   constructor(
     private readonly rpc: RpcWalletSignerRpc,
@@ -73,6 +86,50 @@ export class RpcWalletSigner implements YcashClientSigner {
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
+  /**
+   * A YED payment from the wallet's confirmed YED outputs (`yed_listunspent`), YEC fee coins from
+   * its plain transparent coins. The SDK serialises the TRANSFER (createrawtransaction cannot write
+   * an OP_RETURN, plan R-7) and the wallet signs it (`signrawtransaction hex`).
+   */
+  async signYedPayment(order: YedPaymentOrder): Promise<SignedPayment> {
+    if (!(await this.rpc.capabilities()).yellowback) throw new Error("paying YED needs a Yellowback node wallet (-experimentalfeatures -yellowback)");
+    const payToScript = addressToScript(order.payTo, order.network);
+    const yecChange = addressToScript(this.options.changeAddress ?? (await this.rpc.call<string>("getrawchangeaddress")), order.network);
+    const yedChange = addressToScript(await this.rpc.call<string>("yed_getnewaddress"), order.network);
+    const excluded = new Set<string>();
+    for (const [k, expiry] of this.reservedTokens) if (expiry < order.tip) this.reservedTokens.delete(k);
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= this.retries; attempt++) {
+      const tokens = (await this.tokenCandidates()).filter((t) => !excluded.has(key(t.outpoint)) && !this.reservedTokens.has(key(t.outpoint)));
+      const yec = (await this.candidates()).filter((c) => c.confirmations >= 1 && !excluded.has(key(c)));
+      const sel = selectTokenCoins(tokens, order.amountCents);
+      const built = buildYedTransfer({
+        recipients: [{ scriptPubKey: payToScript, cents: order.amountCents }],
+        tokens: sel.coins,
+        yecCoins: yec.map((c) => ({ outpoint: { txid: c.txid, vout: c.vout }, value: c.value, scriptPubKey: c.scriptPubKey })),
+        yedChangeScript: yedChange,
+        yecChangeScript: yecChange,
+        expiryHeight: order.expiryHeight,
+      });
+      const inputs: OutPoint[] = built.inputs.map((c) => c.outpoint);
+      await this.lock(inputs);
+      try {
+        const signed = await this.rpc.signRawTransactionWithWallet(serializeTxHex(built.tx));
+        if (signed.complete) {
+          for (const t of sel.coins) this.reservedTokens.set(key(t.outpoint), order.expiryHeight);
+          return { hex: signed.hex, txid: txid(signed.hex), inputs };
+        }
+        for (const e of signed.errors ?? []) excluded.add(`${e.txid}:${e.vout}`);
+        lastError = new Error(`signrawtransaction incomplete: ${(signed.errors ?? []).map((e) => e.error).join("; ")}`);
+      } catch (e) {
+        lastError = e;
+      }
+      await this.unlock(inputs);
+      for (const o of inputs) if (!(await this.rpc.getTxOut(o.txid, o.vout, true))) excluded.add(key(o));
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+
   /** Gives back the coins of a payment that will never be settled (the wallet unlocks on restart too). */
   async release(inputs: readonly OutPoint[]): Promise<void> {
     await this.unlock(inputs);
@@ -96,6 +153,21 @@ export class RpcWalletSigner implements YcashClientSigner {
       });
     }
     return coins;
+  }
+
+  /**
+   * The wallet's spendable YED outputs: confirmed and not spent in the mempool. `locked` is not a
+   * filter: the Yellowback wallet locks every YED output it holds.
+   */
+  private async tokenCandidates(): Promise<TokenCoin[]> {
+    const rows = await this.rpc.call<YedCoinRow[]>("yed_listunspent");
+    const tokens: TokenCoin[] = [];
+    for (const r of rows) {
+      if (r.spentUnconfirmed || r.confirmations < 1) continue;
+      if (!(await this.rpc.getTxOut(r.txid, r.vout, true))) continue; // X-F13
+      tokens.push({ outpoint: { txid: r.txid, vout: r.vout }, cents: r.cents, value: BigInt(r.valueZat), scriptPubKey: addressToScript(r.address) });
+    }
+    return tokens;
   }
 
   private async yedOutpoints(): Promise<Set<string>> {

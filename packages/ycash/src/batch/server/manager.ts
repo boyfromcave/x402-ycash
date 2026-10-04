@@ -4,9 +4,9 @@
 // the x402 scheme (scheme.ts) and the watcher drive it.
 import type { PaymentPayload, PaymentRequirements, SettleResponse } from "@x402/core/types";
 import { channelFromScript, channelIdOf, commitmentIdOf, parseChannelId, type Channel } from "../../channel/channel.js";
-import { yecVoucherOutputs, type VoucherLayout } from "../../channel/outputs.js";
+import type { VoucherLayout } from "../../channel/outputs.js";
 import { completeVoucher } from "../../channel/voucher.js";
-import { ASSET_YEC } from "../../constants.js";
+import { ASSET_YED } from "../../constants.js";
 import { SendRawTransactionError } from "../../node/errors.js";
 import { InMemoryChannelStore, type ChannelStore } from "../../store/channelStore.js";
 import { addressToScript } from "../../tx/address.js";
@@ -15,7 +15,20 @@ import { pubkeyFromPriv } from "../../tx/keys.js";
 import { parseTx, txid as txidOf } from "../../tx/tx.js";
 import { BatchError, BatchSettlementError } from "../errors.js";
 import { isBatchPayload, parseTerms, requiredDepth, sameOffer, type BatchChannelState, type BatchClientPayload, type BatchTerms } from "../types.js";
-import { chainContext, checkCompleted, checkVoucher, decodeTx, verifyOpen, type ChainView } from "../verify.js";
+import {
+  chainContext,
+  checkCompleted,
+  checkVoucher,
+  checkYedVoucher,
+  closeCumulative,
+  cumulativeFloor,
+  decodeTx,
+  isExhausted,
+  layoutFor,
+  verifyOpen,
+  yedChain,
+  type ChainView,
+} from "../verify.js";
 import { ChannelWatcher, type WatchedChannel } from "../watcher.js";
 import { CHANNEL_OPEN, ChannelLedger, type ChannelTerms, type LedgerChannel } from "./ledger.js";
 
@@ -76,10 +89,9 @@ export class ChannelManager {
     this.fundingPollMs = cfg.fundingPollMs ?? 500;
   }
 
-  /** The voucher outputs of an asset. YED (plan X3) adds its layout here. */
-  protected layoutFor(asset: string): VoucherLayout {
-    if (asset === ASSET_YEC) return yecVoucherOutputs;
-    throw new BatchSettlementError(BatchError.YED_NODE_REQUIRED, `no channel layout for ${asset}`);
+  /** The voucher outputs of a channel of `asset` holding D (YEC, or YED with the dollar floor). */
+  protected layoutFor(asset: string, deposit: bigint): VoucherLayout {
+    return layoutFor(asset, deposit);
   }
 
   /** Channels this process opened or was told to watch. */
@@ -102,7 +114,7 @@ export class ChannelManager {
     const p = payload.payload;
     if (!isBatchPayload(p) || p.type === "claim") throw new BatchSettlementError(BatchError.PAYLOAD_TYPE, String((p as { type?: unknown }).type));
     const terms = parseTerms(requirements);
-    const layout = this.layoutFor(terms.asset);
+    if (terms.asset === ASSET_YED) yedChain(this.chain); // vouchers are checked by the overlay
     const ctx = await chainContext(this.chain, terms.network);
     switch (p.type) {
       case "open": {
@@ -111,7 +123,7 @@ export class ChannelManager {
         if (known) {
           channelId = known.terms.channelId; // a retried open: its voucher is checked as a voucher
         } else {
-          const v = await verifyOpen(p, terms, this.chain, ctx, layout);
+          const v = await verifyOpen(p, terms, this.chain, ctx);
           channelId = v.channelId;
           if (!v.alreadyBroadcast) await this.relayFunding(p.fundingTx, v.fundingTxid, p.vout);
           await this.ledger.open(this.termsOf(v.channel, channelId, p.fundingTx, terms, v.deposit));
@@ -119,12 +131,12 @@ export class ChannelManager {
         }
         this.track(channelId);
         await this.waitForDepth(channelId);
-        return this.verifyVoucher("open", channelId, p.voucher.tx, BigInt(p.voucher.cumulative), terms, ctx, layout);
+        return this.verifyVoucher("open", channelId, p.voucher.tx, BigInt(p.voucher.cumulative), terms, ctx);
       }
       case "voucher":
-        return this.verifyVoucher("voucher", p.channelId, p.tx, BigInt(p.cumulative), terms, ctx, layout);
+        return this.verifyVoucher("voucher", p.channelId, p.tx, BigInt(p.cumulative), terms, ctx);
       case "close":
-        return this.verifyVoucher("close", p.channelId, p.tx, BigInt(p.cumulative), terms, ctx, layout);
+        return this.verifyVoucher("close", p.channelId, p.tx, BigInt(p.cumulative), terms, ctx);
     }
   }
 
@@ -135,7 +147,6 @@ export class ChannelManager {
     cumulative: bigint,
     terms: BatchTerms,
     ctx: { tip: number; branchId: number },
-    layout: VoucherLayout,
   ): Promise<VerifiedVoucher> {
     // 1. known and open
     if (!parseChannelId(channelId)) throw new BatchSettlementError(BatchError.UNKNOWN_CHANNEL, channelId);
@@ -164,19 +175,23 @@ export class ChannelManager {
       }
       const tx = decodeTx(txHex, BatchError.VOUCHER_SHAPE);
       const deposit = BigInt(ch.terms.deposit);
+      const asset = ch.terms.asset;
+      const bounds = { deposit, branchId: ctx.branchId, layout: this.layoutFor(asset, deposit), floor: cumulativeFloor(asset) };
       if (kind === "close") {
-        if (cumulative !== ch.chargedCumulative) {
-          throw new BatchSettlementError(BatchError.CUMULATIVE_MISMATCH, `a close must be at the charged total ${ch.chargedCumulative}`);
-        }
-        checkVoucher(tx, channel, cumulative, { charged: ch.chargedCumulative, amount: 0n, deposit, branchId: ctx.branchId, layout });
+        // At the charged total, or the pre-paid $1.00 for YED (the dollar floor).
+        const want = closeCumulative(asset, ch.chargedCumulative);
+        if (cumulative !== want) throw new BatchSettlementError(BatchError.CUMULATIVE_MISMATCH, `a close must be at ${want}`);
+        checkVoucher(tx, channel, cumulative, { ...bounds, charged: ch.chargedCumulative, amount: 0n });
       } else {
         // 8 (early): a voucher below the stored one is stale whatever else it is
         if (cumulative < ch.signedCumulative) throw new BatchSettlementError(BatchError.STALE_VOUCHER, `${cumulative} < stored ${ch.signedCumulative}`);
         // 4–6
-        checkVoucher(tx, channel, cumulative, { charged: ch.chargedCumulative, amount: terms.amount, deposit, branchId: ctx.branchId, layout });
+        checkVoucher(tx, channel, cumulative, { ...bounds, charged: ch.chargedCumulative, amount: terms.amount });
       }
       // 7. completed with sigS, the node's script verifier accepts it
       const completedHex = await checkCompleted(this.chain, completeVoucher(tx, channel, this.serverPrivKey, ctx.branchId));
+      // YED: the overlay registers the completed voucher's split and burns nothing (yedIn = D)
+      if (asset === ASSET_YED) await checkYedVoucher(this.chain, completedHex, deposit, cumulative);
       // 8. compare-and-set store (a close is broadcast at settle, never stored)
       if (kind !== "close" && (await this.ledger.storeVoucher(channelId, cumulative, txHex)) === "stale") {
         throw new BatchSettlementError(BatchError.STALE_VOUCHER, "a higher voucher was stored concurrently");
@@ -220,8 +235,9 @@ export class ChannelManager {
       extra: { commitmentId: commitmentIdOf(v.channelId, v.cumulative), chargedAmount: actualCharge.toString(), channelState: state },
     };
     // exhausted: the deposit is fully signed, or the next voucher at the ceiling would exceed it
-    const deposit = BigInt(state.deposit);
-    if (v.cumulative >= deposit || charged + v.ceiling > deposit) {
+    // (YED: or leave the client less than $1.00)
+    const asset = (await this.ledger.get(v.channelId))?.terms.asset ?? "";
+    if (isExhausted(asset, BigInt(state.deposit), charged, v.ceiling, v.cumulative)) {
       await this.close(v.channelId, "exhausted").catch((e: unknown) => this.log(`exhausted close of ${v.channelId} failed: ${String(e)}`));
     }
     return response;
