@@ -40,4 +40,5 @@ trap down EXIT
 export X402_LIGHT_LINE=$line X402_LIGHT_SEED=$seed X402_LIGHT_LWD=127.0.0.1:$port
 export X402_LIGHT_PARAMS=${X402_LIGHT_PARAMS:-$HOME/.zcash-params}
 cd "$here"
-cargo test --release --test regtest -- --ignored --nocapture
+# One test at a time (they share node 0's wallet); X402_LIGHT_TEST=<name> runs one of them.
+cargo test --release --test regtest -- --ignored --nocapture --test-threads=1 ${X402_LIGHT_TEST:-}

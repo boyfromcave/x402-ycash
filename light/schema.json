@@ -31,7 +31,7 @@
     },
     "sync": {
       "params": { "batchSize": "uint (default 1000)" },
-      "result": { "tipHeight": "uint", "scannedHeight": "uint|null", "blocksScanned": "uint", "rangesScanned": "uint", "reorgs": "uint", "receivedNotes": "uint", "spentNotes": "uint", "millis": "uint", "branchIdChecked": "bool" }
+      "result": { "tipHeight": "uint", "scannedHeight": "uint|null", "blocksScanned": "uint", "chunksScanned": "uint", "outputsScanned": "uint", "reorgs": "uint", "birthdayRewinds": "uint (reorgs whose rewind the store refused, answered by rescanning from the birthday; README 'How sync works')", "receivedNotes": "uint", "spentNotes": "uint", "downloadMillis": "uint", "scanMillis": "uint", "millis": "uint", "branchIdChecked": "bool" }
     },
     "list_notes": {
       "params": { "minConfirmations": "uint (default 1)" },

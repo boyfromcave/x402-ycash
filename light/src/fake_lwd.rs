@@ -1,6 +1,8 @@
 //! An in-process fake lightwalletd for the unit tests: `CompactTxStreamer` and (optionally)
 //! `YellowbackStreamer.GetChainInfo` on a loopback port, recording which methods were called.
 //! The tests prove an injected channel carries every call (`wallet::Options::channel`, YEW Z-3).
+//! With a [`Chain`] it also serves a scannable chain of empty blocks that a test can fork, for the
+//! reorg tests in `src/sync.rs`.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -22,9 +24,115 @@ use tonic::codegen::BoxStream;
 pub const TIP: u64 = 120;
 pub const NEXT_BRANCH: &str = "19bd2d2f";
 
+/// The devnet's branch id (X-F9), served as the chaintip's when a [`Chain`] is set so the
+/// wallet's branch check at sync passes.
+pub const CANOPY: &str = "19bd2d2f";
+
 #[derive(Clone, Default)]
 pub struct Fake {
     pub calls: Arc<Mutex<Vec<&'static str>>>,
+    /// `GetTreeState` heights, in call order.
+    pub tree_states: Arc<Mutex<Vec<u64>>>,
+    /// When set, a scannable chain replaces the canned answers.
+    pub chain: Arc<Mutex<Option<Chain>>>,
+}
+
+/// A scannable chain whose block hashes depend on the height and on the branch a block belongs
+/// to: `fork(h, ..)` replaces every block from `h` up, the way `invalidateblock` + mining a
+/// competing branch does on a node. Blocks in `outputs` carry one Sapling output nobody can
+/// decrypt (the store checkpoints only blocks with note commitments, so they decide where a
+/// rewind may land); the others are empty. Tree states are computed from those outputs.
+#[derive(Clone, Debug, Default)]
+pub struct Chain {
+    pub tip: u64,
+    /// (first replaced height, branch number) of each fork so far, oldest first.
+    pub forks: Vec<(u64, u8)>,
+    /// Heights holding one Sapling output, on every branch.
+    pub outputs: std::collections::BTreeSet<u64>,
+}
+
+impl Chain {
+    pub fn new(tip: u64) -> Self {
+        Chain {
+            tip,
+            ..Default::default()
+        }
+    }
+
+    /// Replaces blocks `from..` with a new branch reaching `tip`.
+    pub fn fork(&mut self, from: u64, tip: u64) {
+        let branch = self.forks.len() as u8 + 1;
+        self.forks.push((from, branch));
+        self.tip = tip;
+    }
+
+    fn branch(&self, height: u64) -> u8 {
+        self.forks
+            .iter()
+            .rev()
+            .find(|(from, _)| height >= *from)
+            .map_or(0, |(_, b)| *b)
+    }
+
+    /// The block hash in internal byte order: height, then the branch.
+    pub fn hash(&self, height: u64) -> [u8; 32] {
+        let mut h = [0u8; 32];
+        h[..8].copy_from_slice(&height.to_le_bytes());
+        h[8] = self.branch(height);
+        h[31] = 0x5a;
+        h
+    }
+
+    /// The note commitment of the output at `height`: a small field element, distinct per
+    /// height and branch.
+    fn cmu(&self, height: u64) -> [u8; 32] {
+        let mut c = [0u8; 32];
+        c[..8].copy_from_slice(&height.to_le_bytes());
+        c[8] = self.branch(height);
+        c[9] = 1;
+        c
+    }
+
+    fn block(&self, height: u64) -> pb::CompactBlock {
+        let vtx = if self.outputs.contains(&height) {
+            vec![pb::CompactTx {
+                index: 1,
+                hash: self.cmu(height).to_vec(),
+                outputs: vec![pb::CompactOutput {
+                    cmu: self.cmu(height).to_vec(),
+                    epk: vec![0; 32],
+                    ciphertext: vec![0; 52],
+                }],
+                ..Default::default()
+            }]
+        } else {
+            vec![]
+        };
+        pb::CompactBlock {
+            height,
+            hash: self.hash(height).to_vec(),
+            prev_hash: if height == 0 {
+                vec![0; 32]
+            } else {
+                self.hash(height - 1).to_vec()
+            },
+            time: 1_600_000_000 + height as u32,
+            vtx,
+            ..Default::default()
+        }
+    }
+
+    /// The Sapling tree after `height`, hex-encoded as `z_gettreestate` returns it.
+    fn tree_hex(&self, height: u64) -> String {
+        let mut tree = sapling::CommitmentTree::empty();
+        for h in self.outputs.range(..=height) {
+            let node = Option::from(sapling::Node::from_bytes(self.cmu(*h))).expect("valid cmu");
+            tree.append(node).expect("tree not full");
+        }
+        let mut buf = vec![];
+        zcash_primitives::merkle_tree::write_commitment_tree(&tree, &mut buf).expect("write");
+        hex::encode(buf)
+    }
 }
 
 impl Fake {
@@ -35,6 +143,25 @@ impl Fake {
     pub fn called(&self) -> Vec<&'static str> {
         self.calls.lock().expect("calls").clone()
     }
+
+    pub fn chain(&self) -> Option<Chain> {
+        self.chain.lock().expect("chain").clone()
+    }
+
+    /// Serves `chain` from now on.
+    pub fn set_chain(&self, chain: Chain) {
+        *self.chain.lock().expect("chain") = Some(chain);
+    }
+
+    /// Applies `f` to the served chain (e.g. a fork).
+    pub fn with_chain(&self, f: impl FnOnce(&mut Chain)) {
+        f(self
+            .chain
+            .lock()
+            .expect("chain")
+            .as_mut()
+            .expect("a chain is set"));
+    }
 }
 
 #[tonic::async_trait]
@@ -44,6 +171,14 @@ impl CompactTxStreamer for Fake {
         _: Request<pb::Empty>,
     ) -> Result<Response<pb::LightdInfo>, Status> {
         self.hit("GetLightdInfo");
+        if let Some(chain) = self.chain() {
+            return Ok(Response::new(pb::LightdInfo {
+                chain_name: "regtest".into(),
+                block_height: chain.tip,
+                consensus_branch_id: CANOPY.into(),
+                ..Default::default()
+            }));
+        }
         Ok(Response::new(pb::LightdInfo {
             chain_name: "regtest".into(),
             block_height: TIP,
@@ -57,6 +192,12 @@ impl CompactTxStreamer for Fake {
         _: Request<pb::ChainSpec>,
     ) -> Result<Response<pb::BlockId>, Status> {
         self.hit("GetLatestBlock");
+        if let Some(chain) = self.chain() {
+            return Ok(Response::new(pb::BlockId {
+                height: chain.tip,
+                hash: chain.hash(chain.tip).to_vec(),
+            }));
+        }
         Ok(Response::new(pb::BlockId {
             height: TIP,
             hash: vec![0; 32],
@@ -69,6 +210,21 @@ impl CompactTxStreamer for Fake {
     ) -> Result<Response<pb::TreeState>, Status> {
         self.hit("GetTreeState");
         let height = req.into_inner().height;
+        self.tree_states.lock().expect("tree states").push(height);
+        if let Some(chain) = self.chain() {
+            if height > chain.tip {
+                return Err(Status::out_of_range("above the tip"));
+            }
+            let mut display = chain.hash(height);
+            display.reverse();
+            return Ok(Response::new(pb::TreeState {
+                network: "regtest".into(),
+                height,
+                hash: hex::encode(display),
+                tree: chain.tree_hex(height),
+                ..Default::default()
+            }));
+        }
         Ok(Response::new(pb::TreeState {
             network: "regtest".into(),
             height,
@@ -87,6 +243,12 @@ impl CompactTxStreamer for Fake {
             r.start.unwrap_or_default().height,
             r.end.unwrap_or_default().height,
         );
+        if let Some(chain) = self.chain() {
+            let blocks: Vec<_> = (start..=end.min(chain.tip))
+                .map(|h| Ok(chain.block(h)))
+                .collect();
+            return Ok(Response::new(Box::pin(futures_util::stream::iter(blocks))));
+        }
         let blocks = (start..=end).map(|height| {
             Ok(pb::CompactBlock {
                 height,
@@ -159,6 +321,19 @@ pub async fn start(yellowback: bool) -> (Fake, Channel, SocketAddr) {
     (fake, channel, addr)
 }
 
+pub(crate) fn temp_data_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "x402-light-{name}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
 mod tests {
     use super::*;
     use crate::lwd::{self, TlsRoots};
@@ -171,16 +346,7 @@ mod tests {
     const UNDIALED: &str = "grpc://127.0.0.1:1";
 
     fn data_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "x402-light-{name}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("clock")
-                .as_nanos()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir
+        temp_data_dir(name)
     }
 
     #[tokio::test]
