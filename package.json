@@ -1,0 +1,15 @@
+{
+  "name": "x402-ycash",
+  "private": true,
+  "description": "x402 (HTTP-402) agent payments on Ycash in YEC and YED",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": ["packages/*"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:devnet": "npm run test:devnet --workspaces --if-present"
+  }
+}

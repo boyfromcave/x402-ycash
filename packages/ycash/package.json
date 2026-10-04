@@ -1,0 +1,28 @@
+{
+  "name": "x402-ycash-mechanism",
+  "version": "0.0.0",
+  "description": "x402 payment mechanism for Ycash: exact (YEC, YED), batch-settlement payment channels, shielded payments",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --dir test/unit",
+    "test:devnet": "vitest run --dir test/devnet --passWithNoTests"
+  },
+  "dependencies": {
+    "@noble/hashes": "^2.0.0",
+    "@noble/secp256k1": "^3.0.0",
+    "@x402/core": "~2.28.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.2.7"
+  }
+}
