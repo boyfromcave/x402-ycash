@@ -471,7 +471,7 @@ replaced by 4Y, and 9Y by the YED form:
     `invalid_exact_ycash_yed_payload`). Every assignment is in [100, 10000000].
 
 9Y. **Overlay verdict.** `yed_validaterawtransaction(hex)` reports `valid` true, `type`
-    `"transfer"`, `verdict` `"OK"` (never `"BURNED"` or a failure verdict), `burned` 0, `yedOut`
+    `"transfer"`, `verdict` `"ok"` (lowercase, as the node reports it; never `"burned"` or a failure verdict), `burned` 0, `yedOut`
     equal to `yedIn`, and `unconfirmedInputs` empty (`invalid_exact_ycash_yed_verdict`,
     `invalid_exact_ycash_yed_unconfirmed_input`). "YED inputs must be confirmed" is a wallet
     policy in the node, not an overlay rule; this binding adopts it, because the overlay knows
