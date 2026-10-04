@@ -7,7 +7,16 @@ import math
 import re
 from typing import Any
 
-from ..constants import ASSET_YEC, BLOCK_SECONDS, DUST_ZAT, TX_EXPIRING_SOON_THRESHOLD, is_ycash_network
+from ..constants import (
+    ASSET_YEC,
+    ASSET_YED,
+    BLOCK_SECONDS,
+    DUST_ZAT,
+    TX_EXPIRING_SOON_THRESHOLD,
+    YED_MAX_OUTPUT_CENTS,
+    YED_MIN_OUTPUT_CENTS,
+    is_ycash_network,
+)
 from ..tx import decode_address
 from .constants import (
     ATM_SAPLING_PROOF,
@@ -93,6 +102,36 @@ def check_transparent_yec_requirements(network: str, asset: str, amount: Any, pa
     except ValueError as e:
         return f"invalid payTo: {e}"
     return None
+
+
+def check_transparent_yed_requirements(network: str, asset: str, amount: Any, pay_to: str,
+                                       max_timeout_seconds: Any) -> str | None:
+    """The form checks of a ``transparent`` YED requirement: ``amount`` in cents in [100, 10,000,000]
+    (XFER-1: a smaller YED output burns, ycash-dd/src/yellowback/params.cpp:18-19) and a Yellowback
+    ``payTo`` of the requirements' network. A reason, or None."""
+    if not is_ycash_network(network):
+        return f"unsupported network {network}"
+    if asset != ASSET_YED:
+        return f"asset must be {ASSET_YED}"
+    if not isinstance(amount, str) or not CANONICAL_AMOUNT.match(amount):
+        return "amount must be a positive canonical integer"
+    if not YED_MIN_OUTPUT_CENTS <= int(amount) <= YED_MAX_OUTPUT_CENTS:
+        return (f"a YED amount must be {YED_MIN_OUTPUT_CENTS}..{YED_MAX_OUTPUT_CENTS} cents ($1.00 to $100,000): "
+                "a smaller output burns")
+    if not is_int(max_timeout_seconds) or max_timeout_seconds <= 0:
+        return "maxTimeoutSeconds must be a positive integer"
+    try:
+        if decode_address(pay_to, network).kind != "yed":
+            return "a YED payTo must be a Yellowback (ye…/yt…/yr…) address"
+    except ValueError as e:
+        return f"invalid payTo: {e}"
+    return None
+
+
+def check_transparent_requirements(network: str, asset: str, amount: Any, pay_to: str, max_timeout_seconds: Any) -> str | None:
+    """The form checks of a ``transparent`` requirement of either asset."""
+    check = check_transparent_yed_requirements if asset == ASSET_YED else check_transparent_yec_requirements
+    return check(network, asset, amount, pay_to, max_timeout_seconds)
 
 
 def check_transparent_method(extra: dict[str, Any] | None) -> tuple[str, str] | None:

@@ -94,7 +94,7 @@ def test_enhance_respects_route_and_facilitator_range():
         s.enhance_payment_requirements(base("100", confirmationPolicy={"confirmations": -1}), adv, [])
     with pytest.raises(ValueError, match="does not support"):
         s.enhance_payment_requirements(base("100"), kind({"assetTransferMethods": ["sapling-proof"]}), [])
-    with pytest.raises(ValueError, match="assetTransferMethod"):
+    with pytest.raises(ValueError, match="shielded handler"):
         s.enhance_payment_requirements(base("100", assetTransferMethod="sapling-proof"), kind(), [])
 
 

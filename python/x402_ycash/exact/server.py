@@ -13,8 +13,8 @@ from x402.schemas.helpers import convert_to_token_amount, parse_money
 
 from .._sync import run_sync
 from ..constants import ASSET_YEC, ASSET_YED, DUST_ZAT, YED_MAX_OUTPUT_CENTS, YED_MIN_OUTPUT_CENTS, is_ycash_network
-from .constants import ATM_TRANSPARENT, MAX_CONFIRMATIONS, MIN_CONFIRMATIONS, SCHEME_EXACT
-from .policy import CANONICAL_AMOUNT, asset_transfer_method_of, is_int, resolve_confirmation_policy
+from .constants import ATM_SAPLING_PROOF, ATM_TRANSPARENT, MAX_CONFIRMATIONS, MIN_CONFIRMATIONS, SCHEME_EXACT
+from .policy import CANONICAL_AMOUNT, asset_transfer_method_of, is_int, is_shielded_method, resolve_confirmation_policy
 
 MoneyParser = Callable[[str, str], AssetAmount | None]
 """(decimal amount, network) -> AssetAmount, or None to defer to the next parser."""
@@ -24,6 +24,13 @@ class YecPriceSource(Protocol):
     def micro_usd_per_yec(self, network: str) -> int:
         """micro-USD per YEC (1 YEC = $50 is 50_000_000), positive."""
         ...
+
+
+class ShieldedServerHandler(Protocol):
+    """The ``sapling-proof`` server half: fills a requirement whose ``payTo`` was issued for one
+    request (x402_ycash.shielded.ShieldedRouteIssuer)."""
+
+    def enhance_requirements(self, requirements: PaymentRequirements) -> PaymentRequirements: ...
 
 
 class FixedPriceSource:
@@ -71,18 +78,29 @@ class ExactYcashServerScheme:
 
     scheme = SCHEME_EXACT
     default_asset_transfer_method = ATM_TRANSPARENT
-    payment_flows: ClassVar[Mapping[str, PaymentFlowConfig]] = {
-        # literals, not FLOW_AUTHORIZATION: PaymentFlowConfig's fields are Literal-typed
-        ATM_TRANSPARENT: {"supported": ("authorization",), "default": "authorization"},
-    }
+    _TRANSPARENT_FLOWS: ClassVar[PaymentFlowConfig] = {"supported": ("authorization",), "default": "authorization"}
+    _UPFRONT_FLOWS: ClassVar[PaymentFlowConfig] = {"supported": ("upfront",), "default": "upfront"}
 
-    def __init__(self, price_source: YecPriceSource | None = None, zero_conf_cap_zat: int | None = None) -> None:
+    def __init__(self, price_source: YecPriceSource | None = None, zero_conf_cap_zat: int | None = None, *,
+                 usd_asset: str = ASSET_YEC, shielded: ShieldedServerHandler | None = None) -> None:
         """``zero_conf_cap_zat``: a YEC payment up to this many zatoshis defaults to policy −1, larger
         ones to 1. Default: $1.00 through the price source (the spec's suggestion), or no
-        zero-confirmation default without a price source."""
+        zero-confirmation default without a price source. ``usd_asset`` is the asset a USD price
+        ("$2.50") is asked in: YEC at the price source's rate (default), or YED cents at par; a YED
+        price below $1.00 is refused either way (a YED output below $1.00 burns, plan Y-3).
+        ``shielded`` serves ``sapling-proof`` requirements."""
+        if usd_asset not in (ASSET_YEC, ASSET_YED):
+            raise ValueError(f"usd_asset must be {ASSET_YEC} or {ASSET_YED}")
         self._price_source = price_source
         self._zero_conf_cap = zero_conf_cap_zat
+        self._usd_asset = usd_asset
+        self._shielded = shielded
         self._money_parsers: list[MoneyParser] = []
+        # literals, not FLOW_AUTHORIZATION: PaymentFlowConfig's fields are Literal-typed
+        flows: dict[str, PaymentFlowConfig] = {ATM_TRANSPARENT: self._TRANSPARENT_FLOWS}
+        if shielded is not None:
+            flows[ATM_SAPLING_PROOF] = self._UPFRONT_FLOWS
+        self.payment_flows: Mapping[str, PaymentFlowConfig] = flows
 
     def register_money_parser(self, parser: MoneyParser) -> ExactYcashServerScheme:
         """Custom parsers run first, in registration order; None defers to the next."""
@@ -110,8 +128,8 @@ class ExactYcashServerScheme:
                 return _validate(r)
         if symbol == ASSET_YEC:
             return _validate(AssetAmount(amount=convert_to_token_amount(amount, 8), asset=ASSET_YEC, extra={}))
-        if symbol == ASSET_YED:
-            return _validate(AssetAmount(amount=convert_to_token_amount(amount, 2), asset=ASSET_YED, extra={}))
+        if symbol == ASSET_YED or (symbol is None and self._usd_asset == ASSET_YED):
+            return _validate(AssetAmount(amount=yed_cents(amount), asset=ASSET_YED, extra={}))
         if symbol is not None:
             raise ValueError(f"unknown asset {symbol} on {network}")
         if self._price_source is None:
@@ -128,6 +146,10 @@ class ExactYcashServerScheme:
         _ = extensions
         if not is_ycash_network(supported_kind.network):
             raise ValueError(f"unsupported network {supported_kind.network}")
+        if is_shielded_method(requirements.extra):
+            if self._shielded is None:
+                raise ValueError("sapling-proof requirements need a shielded handler")
+            return self._shielded.enhance_requirements(requirements)
         method = asset_transfer_method_of(requirements.extra)
         if method != ATM_TRANSPARENT:
             raise ValueError(f"unsupported assetTransferMethod {method}")
@@ -138,6 +160,10 @@ class ExactYcashServerScheme:
         methods = adv.get("assetTransferMethods")
         if isinstance(methods, list) and ATM_TRANSPARENT not in methods:
             raise ValueError("the facilitator does not support assetTransferMethod transparent")
+        # A facilitator lists YED only when its node runs the overlay (spec "/supported").
+        assets = adv.get("assets")
+        if requirements.asset == ASSET_YED and isinstance(assets, list) and ASSET_YED not in assets:
+            raise ValueError("the facilitator does not settle YED (it needs a Yellowback node)")
         policy = resolve_confirmation_policy(requirements.extra, max(lo, self._default_confirmations(requirements)))
         if policy is None:
             raise ValueError("invalid confirmationPolicy")
@@ -160,6 +186,14 @@ class ExactYcashServerScheme:
         return -1 if cap is not None and int(req.amount) <= cap else 1
 
 
+def yed_cents(amount: str) -> str:
+    """A decimal dollar amount in whole cents; a fraction of a cent is refused, never truncated."""
+    _, _, frac = amount.partition(".")
+    if any(c != "0" for c in frac[2:]):
+        raise ValueError(f"a YED price is a whole number of cents: {amount}")
+    return convert_to_token_amount(amount, 2)
+
+
 def _validate(v: AssetAmount) -> AssetAmount:
     if not CANONICAL_AMOUNT.match(v.amount):
         raise ValueError(f"amount must be a positive canonical integer: {v.amount}")
@@ -168,7 +202,8 @@ def _validate(v: AssetAmount) -> AssetAmount:
             raise ValueError(f"a YEC amount must be at least {DUST_ZAT} zatoshis (dust)")
     elif v.asset == ASSET_YED:
         if not YED_MIN_OUTPUT_CENTS <= int(v.amount) <= YED_MAX_OUTPUT_CENTS:
-            raise ValueError(f"a YED amount must be {YED_MIN_OUTPUT_CENTS}..{YED_MAX_OUTPUT_CENTS} cents")
+            raise ValueError(f"a YED amount must be {YED_MIN_OUTPUT_CENTS}..{YED_MAX_OUTPUT_CENTS} cents ($1.00 to $100,000): "
+                             "a smaller YED output burns; use batch-settlement below $1.00")
     else:
         raise ValueError(f"asset must be {ASSET_YEC} or {ASSET_YED}: {v.asset}")
     return v
