@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { tx, YCASH_NETWORKS, YcashRpc, type YcashNetwork } from "x402-ycash-mechanism";
+import { LwdClient, tx, YCASH_NETWORKS, YcashRpc, type YcashNetwork } from "x402-ycash-mechanism";
 
 /** How the agent signs transparent payments and channel funding (plan §5.6 "two signer backends"). */
 export type AgentSigner =
@@ -17,10 +17,15 @@ export interface AgentConfig {
   requests: number;
   network: YcashNetwork;
   /**
-   * The agent's node. The node signer's wallet; for a WIF signer, where its coins are listed (the
-   * address is imported watch-only); and for sapling-proof, the Sapling wallet that pays.
+   * The agent's node. The node signer's wallet; for a WIF signer without `lwd`, where its coins are
+   * listed (the address is imported watch-only); and for sapling-proof, the Sapling wallet that pays.
    */
-  node: YcashRpc;
+  node?: YcashRpc;
+  /**
+   * AGENT_LWD_URL: a lightwalletd server in place of the node for a WIF signer: coins, YED outputs,
+   * tip and branch id, and the refund's broadcast (plan X5). Transparent YEC and YED only.
+   */
+  lwd?: LwdClient;
   signer: AgentSigner;
   /** Per-payment cap in zatoshis; the client refuses a 402 asking for more. */
   maxPaymentZat: string;
@@ -94,7 +99,10 @@ export function loadAgentConfig(env: Env = process.env): AgentConfig {
   if (!/^[1-9]\d{0,15}$/.test(maxPaymentZat)) throw new Error("MAX_PAYMENT_ZAT must be a positive whole number of zatoshis");
   const signer = loadSigner(env, network);
   const node = loadNode(env);
-  if (!node) throw new Error("the agent needs its node: AGENT_DEVNET_JSON, or AGENT_RPC_URL with AGENT_RPC_USER/AGENT_RPC_PASSWORD or AGENT_RPC_COOKIE_FILE");
+  const lwd = env.AGENT_LWD_URL ? new LwdClient(env.AGENT_LWD_URL) : undefined;
+  if (!node && !lwd) throw new Error("the agent needs its node: AGENT_DEVNET_JSON, or AGENT_RPC_URL with AGENT_RPC_USER/AGENT_RPC_PASSWORD or AGENT_RPC_COOKIE_FILE, or AGENT_LWD_URL with AGENT_WIF");
+  if (lwd && signer.kind !== "wif") throw new Error("AGENT_LWD_URL needs AGENT_WIF: lightwalletd holds no wallet, so a local key pays");
+  if (env.AGENT_SHIELDED_FROM && !node) throw new Error("AGENT_SHIELDED_FROM needs a node wallet (AGENT_DEVNET_JSON or AGENT_RPC_URL): lightwalletd cannot pay sapling-proof");
   const deposit = env.AGENT_CHANNEL_DEPOSIT_ZAT;
   if (deposit !== undefined && !/^[1-9]\d{0,15}$/.test(deposit)) throw new Error("AGENT_CHANNEL_DEPOSIT_ZAT must be a positive whole number of zatoshis");
   const maxDeposit = env.AGENT_CHANNEL_MAX_DEPOSIT_ZAT;
@@ -105,12 +113,13 @@ export function loadAgentConfig(env: Env = process.env): AgentConfig {
   if (maxCloseFee !== undefined && !/^[1-9]\d{0,15}$/.test(maxCloseFee)) throw new Error("AGENT_CHANNEL_MAX_CLOSE_FEE_ZAT must be a positive whole number of zatoshis");
   const yedDeposit = cents(env, "AGENT_YED_CHANNEL_DEPOSIT_CENTS");
   const yedMaxDeposit = cents(env, "AGENT_YED_CHANNEL_MAX_DEPOSIT_CENTS");
-  const payerId = signer.kind === "wif" ? signer.address : `node-${createHash("sha256").update(node.url).digest("hex").slice(0, 16)}`;
+  const payerId = signer.kind === "wif" ? signer.address : `node-${createHash("sha256").update((node as YcashRpc).url).digest("hex").slice(0, 16)}`;
   return {
     url: env.RESOURCE_URL ?? "http://127.0.0.1:4021/exact/quote",
     requests,
     network,
-    node,
+    ...(node ? { node } : {}),
+    ...(lwd ? { lwd } : {}),
     signer,
     maxPaymentZat,
     ...(env.AGENT_SHIELDED_FROM ? { shieldedFrom: env.AGENT_SHIELDED_FROM } : {}),

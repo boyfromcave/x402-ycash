@@ -38,7 +38,8 @@ export function createAgent(config: AgentConfig, register: RegisterClientSchemes
   });
   const registered = register(client, {
     network: config.network,
-    node: config.node,
+    ...(config.node ? { node: config.node } : {}),
+    ...(config.lwd ? { lwd: config.lwd } : {}),
     signer: config.signer,
     ...(config.shieldedFrom ? { shieldedFrom: config.shieldedFrom } : {}),
     ...(config.channelStorePath ? { channelStorePath: config.channelStorePath } : {}),

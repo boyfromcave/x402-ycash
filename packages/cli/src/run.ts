@@ -2,7 +2,7 @@
 import type { YcashRpc } from "x402-ycash-mechanism";
 import { buildClient } from "./client.js";
 import { channelClose, channelOpen, channelRefund, channelStatus, pay, type Out } from "./commands.js";
-import { loadCliConfig, parseCli, USAGE, UsageError } from "./config.js";
+import { loadCliConfig, parseCli, USAGE, UsageError, type CliConfig } from "./config.js";
 
 export interface RunIo {
   out: Out;
@@ -21,6 +21,7 @@ const stdio: RunIo = {
 };
 
 export async function run(argv: string[], env: Record<string, string | undefined> = process.env, io: RunIo = stdio, deps: RunDeps = {}): Promise<number> {
+  let config: CliConfig | undefined;
   try {
     const args = parseCli(argv);
     const [cmd, sub, a1, a2] = args.command;
@@ -32,7 +33,7 @@ export async function run(argv: string[], env: Record<string, string | undefined
       if (!v) throw new UsageError(`missing ${what}`);
       return v;
     };
-    const config = loadCliConfig(args, env, deps.node);
+    config = loadCliConfig(args, env, deps.node);
     const client = buildClient(config);
     const f = deps.fetch ?? fetch;
     if (cmd === "pay") return await pay(client, config, need(sub, "<url>"), io.out, f);
@@ -56,5 +57,7 @@ export async function run(argv: string[], env: Record<string, string | undefined
     }
     io.err(`x402-ycash: ${(e as Error).message}`);
     return 1;
+  } finally {
+    config?.lwd?.close(); // an open gRPC channel would keep the process alive
   }
 }

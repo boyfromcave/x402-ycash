@@ -27,7 +27,7 @@ describe("loadAgentConfig", () => {
   it("builds a node-wallet signer from RPC settings", () => {
     const c = loadAgentConfig({ AGENT_SIGNER: "node", ...node });
     expect(c.signer.kind).toBe("node");
-    expect(c.node.url).toBe("http://127.0.0.1:18232/");
+    expect(c.node?.url).toBe("http://127.0.0.1:18232/");
   });
 
   it("takes the sapling-proof source, the channel store and the deposit", () => {

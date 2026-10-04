@@ -9,9 +9,12 @@ import {
   exact,
   FileClientChannelStorage,
   FileCoinReservationStore,
+  LwdChain,
+  LwdUtxoSource,
   rpcWalletFunder,
   ShieldedExactClient,
   utxoSourceFunder,
+  type LwdClient,
   type YcashNetwork,
   type YcashRpc,
 } from "x402-ycash-mechanism";
@@ -19,7 +22,10 @@ import type { AgentSigner } from "./config.js";
 
 export interface ClientSchemeDeps {
   network: YcashNetwork;
-  node: YcashRpc;
+  /** Absent only with `lwd` and a WIF signer (loadAgentConfig checks). */
+  node?: YcashRpc;
+  /** lightwalletd in place of the node for a WIF signer's coins, tip and broadcast. */
+  lwd?: LwdClient;
   signer: AgentSigner;
   shieldedFrom?: string;
   channelStorePath?: string;
@@ -61,25 +67,32 @@ export interface ClientSchemes {
 
 export type RegisterClientSchemes = (client: x402Client, deps: ClientSchemeDeps) => ClientSchemes;
 
+function needNode(deps: ClientSchemeDeps): YcashRpc {
+  if (!deps.node) throw new Error("this payment method needs the agent's node (AGENT_DEVNET_JSON or AGENT_RPC_URL)");
+  return deps.node;
+}
+
 export const registerClientSchemes: RegisterClientSchemes = (client, deps) => {
-  // A WIF signer reads its coins from the node, which watches its address (importaddress).
+  // A WIF signer reads its coins from lightwalletd (AGENT_LWD_URL) or from the node, which watches
+  // its address (importaddress).
   const reservations = deps.reservationsPath ? new FileCoinReservationStore(deps.reservationsPath) : undefined;
   const held = reservations ? { reservations } : {};
-  const source = deps.signer.kind === "wif" ? new exact.RpcUtxoSource(deps.node, { importAddress: true, ...held }) : undefined;
+  const wif = deps.signer.kind === "wif";
+  const source = wif ? (deps.lwd ? new LwdUtxoSource(deps.lwd, held) : new exact.RpcUtxoSource(needNode(deps), { importAddress: true, ...held })) : undefined;
 
   // exact: transparent (the client signs a complete v4 tx and does not broadcast) and, with a
   // Sapling source, sapling-proof (z_sendmany to the per-request address, then the txid).
   const transparent = new exact.ExactYcashScheme(
-    deps.signer.kind === "wif" && source ? new exact.LocalKeySigner(deps.signer.wif, source) : new exact.RpcWalletSigner(deps.node, held),
+    deps.signer.kind === "wif" && source ? new exact.LocalKeySigner(deps.signer.wif, source) : new exact.RpcWalletSigner(needNode(deps), held),
   );
-  const shielded = deps.shieldedFrom ? new ShieldedExactClient({ rpc: deps.node, from: deps.shieldedFrom }) : undefined;
+  const shielded = deps.shieldedFrom ? new ShieldedExactClient({ rpc: needNode(deps), from: deps.shieldedFrom }) : undefined;
   const router = new exact.ExactYcashMethodRouter({ transparent, ...(shielded ? { shielded } : {}) });
   client.register(deps.network, router);
 
   // batch-settlement: opens a channel on the first 402, then one voucher per request.
   // YEC or YED, as the route's 402 asks: the WIF funder spends the key's token outputs for YED.
   // The channel's remainder returns to the funder: the WIF key's address or a new wallet address.
-  const funder = deps.signer.kind === "wif" && source ? utxoSourceFunder(deps.signer.privKey, source) : rpcWalletFunder(deps.node, held);
+  const funder = deps.signer.kind === "wif" && source ? utxoSourceFunder(deps.signer.privKey, source) : rpcWalletFunder(needNode(deps), held);
   const deposits = {
     ...(deps.channelDepositZat !== undefined ? { [ASSET_YEC]: deps.channelDepositZat } : {}),
     ...(deps.yedChannelDepositCents !== undefined ? { [ASSET_YED]: deps.yedChannelDepositCents } : {}),
@@ -89,7 +102,7 @@ export const registerClientSchemes: RegisterClientSchemes = (client, deps) => {
     ...(deps.yedChannelMaxDepositCents !== undefined ? { [ASSET_YED]: deps.yedChannelMaxDepositCents } : {}),
   };
   const channels = new BatchYcashClientScheme({
-    chain: deps.node,
+    chain: deps.lwd ? new LwdChain(deps.lwd) : needNode(deps),
     funder,
     ...(deps.channelStorePath ? { storage: new FileClientChannelStorage(deps.channelStorePath) } : {}),
     // A deposit is in its asset's unit (zatoshis or cents), so it applies to that asset's channels only.
