@@ -2,7 +2,7 @@
 name = "x402-ycash-light"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.89"
 publish = false
 description = "A Sapling light client for x402 agents on Ycash: sync from lightwalletd, build and sign shielded payments offline"
 license = "MIT"
@@ -27,7 +27,7 @@ zip32 = "0.2"
 bip0039 = "0.12"
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
-tonic = { version = "0.14", default-features = false, features = ["transport", "codegen", "tls-ring", "tls-native-roots"] }
+tonic = { version = "0.14", default-features = false, features = ["transport", "codegen", "tls-ring", "tls-native-roots", "tls-webpki-roots"] }
 tonic-prost = "0.14"
 prost = "0.14"
 futures-util = "0.3"
@@ -47,6 +47,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
+# `router` for the unit tests' in-process fake lightwalletd (src/fake_lwd.rs); test builds only.
+tonic = { version = "0.14", default-features = false, features = ["router"] }
 # spend_diff_tests: an authorization type with no transparent inputs, to recompute a signed tx's sighash.
 zcash_transparent = { version = "0.8", path = "../../librustzcash6/zcash_transparent" }
 

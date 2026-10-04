@@ -64,7 +64,7 @@ pub const REJECTED: i64 = -32003;
 fn code_for(e: &Error) -> i64 {
     match e {
         Error::NoKey => NO_KEY,
-        Error::NotSynced => NOT_SYNCED,
+        Error::NotSynced | Error::NotAtServerTip { .. } => NOT_SYNCED,
         Error::Rejected(..) => REJECTED,
         Error::Address(_)
         | Error::Amount(_)

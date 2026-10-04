@@ -176,11 +176,9 @@ async fn assemble_matches_create_proposed_transactions() {
     let key = std::fs::read_to_string(data.join("spending.key")).unwrap();
     let extsk = keys::decode_extsk(&net, &key).unwrap();
     let mut w = Wallet::open(Options {
-        data_dir: data.clone(),
-        lwd: var("X402_LIGHT_LWD"),
-        params: net,
         proving_params_dir: Some(params_dir.clone()),
         spending_key: Some(extsk.clone()),
+        ..Options::new(data.clone(), var("X402_LIGHT_LWD"), net)
     })
     .await
     .unwrap();
@@ -226,7 +224,15 @@ async fn assemble_matches_create_proposed_transactions() {
         memo: Some(memo.clone()),
     };
     assert!(matches!(
-        assemble(&mut w.db, &net, &extsk, &prover, &proposal, &short, None),
+        assemble(
+            &mut w.db,
+            &net,
+            &extsk,
+            &prover,
+            &proposal,
+            &short,
+            ExpiryRequest::new(None, u32::MAX)
+        ),
         Err(Error::Create(_))
     ));
 
@@ -244,7 +250,7 @@ async fn assemble_matches_create_proposed_transactions() {
         &prover,
         &proposal,
         &payment,
-        Some(expiry),
+        ExpiryRequest::new(Some(expiry), DEFAULT_MAX_EXPIRY_WINDOW),
     )
     .unwrap();
     let txids = create_proposed_transactions::<

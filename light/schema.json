@@ -38,9 +38,9 @@
       "result": [ { "txid": "hex", "outputIndex": "uint", "valueZat": "uint", "minedHeight": "uint|null" } ]
     },
     "build": {
-      "params": { "to": "Sapling address", "amountZat": "decimal string (the SDK builder contract) or uint", "memoHex": "hex ≤512 bytes (optional)", "memo": "utf-8 text (optional, if memoHex absent)", "expiryHeight": "uint (optional): nExpiryHeight, at least target height + 3; default target + 40. The x402 client passes tip + 3 + ⌈maxTimeoutSeconds/75⌉", "fee": "uint zat (optional; default ZIP-317 conventional); refused below max(1000, 500·max(2, logical actions))", "minConfirmations": "uint (default 1)" },
+      "params": { "to": "Sapling address", "amountZat": "decimal string (the SDK builder contract) or uint", "memoHex": "hex ≤512 bytes (optional)", "memo": "utf-8 text (optional, if memoHex absent)", "expiryHeight": "uint (optional): nExpiryHeight in [target + 3, target + 3 + maxExpiryWindow (default 1152, --max-expiry-window)] and below the next network upgrade; default target + 40 (capped the same way). The x402 client passes tip + 3 + ⌈maxTimeoutSeconds/75⌉", "maxTimeoutSeconds": "uint (optional): the requirement's maxTimeoutSeconds; expiryHeight must then lie in the spec window (rule 8: tip + 4 ≤ e ≤ tip + 4 + ⌈t/75⌉ + 1) and defaults to tip + 3 + ⌈t/75⌉", "fee": "uint zat (optional; default ZIP-317 conventional); refused below max(1000, 500·max(2, logical actions))", "minConfirmations": "uint (default 1)" },
       "result": { "txid": "hex", "txHex": "signed raw v4 transaction, NOT broadcast", "feeZat": "uint|null", "targetHeight": "uint", "expiryHeight": "uint", "branchId": "hex", "branchIdSource": "string", "version": "string" },
-      "note": "The SDK's builder contract (packages/ycash/src/shielded/builder.ts) is exactly build {to, amountZat, memoHex, expiryHeight?} → {txHex, txid}. The wallet records the transaction and treats its inputs as spent until expiryHeight passes unbroadcast."
+      "note": "The SDK's builder contract (packages/ycash/src/shielded/builder.ts) is exactly build {to, amountZat, memoHex, expiryHeight?} → {txHex, txid}. build runs one sync pass when the wallet is not at the server's tip (GetChainInfo height) and refuses with -32001 if it still is not, so target height, branch id and expiry follow the server's next block. The wallet records the transaction and treats its inputs as spent until expiryHeight passes unbroadcast."
     },
     "send": {
       "params": "same as build",
@@ -56,8 +56,8 @@
     "-32600": "invalid request",
     "-32601": "method not found",
     "-32602": "invalid params (bad address, amount, memo, hex, birthday, key or expiryHeight; a fee below the x402 floor)",
-    "-32000": "wallet error (db, lightwalletd, proposal, proving, cache)",
-    "-32001": "wallet has not synced yet",
+    "-32000": "wallet error (db, lightwalletd, proposal, proving, cache; another process holds the data directory's wallet.lock)",
+    "-32001": "wallet has not synced yet, or (build/send) is not at the server's tip after one sync pass",
     "-32002": "no spending key imported",
     "-32003": "lightwalletd/node rejected the transaction (message carries the node's reason)"
   }

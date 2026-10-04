@@ -41,8 +41,11 @@ x402-light serve --data ~/.x402-light --lwd 127.0.0.1:9067 --params ~/.zcash-par
 x402-light once  --data ~/.x402-light --lwd 127.0.0.1:9067 --network regtest status
 ```
 
-- `--lwd`: `grpc://h:p` (plaintext), `grpcs://h:p` (TLS, system roots), or `h:p` (TLS unless
-  loopback), as the SDK's `--lwd` (README "Light agents").
+- `--lwd`: `grpc://h:p` (plaintext), `grpcs://h:p` (TLS), or `h:p` (TLS unless loopback), as
+  the SDK's `--lwd` (README "Light agents").
+- `--tls-roots native|webpki`: the root store TLS trusts. `native` is the platform's
+  (`rustls-native-certs`), `webpki` the Mozilla bundle compiled in (`webpki-roots`). Default:
+  `webpki` on iOS and Android, `native` elsewhere. Both stores are always compiled in.
 - `--network mainnet|testnet|regtest`; `--upgrades "canopy=1,nu5=none"` sets regtest activation
   heights (default: every upgrade through Canopy at height 1, the devnet's). `sync` and `build`
   refuse to run when these disagree with the server's branch id.
@@ -54,7 +57,10 @@ x402-light once  --data ~/.x402-light --lwd 127.0.0.1:9067 --network regtest sta
   `8e48ffd23abb3a5fd9c5589204f32d9c31285a04b78096ba40a79b75677efc13` / `2f0ebbcbb9bb0bcffe95a397e7eba89c29eb4dde6191c339db88570e3f3fb0e4`).
   Only `build`/`send` need them; `serve` starts without them.
 - Environment: `X402_LIGHT_DATA`, `X402_LIGHT_LWD`, `X402_LIGHT_PARAMS`, `X402_LIGHT_NETWORK`,
-  `X402_LIGHT_UPGRADES`.
+  `X402_LIGHT_UPGRADES`, `X402_LIGHT_TLS_ROOTS`, `X402_LIGHT_MAX_EXPIRY_WINDOW`.
+- `--max-expiry-window N` (default 1152, about a day): the most blocks a built transaction's
+  `nExpiryHeight` may sit above target + 3. An unbroadcast or unmined transaction holds its notes
+  until it expires, so a far expiry is refused.
 
 `serve` syncs in the background every `--sync-every` seconds (15). All methods, params and error
 codes are in [`schema.json`](schema.json); `once METHOD 'PARAMS_JSON'` runs any of them:
@@ -66,12 +72,43 @@ codes are in [`schema.json`](schema.json); `once METHOD 'PARAMS_JSON'` runs any 
 | `sync` | one pass; returns blocks/outputs scanned, notes found, timings |
 | `status` | node and cache heights, synced flag, balance by confirmations, the 0-conf mempool view |
 | `list_notes` | spendable notes at `minConfirmations` |
-| `build` | `{to, amountZat, memoHex|memo, expiryHeight?, fee?, minConfirmations}` → `{txHex, txid, feeZat, branchId, expiryHeight}`, **not broadcast**; exactly the SDK's builder contract (`packages/ycash/src/shielded/builder.ts`: `amountZat` a decimal string, `expiryHeight` the spec's tip + 3 + ⌈maxTimeoutSeconds/75⌉) |
+| `build` | `{to, amountZat, memoHex|memo, expiryHeight?, maxTimeoutSeconds?, fee?, minConfirmations}` → `{txHex, txid, feeZat, branchId, expiryHeight}`, **not broadcast**; exactly the SDK's builder contract (`packages/ycash/src/shielded/builder.ts`: `amountZat` a decimal string, `expiryHeight` the spec's tip + 3 + ⌈maxTimeoutSeconds/75⌉). With `maxTimeoutSeconds` the expiry must lie in the spec's window (rule 8) and defaults to the client's value |
 | `broadcast` | `{txHex}` through lightwalletd `SendTransaction` |
 | `send` | build + broadcast; the agent's `sapling-proof` payment (`LightClientShieldedPayer` in the SDK) |
 
 The key file: `<data>/spending.key` (bech32, mode 0600), written by `import_key`. The data
-directory also holds `wallet.sqlite` and `cache/`.
+directory also holds `wallet.sqlite`, `cache/` and `wallet.lock`: an open wallet holds an advisory
+exclusive lock on it (released by the OS when the process exits), so a `once` against the data
+directory of a running `serve` fails at once ("another process holds the wallet") instead of
+selecting the same notes. Use the server's `build`/`send` instead.
+
+## Embedding: bring your own channel
+
+A host with its own TLS policy (YEW pins the server's certificate, and iOS has no native root
+store) builds the `tonic::transport::Channel` itself and injects it. Every lightwalletd call of the
+wallet then goes over that channel: sync (`GetBlockRange`, `GetLatestBlock`, `GetLightdInfo`),
+`GetTreeState`, `GetChainInfo`, `GetMempoolTx` and `SendTransaction`; `lwd` is not dialed and is
+only the label `status` reports. `Wallet::channel()` hands the channel back for the host's own
+calls (e.g. `GetTransaction`).
+
+```rust
+use x402_ycash_light::{Options, Wallet};
+let channel = Endpoint::from_shared("https://lwd.example:9067")?
+    .tls_config(ClientTlsConfig::new().ca_certificate(Certificate::from_pem(pin)))?
+    .timeout(Duration::from_secs(600))     // a long GetBlockRange stream runs under it
+    .connect_lazy();
+let wallet = Wallet::open(Options {
+    channel: Some(channel),
+    spending_key: Some(extsk),
+    ..Options::new(data_dir, "lwd.example:9067", network)
+}).await?;
+```
+
+The channel type is tonic 0.14's; the crate links `tls-ring`, `tls-native-roots` and
+`tls-webpki-roots`, the same features YEW's `tonic =0.14.6` enables, so one tonic is in the graph.
+Without a channel, `Options::tls_roots` (`lwd::TlsRoots::{Native, Webpki}`, default per target as
+above) picks the root store for the URL path; `lwd::endpoint(addr, roots)` returns that endpoint
+unconnected for a host that only wants to adjust it.
 
 ## How sync works, and why
 
@@ -116,6 +153,18 @@ builder from the proposal's notes and witnesses, the proofs, the ZIP-243 sighash
 `Builder::build_internal`, Sapling-only). The built transaction is then recorded with
 `decrypt_and_store_transaction`, which marks its notes spent and recovers payment and change through
 the OVKs. No librustzcash change was needed.
+
+The expiry is bounded on both sides: at least target + 3 (the relay floor), at most target + 3 +
+`max_expiry_window` (1152), below the next network upgrade, and, when the caller passes the
+requirement's `maxTimeoutSeconds`, inside the spec's window (`specs/scheme_exact_ycash.md` rule 8:
+tip + 4 ≤ e ≤ tip + 4 + ⌈t/75⌉ + 1), which is what the facilitator checks.
+
+**Built at the server's tip.** `build` takes the target height, branch id and expiry from the
+server's next block, so it needs the wallet's scanned tip to equal the server's (the
+`GetChainInfo` height, else `GetLightdInfo`'s). If it does not, `build` runs one sync pass and asks
+again; still behind or ahead, it refuses with -32001 (`NotAtServerTip`). lightwalletd's
+compact-block cache trails the node by its ingestor's poll, so right after a block a retry may be
+needed.
 
 **Not broadcasting is a wallet state.** `build` records the transaction in the store and marks
 its inputs spent; if it is never broadcast they unlock when `expiryHeight` (target + 40) passes.

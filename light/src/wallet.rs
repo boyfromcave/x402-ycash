@@ -44,6 +44,8 @@ use sapling::note_encryption::{try_sapling_compact_note_decryption, CompactOutpu
 use sapling::zip32::ExtendedSpendingKey;
 use zip32::Scope;
 
+use tonic::transport::Channel;
+
 use crate::keys;
 use crate::lwd::{self, Client};
 use crate::net::YcashNetwork;
@@ -61,17 +63,54 @@ pub struct Wallet {
     params_dir: Option<PathBuf>,
     prover: Option<LocalTxProver>,
     pub(crate) client: Client,
-    channel: tonic::transport::Channel,
+    channel: Channel,
     pub(crate) lwd_addr: String,
+    max_expiry_window: u32,
+    /// Held for the wallet's lifetime: see [`lock_data_dir`].
+    _lock: fs::File,
 }
 
 pub struct Options {
     pub data_dir: PathBuf,
+    /// The lightwalletd address (`grpc://h:p`, `grpcs://h:p`, `h:p`), dialed with `tls_roots`
+    /// when `channel` is `None`. With a channel it is only the label `status` reports.
     pub lwd: String,
     pub params: YcashNetwork,
     pub proving_params_dir: Option<PathBuf>,
     /// The Sapling extended spending key whose account this wallet holds, if already known.
     pub spending_key: Option<ExtendedSpendingKey>,
+    /// A channel built by the host (its own TLS: a pinned certificate, webpki roots, a proxy).
+    /// When set, every lightwalletd call goes over it (sync, GetTreeState, GetLightdInfo,
+    /// GetChainInfo, GetMempoolTx, SendTransaction) and `lwd` is not dialed. Timeouts are the
+    /// host's: the URL path sets 10 s connect and 600 s per request, and a long `GetBlockRange`
+    /// stream needs a request timeout at least that generous.
+    pub channel: Option<Channel>,
+    /// Root store for the URL path when it uses TLS; ignored with `channel`.
+    pub tls_roots: lwd::TlsRoots,
+    /// The most blocks a built transaction's `nExpiryHeight` may sit above the relay floor
+    /// (target + 3): an unmined transaction locks its notes until then. Default 1152 (~1 day).
+    pub max_expiry_window: u32,
+}
+
+impl Options {
+    /// The URL path with the platform-default roots, no proving parameters and no key; set the
+    /// other fields with struct update syntax (`Options { channel: Some(ch), ..Options::new(..) }`).
+    pub fn new(
+        data_dir: impl Into<PathBuf>,
+        lwd_addr: impl Into<String>,
+        params: YcashNetwork,
+    ) -> Self {
+        Options {
+            data_dir: data_dir.into(),
+            lwd: lwd_addr.into(),
+            params,
+            proving_params_dir: None,
+            spending_key: None,
+            channel: None,
+            tls_roots: lwd::TlsRoots::default(),
+            max_expiry_window: spend::DEFAULT_MAX_EXPIRY_WINDOW,
+        }
+    }
 }
 
 /// One confirmation, the ycashd default for `z_sendmany` on both lines.
@@ -82,6 +121,7 @@ pub fn default_policy() -> ConfirmationsPolicy {
 impl Wallet {
     pub async fn open(opts: Options) -> Result<Self, Error> {
         fs::create_dir_all(&opts.data_dir)?;
+        let lock = lock_data_dir(&opts.data_dir)?;
         let cache_root = opts.data_dir.join("cache");
         let blocks_dir = cache_root.join("blocks");
         fs::create_dir_all(&blocks_dir)?;
@@ -99,7 +139,10 @@ impl Wallet {
 
         let extsk = opts.spending_key;
 
-        let (client, channel) = lwd::connect(&opts.lwd).await?;
+        let (client, channel) = match opts.channel {
+            Some(channel) => (lwd::client(channel.clone()), channel),
+            None => lwd::connect(&opts.lwd, opts.tls_roots).await?,
+        };
         Ok(Wallet {
             params: opts.params,
             db,
@@ -112,7 +155,15 @@ impl Wallet {
             client,
             channel,
             lwd_addr: opts.lwd,
+            max_expiry_window: opts.max_expiry_window,
+            _lock: lock,
         })
+    }
+
+    /// The lightwalletd channel every call of this wallet uses (injected or dialed), for a host
+    /// that makes calls of its own (e.g. `GetTransaction`) over the same connection.
+    pub fn channel(&self) -> &Channel {
+        &self.channel
     }
 
     // ------------------------------------------------------------------ keys and account
@@ -379,7 +430,14 @@ impl Wallet {
     /// WITHOUT broadcasting it. A `fee` of `None` is the ZIP-317 conventional fee.
     pub async fn build(&mut self, req: &BuildRequest) -> Result<Built, Error> {
         let account = self.account()?;
-        let server = lwd::branch_info(&mut self.client, &self.channel).await?;
+        // Branch id and expiry come from the server's next block, so the wallet must stand at the
+        // server's tip: one sync pass if it does not, then refuse if it still does not.
+        let mut server = lwd::branch_info(&mut self.client, &self.channel).await?;
+        if check_tip(self.db.chain_height()?, &server).is_err() {
+            self.sync(crate::sync::DEFAULT_CHUNK_BLOCKS).await?;
+            server = lwd::branch_info(&mut self.client, &self.channel).await?;
+        }
+        let tip = check_tip(self.db.chain_height()?, &server)?;
         let to =
             Address::decode(&self.params, &req.to).ok_or_else(|| Error::Address(req.to.clone()))?;
         if !matches!(to, Address::Sapling(_)) {
@@ -401,8 +459,16 @@ impl Wallet {
             },
         };
         let policy = Self::policy(req.min_confirmations.unwrap_or(1));
-        let tip = self.db.chain_height()?.ok_or(Error::NotSynced)?;
         let target_height = tip + 1;
+        let expiry = match req.max_timeout_seconds {
+            Some(t) => spend::ExpiryRequest::for_timeout(
+                target_height,
+                t,
+                req.expiry_height,
+                self.max_expiry_window,
+            ),
+            None => spend::ExpiryRequest::new(req.expiry_height, self.max_expiry_window),
+        };
         let branch_id = self.params.branch_id_at(target_height);
         // Sign with what the server says the next block wants (GetChainInfo.nextBlockBranchId), by
         // refusing to build when our parameters disagree with it: the builder derives the branch id
@@ -419,12 +485,6 @@ impl Wallet {
                 "branch id mismatch: lightwalletd wants {:?} ({}) for height {compare_at}, our parameters give {:?}; check --network/--upgrades",
                 server_branch, server.branch_id_hex, self.params.branch_id_at(compare_at)
             )));
-        }
-        if u32::from(tip) != server.height {
-            tracing::info!(
-                "wallet tip {tip}, server tip {}: run sync before build for a current anchor",
-                server.height
-            );
         }
 
         let params = self.params;
@@ -464,7 +524,7 @@ impl Wallet {
                     &prover,
                     &proposal,
                     &payment,
-                    req.expiry_height,
+                    expiry,
                 )
             }),
             Some(fee) => {
@@ -506,7 +566,7 @@ impl Wallet {
                         &prover,
                         &proposal,
                         &payment,
-                        req.expiry_height,
+                        expiry,
                     )
                 })
             }
@@ -529,7 +589,7 @@ impl Wallet {
         if fee < floor {
             return Err(Error::FeeBelowFloor { fee, floor });
         }
-        if let Some(e) = req.expiry_height {
+        if let Some(e) = expiry.height {
             debug_assert_eq!(u32::from(tx.expiry_height()), e);
         }
         let mut raw = Vec::new();
@@ -567,6 +627,38 @@ impl Wallet {
             // lightwalletd returns the node's raw JSON result, the quoted txid.
             txid: resp.error_message.trim().trim_matches('"').to_owned(),
         })
+    }
+}
+
+/// The wallet's tip, if it is exactly the server's (`BranchInfo.height`, the node's tip): what
+/// `build` derives the target height, branch id and expiry from.
+pub(crate) fn check_tip(
+    wallet: Option<BlockHeight>,
+    server: &lwd::BranchInfo,
+) -> Result<BlockHeight, Error> {
+    match wallet {
+        Some(tip) if u32::from(tip) == server.height => Ok(tip),
+        _ => Err(Error::NotAtServerTip {
+            wallet: wallet.map(u32::from),
+            server: server.height,
+        }),
+    }
+}
+
+/// An advisory exclusive lock on `<data>/wallet.lock`, held while the wallet is open, so two
+/// processes on one data directory (`serve` and a `once build`) cannot select the same notes.
+/// The OS releases it when the process exits, so a crash leaves no stale lock.
+fn lock_data_dir(dir: &std::path::Path) -> Result<fs::File, Error> {
+    let path = dir.join("wallet.lock");
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(fs::TryLockError::WouldBlock) => Err(Error::Locked(dir.to_owned())),
+        Err(fs::TryLockError::Error(e)) => Err(e.into()),
     }
 }
 
@@ -643,8 +735,13 @@ pub struct BuildRequest {
     #[serde(default)]
     pub min_confirmations: Option<u32>,
     /// nExpiryHeight; absent, target + 40 (the x402 client passes tip + 3 + ⌈maxTimeoutSeconds/75⌉).
+    /// At most `Options::max_expiry_window` above target + 3.
     #[serde(default)]
     pub expiry_height: Option<u32>,
+    /// The requirement's `maxTimeoutSeconds`: when given, the expiry must lie in the spec's window
+    /// (rule 8: tip + 4 ≤ expiry ≤ tip + 4 + ⌈t/75⌉ + 1) and defaults to tip + 3 + ⌈t/75⌉.
+    #[serde(default)]
+    pub max_timeout_seconds: Option<u64>,
 }
 
 /// `amountZat` as the TS contract sends it (a canonical decimal string) or as a JSON integer.
@@ -726,6 +823,10 @@ pub enum Error {
     Hex(String),
     #[error("wallet has not synced yet")]
     NotSynced,
+    #[error("wallet tip {wallet:?} is not the server's tip {server}; sync and retry")]
+    NotAtServerTip { wallet: Option<u32>, server: u32 },
+    #[error("another process holds the wallet in {0}")]
+    Locked(PathBuf),
     #[error("cannot propose: {0}")]
     Propose(String),
     #[error("cannot create: {0}")]
