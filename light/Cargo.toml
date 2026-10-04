@@ -49,6 +49,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 [dev-dependencies]
 # `router` for the unit tests' in-process fake lightwalletd (src/fake_lwd.rs); test builds only.
 tonic = { version = "0.14", default-features = false, features = ["router"] }
+# spend_diff_tests: an authorization type with no transparent inputs, to recompute a signed tx's sighash.
+zcash_transparent = { version = "0.8", path = "../../librustzcash6/zcash_transparent" }
 
 # Mirror of ref/ycash6/Cargo.toml:122-133 so every transitive zcash_* crate resolves to the same
 # Ycash-aware source as ycashd 6.21.0 (one revision, one set of branch ids and HRPs).
