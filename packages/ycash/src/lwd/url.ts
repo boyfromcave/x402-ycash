@@ -17,6 +17,10 @@ const LOOPBACK = /^(localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
  * Parses `grpcs://host[:port]` / `https://…` (TLS), `grpc://host[:port]` / `http://…` (plaintext),
  * or a bare `host[:port]`: TLS unless the host is loopback, since a plaintext server is only ever
  * run beside its client. A missing port is 443 for TLS and 9067 for plaintext.
+ *
+ * @param url - The server address as the user wrote it.
+ * @returns The gRPC target and whether to use TLS.
+ * @throws Error when the address does not parse or the port is out of range.
  */
 export function parseLwdUrl(url: string): LwdEndpoint {
   const m = /^(?:(grpcs?|https?):\/\/)?(\[[0-9a-f:]+\]|[^\s:/[\]]+)(?::(\d{1,5}))?\/?$/i.exec(url.trim());

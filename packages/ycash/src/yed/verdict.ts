@@ -35,7 +35,11 @@ export interface TransferVerdictExpectation {
 
 /**
  * The verdict a non-burning TRANSFER must have: type `transfer`, verdict `ok`, burned 0, yedOut =
- * yedIn, no unconfirmed input, and (by default) valid scripts. Returns the first problem, or null.
+ * yedIn, no unconfirmed input, and (by default) valid scripts.
+ *
+ * @param v - The `yed_validaterawtransaction` result.
+ * @param exp - The expected yedIn and whether scripts must verify.
+ * @returns The first problem with a message, or null when the transfer passes.
  */
 export function checkTransferVerdict(v: YedValidation, exp: TransferVerdictExpectation = {}): { problem: TransferVerdictProblem; message: string } | null {
   if ((exp.scripts ?? true) && !v.valid) return { problem: "scripts", message: "yed_validaterawtransaction: the scripts do not verify" };
@@ -55,7 +59,12 @@ export interface DecodedTransfer {
   assignments: Assignment[];
 }
 
-/** The TRANSFER `yed_decodepayload(hex)` found in a transaction, or null for anything else. */
+/**
+ * The TRANSFER `yed_decodepayload(hex)` found in a transaction, or null for anything else.
+ *
+ * @param p - The `yed_decodepayload` result.
+ * @returns The OP_RETURN index and assignments, or null if it is not a well-formed transfer.
+ */
 export function decodedTransferOf(p: YedPayload): DecodedTransfer | null {
   if (p.valid !== true || p.type !== "transfer" || typeof p.opReturnIndex !== "number") return null;
   const raw = p.assignments;
@@ -70,7 +79,13 @@ export function decodedTransferOf(p: YedPayload): DecodedTransfer | null {
   return { opReturnIndex: p.opReturnIndex, assignments };
 }
 
-/** The two assignment lists name the same vouts with the same cents (order ignored). */
+/**
+ * The two assignment lists name the same vouts with the same cents (order ignored).
+ *
+ * @param a - One assignment list.
+ * @param b - The other.
+ * @returns Whether they match.
+ */
 export function sameAssignments(a: readonly Assignment[], b: readonly Assignment[]): boolean {
   if (a.length !== b.length) return false;
   const key = (x: Assignment) => `${x.vout}:${x.cents}`;

@@ -24,6 +24,15 @@ const VERSIONS: Record<YcashNetwork, Record<AddressKind, readonly [number, numbe
   [YCASH_REGTEST]: { p2pkh: [0x1c, 0x95], p2sh: [0x1c, 0x2a], yed: [0x20, 0x02] },
 };
 
+/**
+ * Base58check-encodes a 20-byte hash under the version bytes of the given network and kind.
+ *
+ * @param network - The Ycash network whose prefixes to use.
+ * @param kind - Transparent P2PKH, P2SH, or a YED address.
+ * @param hash - The 20-byte key or script hash.
+ * @returns The encoded address.
+ * @throws Error when `hash` is not 20 bytes.
+ */
 export function encodeAddress(network: YcashNetwork, kind: AddressKind, hash: Uint8Array): string {
   if (hash.length !== 20) throw new Error("address hash must be 20 bytes");
   const v = VERSIONS[network][kind];
@@ -34,6 +43,11 @@ export function encodeAddress(network: YcashNetwork, kind: AddressKind, hash: Ui
  * Decode an address. Testnet and regtest share their transparent prefixes, so a `sm…`/`s2…`
  * address decodes as "ycash:testnet" unless `network` says which is meant; with `network`, an
  * address of another network is refused.
+ *
+ * @param addr - The base58check address.
+ * @param network - The network the address must belong to; omitted, any Ycash network is tried.
+ * @returns The network, kind and 20-byte hash.
+ * @throws Error on a bad checksum, a wrong length, or an unknown or mismatched version.
  */
 export function decodeAddress(addr: string, network?: YcashNetwork): DecodedAddress {
   const b = base58CheckDecode(addr);
@@ -52,6 +66,10 @@ export function decodeAddress(addr: string, network?: YcashNetwork): DecodedAddr
 /**
  * The scriptPubKey an address pays. A YED address is a P2PKH key hash; its YEC output script is
  * the plain P2PKH script.
+ *
+ * @param addr - The base58check address.
+ * @param network - The network the address must belong to, if known.
+ * @returns The P2PKH or P2SH output script.
  */
 export function addressToScript(addr: string, network?: YcashNetwork): Uint8Array {
   const d = decodeAddress(addr, network);

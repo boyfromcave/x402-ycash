@@ -62,6 +62,12 @@ export class RpcUtxoSource implements UtxoSource {
   private readonly imported = new Set<string>();
   private readonly reservations: CoinReservationStore;
 
+  /**
+   * Builds the source over a node the agent trusts.
+   *
+   * @param rpc - RPC client of that node.
+   * @param options - Watch-only import, the reservation store and the no-expiry hold time.
+   */
   constructor(
     private readonly rpc: UtxoSourceRpc,
     private readonly options: RpcUtxoSourceOptions = {},
@@ -69,10 +75,22 @@ export class RpcUtxoSource implements UtxoSource {
     this.reservations = options.reservations ?? new InMemoryCoinReservationStore();
   }
 
+  /**
+   * Reads the tip and next-block branch id from the node.
+   *
+   * @returns The node's chain state.
+   */
   async chainState(): Promise<ChainState> {
     return chainStateOf(await this.rpc.getBlockchainInfo());
   }
 
+  /**
+   * Lists confirmed coins paying `address`, leaving out YED-bearing outputs, reserved coins, and
+   * coins already spent in the mempool.
+   *
+   * @param address - The transparent address.
+   * @returns The spendable coins.
+   */
   async listCoins(address: string): Promise<Coin[]> {
     await this.ensureImported(address);
     const unspent = await this.rpc.listUnspent(1, 9_999_999, [address]);
@@ -93,6 +111,16 @@ export class RpcUtxoSource implements UtxoSource {
     return coins;
   }
 
+  /**
+   * Holds the coins until the spend's expiry passes or a block spends them; a spend with no expiry
+   * (expiryHeight 0) holds them for `noExpiryHoldMs` instead.
+   *
+   * @param coins - The outpoints the spend uses.
+   * @param spend - The spend holding them.
+   * @param spend.txid - Its txid.
+   * @param spend.expiryHeight - Its nExpiryHeight; 0 for a spend that never expires.
+   * @returns False when another spend already holds one of the coins.
+   */
   async reserve(coins: readonly OutPoint[], spend: { txid: string; expiryHeight: number }): Promise<boolean> {
     return this.reservations.reserve(coins.map((c) => `${c.txid}:${c.vout}`), {
       spentBy: spend.txid,
@@ -101,13 +129,14 @@ export class RpcUtxoSource implements UtxoSource {
     });
   }
 
-  /** The outpoints still held (a reservation ends when its spend lapses or a block spends the coin). */
-  private async heldCoins(): Promise<Set<string>> {
-    if ((await this.reservations.list()).size === 0) return new Set();
-    const tip = (await this.rpc.getBlockchainInfo()).blocks;
-    return heldOutpoints(this.reservations, tip, async (txid, vout) => !(await this.rpc.getTxOut(txid, vout, false)));
-  }
-
+  /**
+   * Lists the YED outputs paying `address` from `yed_listtokens`, leaving out reserved ones and
+   * ones already spent in the mempool.
+   *
+   * @param address - The `ye…` or transparent address.
+   * @returns The token outputs.
+   * @throws Error when the node does not run the Yellowback overlay.
+   */
   async listTokens(address: string): Promise<TokenCoin[]> {
     if (!(await this.rpc.capabilities()).yellowback) throw new Error("listing YED outputs needs a Yellowback node (-experimentalfeatures -yellowback)");
     const rows = await this.rpc.call<TokenRow[]>("yed_listtokens", [[address]]);
@@ -121,6 +150,23 @@ export class RpcUtxoSource implements UtxoSource {
     return tokens;
   }
 
+  /**
+   * The outpoints still held (a reservation ends when its spend lapses or a block spends the coin).
+   *
+   * @returns `txid:vout` keys.
+   */
+  private async heldCoins(): Promise<Set<string>> {
+    if ((await this.reservations.list()).size === 0) return new Set();
+    const tip = (await this.rpc.getBlockchainInfo()).blocks;
+    return heldOutpoints(this.reservations, tip, async (txid, vout) => !(await this.rpc.getTxOut(txid, vout, false)));
+  }
+
+  /**
+   * Imports the address watch-only once per source when `importAddress` is set; a wallet that
+   * already holds the key is accepted as is.
+   *
+   * @param address - The address to import.
+   */
   private async ensureImported(address: string): Promise<void> {
     const mode = this.options.importAddress;
     if (!mode || this.imported.has(address)) return;
@@ -134,6 +180,12 @@ export class RpcUtxoSource implements UtxoSource {
     this.imported.add(address);
   }
 
+  /**
+   * The YED-bearing outpoints paying `address`; empty on a node without the overlay.
+   *
+   * @param address - The address to look up.
+   * @returns `txid:vout` keys.
+   */
   private async yedOutpoints(address: string): Promise<Set<string>> {
     if (!(await this.rpc.capabilities()).yellowback) return new Set();
     try {

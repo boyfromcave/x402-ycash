@@ -17,6 +17,9 @@ const ceilDiv = (a: number, b: number): number => Math.floor((a + b - 1) / b);
  * ZIP-317 logical actions, as ycash6/src/zip317.cpp:24-38 computes them: the larger of the
  * transparent input and output sizes in standard-P2PKH units (vector bytes without the count),
  * plus 2 per JoinSplit, plus max(Sapling spends, outputs).
+ *
+ * @param tx - The transaction to measure.
+ * @returns The number of logical actions.
  */
 export function logicalActions(tx: Tx): number {
   const win = new ByteWriter();
@@ -30,7 +33,13 @@ export function logicalActions(tx: Tx): number {
   );
 }
 
-/** The minimum fee, in zatoshi, the SDK pays and a facilitator requires. */
+/**
+ * The minimum fee, in zatoshi, the SDK pays and a facilitator requires:
+ * max(1000, 500 × max(2, logical actions)).
+ *
+ * @param tx - The transaction to price.
+ * @returns The fee floor in zatoshi.
+ */
 export function feeFloor(tx: Tx): bigint {
   const conventional = MARGINAL_FEE * BigInt(Math.max(GRACE_ACTIONS, logicalActions(tx)));
   return conventional > MIN_FEE ? conventional : MIN_FEE;
@@ -38,7 +47,12 @@ export function feeFloor(tx: Tx): bigint {
 
 /**
  * The fee a tx pays: transparent inputs − outputs, plus the Sapling value balance and the
- * JoinSplits' net vpub_new − vpub_old. `inputValues[i]` is the value of the coin vin[i] spends.
+ * JoinSplits' net vpub_new − vpub_old.
+ *
+ * @param tx - The transaction.
+ * @param inputValues - The value in zatoshi of the coin each `vin[i]` spends, in input order.
+ * @returns The fee in zatoshi; negative if outputs exceed inputs.
+ * @throws Error when there is not exactly one input value per input.
  */
 export function txFee(tx: Tx, inputValues: readonly bigint[]): bigint {
   if (inputValues.length !== tx.vin.length) throw new Error("one input value per vin is required");

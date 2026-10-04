@@ -24,6 +24,11 @@ import { memoForRecord, noteMemoEquals } from "./request.js";
 /**
  * The consumption key is per (txid, payTo): payTo is a diversified address issued for exactly one
  * request, so one transaction paying two requests buys both, and a proof still binds to one request.
+ *
+ * @param network - The payment's network.
+ * @param txid - The presented txid, display-order hex.
+ * @param payTo - The request's issued Sapling address.
+ * @returns The settlement-store key.
  */
 export function paymentKey(network: Parameters<typeof consumptionKey>[0], txid: string, payTo: string): string {
   return consumptionKey(network, `${txid}@${payTo}`);
@@ -72,27 +77,43 @@ type Outcome = { ok: true; value: Checked } | { ok: false; reason: ShieldedError
 
 const fail = (reason: ShieldedErrorReason, message: string, txid = "", observed?: number): Outcome => ({ ok: false, reason, message, txid, ...(observed === undefined ? {} : { observed }) });
 
-/** True when `observed` (−1 mempool, N ≥ 1 depth) meets `policy` (−1 mempool; 0 and 1 a block; N). */
+/**
+ * True when `observed` (−1 mempool, N ≥ 1 depth) meets `policy` (−1 mempool; 0 and 1 a block; N).
+ *
+ * @param observed - The shallowest note's depth, −1 in the mempool.
+ * @param policy - The request's confirmation policy.
+ * @returns Whether the payment may settle now.
+ */
 export function meetsPolicy(observed: number, policy: number): boolean {
   if (policy < 0) return true;
   return observed >= Math.max(policy, 1);
 }
 
+/**
+ * The `sapling-proof` facilitator, run with the merchant's wallet: it finds the presented txid's
+ * notes at the issued address, checks memo, amount and depth, and claims the payment last so a
+ * pending or failed attempt holds nothing. Every success carries a signed receipt.
+ */
 export class ShieldedExactFacilitator {
   private readonly config: ShieldedExactFacilitatorConfig;
   private chainChecked: string | undefined;
 
+  /**
+   * Creates a facilitator over the merchant wallet, registry and consumption store.
+   *
+   * @param config - The wallet RPC, registry, store, receipt signer and note-wait timing.
+   */
   constructor(config: ShieldedExactFacilitatorConfig) {
     this.config = config;
   }
 
-  private now(): number {
-    return this.config.now ? this.config.now() : Math.floor(Date.now() / 1000);
-  }
-
   /**
    * Read-only: every settle check but the claim. `upfront` never calls /verify (spec step list);
-   * this exists for a resource server that wants to look before it settles.
+   * this exists for a resource server that wants to look before it settles. It does not wait for the note.
+   *
+   * @param payload - The client's payload, carrying the txid.
+   * @param requirements - The issued requirements.
+   * @returns `isValid` with the observed status, or the first failing check's reason.
    */
   async verify(payload: PaymentPayload, requirements: PaymentRequirements): Promise<VerifyResponse> {
     const r = await this.check(payload, requirements);
@@ -103,6 +124,15 @@ export class ShieldedExactFacilitator {
     return { isValid: true, extra: statusExtra(r.value.observed, r.value.receivedZat) };
   }
 
+  /**
+   * Runs the checks (waiting up to `noteWaitMs` for the note to arrive), then claims the (txid, payTo)
+   * key forever and signs the receipt. A payment below its policy depth answers `settlement_pending`
+   * with the observed confirmations; a receipt-signing failure releases the claim.
+   *
+   * @param payload - The client's payload, carrying the txid.
+   * @param requirements - The issued requirements.
+   * @returns The settle response, with the receipt extension on success.
+   */
   async settle(payload: PaymentPayload, requirements: PaymentRequirements): Promise<SettleResponse> {
     const network = requirements.network;
     const r = await this.checkWaitingForNote(payload, requirements);
@@ -132,7 +162,22 @@ export class ShieldedExactFacilitator {
     }
   }
 
-  /** The checks, repeated while the only failure is a note not yet received, up to noteWaitMs. */
+  /**
+   * The current time in Unix seconds, from the injected clock when there is one.
+   *
+   * @returns Unix seconds.
+   */
+  private now(): number {
+    return this.config.now ? this.config.now() : Math.floor(Date.now() / 1000);
+  }
+
+  /**
+   * The checks, repeated while the only failure is a note not yet received, up to noteWaitMs.
+   *
+   * @param payload - The client's payload.
+   * @param requirements - The issued requirements.
+   * @returns The last check's outcome.
+   */
   private async checkWaitingForNote(payload: PaymentPayload, requirements: PaymentRequirements): Promise<Outcome> {
     const pollMs = this.config.notePollMs ?? DEFAULT_NOTE_POLL_MS;
     const deadline = Date.now() + (this.config.noteWaitMs ?? DEFAULT_NOTE_WAIT_MS);
@@ -143,7 +188,14 @@ export class ShieldedExactFacilitator {
     }
   }
 
-  /** Steps 1 to 8. */
+  /**
+   * Settlement steps 1 to 8: the envelope, the merchant node's chain, the issued instrument, the txid,
+   * the notes at payTo (mempool included), the memo, the amount and the depth. Read-only.
+   *
+   * @param payload - The client's payload.
+   * @param requirements - The issued requirements.
+   * @returns The established facts, or the first failure's reason and message.
+   */
   private async check(payload: PaymentPayload, requirements: PaymentRequirements): Promise<Outcome> {
     // 1. Envelope.
     const accepted = payload.accepted;
@@ -215,7 +267,13 @@ export class ShieldedExactFacilitator {
   }
 }
 
-/** `extra` of a response: the strongest evidence observed (spec, "Confirmation policy"). */
+/**
+ * `extra` of a response: the strongest evidence observed (spec, "Confirmation policy").
+ *
+ * @param observed - The shallowest note's depth, −1 in the mempool.
+ * @param receivedZat - The sum paid to payTo, zatoshis.
+ * @returns `{ status, confirmations, receivedZat }`.
+ */
 function statusExtra(observed: number, receivedZat: bigint): Record<string, unknown> {
   return { status: observed < 0 ? "mempool" : "confirmed", confirmations: observed, receivedZat: receivedZat.toString() };
 }

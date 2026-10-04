@@ -28,10 +28,19 @@ export interface LwdUtxoSourceOptions {
 
 const key = (o: { txid: string; vout: number }): string => `${o.txid}:${o.vout}`;
 
+/**
+ * A {@link UtxoSource} that lists a local key's coins and YED outputs through lightwalletd.
+ */
 export class LwdUtxoSource implements UtxoSource {
   readonly chain: LwdChain;
   private readonly reservations: CoinReservationStore;
 
+  /**
+   * Wraps a lightwalletd client; reservations default to an in-memory store.
+   *
+   * @param lwd - The connected lightwalletd client.
+   * @param options - Reservation store and hold time.
+   */
   constructor(
     readonly lwd: LwdClient,
     private readonly options: LwdUtxoSourceOptions = {},
@@ -40,14 +49,22 @@ export class LwdUtxoSource implements UtxoSource {
     this.reservations = options.reservations ?? new InMemoryCoinReservationStore();
   }
 
+  /**
+   * Tip and branch id to sign at, from GetLightdInfo.
+   *
+   * @returns The current chain state.
+   */
   chainState(): Promise<ChainState> {
     return this.chain.chainState();
   }
 
   /**
-   * The address's confirmed coins, less those holding YED (a YEC payment must not spend them, rule
-   * 9Y) and those held by this payer's unconfirmed spends. Without the YellowbackStreamer (a server
-   * started without `--yellowback`) token outputs cannot be told apart, as on a stock node.
+   * The address's confirmed coins, less those holding YED (a YEC payment must not spend them) and
+   * those held by this payer's unconfirmed spends. Without the YellowbackStreamer (a server started
+   * without `--yellowback`) token outputs cannot be told apart, as on a stock node.
+   *
+   * @param address - The transparent address to list.
+   * @returns The spendable coins, with confirmations counted from the tip.
    */
   async listCoins(address: string): Promise<Coin[]> {
     const [state, utxos, tokens] = await Promise.all([this.chainState(), this.lwd.getAddressUtxos([address]), this.tokenOutpoints(address)]);
@@ -57,6 +74,15 @@ export class LwdUtxoSource implements UtxoSource {
       .map((u) => ({ txid: u.txid, vout: u.vout, value: u.value, scriptPubKey: u.scriptPubKey, confirmations: Math.max(1, state.height - u.height + 1) }));
   }
 
+  /**
+   * Holds coins for a signed spend until its expiry height, or for `noExpiryHoldMs` when it never expires.
+   *
+   * @param coins - The outpoints the spend consumes.
+   * @param spend - The spend's txid and expiry height.
+   * @param spend.txid - The spending transaction's id.
+   * @param spend.expiryHeight - Its nExpiryHeight, 0 when it never expires.
+   * @returns False when another spend already holds one of the coins.
+   */
   async reserve(coins: readonly OutPoint[], spend: { txid: string; expiryHeight: number }): Promise<boolean> {
     return this.reservations.reserve(coins.map(key), {
       spentBy: spend.txid,
@@ -65,7 +91,12 @@ export class LwdUtxoSource implements UtxoSource {
     });
   }
 
-  /** The address's YED outputs (`yed_listtokens` through GetAddressTokens), less those held. */
+  /**
+   * The address's YED outputs (`yed_listtokens` through GetAddressTokens), less those held.
+   *
+   * @param address - The address holding the tokens.
+   * @returns The unheld token outputs, amounts in cents and values in zatoshis.
+   */
   async listTokens(address: string): Promise<TokenCoin[]> {
     const [state, rows] = await Promise.all([this.chainState(), this.lwd.getAddressTokens([address])]);
     const held = await heldOutpoints(this.reservations, state.height);
@@ -74,6 +105,13 @@ export class LwdUtxoSource implements UtxoSource {
       .map((r) => ({ outpoint: { txid: r.txid, vout: r.vout }, cents: Number(r.cents), value: BigInt(r.valueZat), scriptPubKey: addressToScript(r.transparentAddress || r.address) }));
   }
 
+  /**
+   * Outpoints carrying YED, so YEC coin selection can skip them; empty when the server runs without
+   * the YellowbackStreamer.
+   *
+   * @param address - The address to look up.
+   * @returns `txid:vout` keys of the address's token outputs.
+   */
   private async tokenOutpoints(address: string): Promise<Set<string>> {
     try {
       return new Set((await this.lwd.getAddressTokens([address])).map(key));

@@ -93,10 +93,24 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "obj
 const isHex = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length % 2 === 0 && /^[0-9a-f]*$/.test(v);
 const isDecimal = (v: unknown): v is string => typeof v === "string" && /^(0|[1-9][0-9]{0,17})$/.test(v);
 
+/**
+ * Shape check shared by every payload carrying a voucher: lowercase-hex `tx` and a decimal
+ * `cumulative` of at most 18 digits.
+ *
+ * @param v - The payload (or its nested `voucher`).
+ * @returns Whether both fields are well formed.
+ */
 function isVoucherFields(v: Record<string, unknown>): boolean {
   return isHex(v.tx) && isDecimal(v.cumulative);
 }
 
+/**
+ * Structural guard for the four payload types (`open`, `voucher`, `close`, `claim`); it checks
+ * shapes only, never transactions or signatures.
+ *
+ * @param v - The decoded `payload` of a PaymentPayload.
+ * @returns Whether `v` is a well-formed {@link BatchPayload}.
+ */
 export function isBatchPayload(v: unknown): v is BatchPayload {
   if (!isRecord(v)) return false;
   switch (v.type) {
@@ -112,6 +126,16 @@ export function isBatchPayload(v: unknown): v is BatchPayload {
   }
 }
 
+/**
+ * Reads an integer field of `extra` in the inclusive range `[min, max]`.
+ *
+ * @param v - The raw value.
+ * @param what - The field name, for the error message.
+ * @param min - Smallest accepted value.
+ * @param max - Largest accepted value.
+ * @returns The value.
+ * @throws BatchSettlementError with `REQUIREMENTS` when it is not such an integer.
+ */
 function int(v: unknown, what: string, min: number, max: number): number {
   if (typeof v !== "number" || !Number.isInteger(v) || v < min || v > max) {
     throw new BatchSettlementError(BatchError.REQUIREMENTS, `extra.${what} must be an integer in [${min}, ${max}]`);
@@ -119,12 +143,28 @@ function int(v: unknown, what: string, min: number, max: number): number {
   return v;
 }
 
+/**
+ * Reads a positive amount given as a decimal string (zatoshis for YEC, cents for YED).
+ *
+ * @param v - The raw value.
+ * @param what - The field name, for the error message.
+ * @returns The amount.
+ * @throws BatchSettlementError with `REQUIREMENTS` when it is not a positive decimal string.
+ */
 function amount(v: unknown, what: string): bigint {
   if (!isDecimal(v) || BigInt(v) <= 0n) throw new BatchSettlementError(BatchError.REQUIREMENTS, `${what} must be a positive decimal string`);
   return BigInt(v);
 }
 
-/** Validates a `batch-settlement` requirements entry and returns its terms. */
+/**
+ * Validates a `batch-settlement` requirements entry and returns its terms: scheme, network and
+ * asset, a compressed `serverPubKey`, `closeMarginBlocks < minLockBlocks`, unsponsored fees, and a
+ * confirmation policy in [-1, 20] that is at least 0 for YED.
+ *
+ * @param req - The requirements entry.
+ * @returns The parsed terms.
+ * @throws BatchSettlementError with `REQUIREMENTS` (or `invalid_network`) on the first violation.
+ */
 export function parseTerms(req: PaymentRequirements): BatchTerms {
   if (req.scheme !== BATCH_SETTLEMENT_SCHEME) throw new BatchSettlementError(BatchError.REQUIREMENTS, `scheme ${req.scheme}`);
   if (!(YCASH_NETWORKS as readonly string[]).includes(req.network)) throw new BatchSettlementError("invalid_network", `network ${req.network}`);
@@ -165,6 +205,9 @@ export function parseTerms(req: PaymentRequirements): BatchTerms {
 /**
  * The `gettxout` confirmations a policy needs: −1 is mempool acceptance (gettxout with mempool
  * reports 0), 0 means in a block, which is the node's 1 (scheme_exact_ycash.md, "Confirmation policy").
+ *
+ * @param confirmations - The policy's `confirmations` value.
+ * @returns The minimum `gettxout` confirmations.
  */
 export function requiredDepth(confirmations: number): number {
   return confirmations < 0 ? 0 : Math.max(1, confirmations);
@@ -173,7 +216,14 @@ export function requiredDepth(confirmations: number): number {
 /** The fields of `accepted` that must equal the requirements (`exact` rule 1). */
 const SERVER_EXTRA_FIELDS = ["serverPubKey", "minLockBlocks", "closeMarginBlocks", "maxDeposit", "closeFee", "areFeesSponsored", "confirmationPolicy"] as const;
 
-/** Envelope rule: `accepted` matches the requirements in every field the server declared. */
+/**
+ * Envelope rule: `accepted` matches the requirements in every field the server declared,
+ * including the server-set `extra` fields (compared by their JSON encoding).
+ *
+ * @param accepted - The requirements the client echoed in its payload.
+ * @param req - The requirements this server offers.
+ * @returns Whether the client accepted exactly this offer.
+ */
 export function sameOffer(accepted: PaymentRequirements, req: PaymentRequirements): boolean {
   if (accepted.scheme !== req.scheme || accepted.network !== req.network || accepted.asset !== req.asset ||
     accepted.amount !== req.amount || accepted.payTo !== req.payTo || accepted.maxTimeoutSeconds !== req.maxTimeoutSeconds) return false;

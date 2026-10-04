@@ -69,6 +69,11 @@ export interface VerifiedVoucher {
   completedHex?: string;
 }
 
+/**
+ * The resource server's side of every channel: it holds the server key S, verifies each voucher
+ * before the handler (taking the channel's in-flight lock), charges the actual price after it, and
+ * closes a channel by completing its highest stored voucher when a close trigger fires.
+ */
 export class ChannelManager {
   readonly ledger: ChannelLedger;
   readonly serverPubKey: Uint8Array;
@@ -80,6 +85,11 @@ export class ChannelManager {
   private readonly lastActivity = new Map<string, number>();
   private readonly cfg: ChannelManagerConfig;
 
+  /**
+   * Creates a manager over the configured store (in memory by default).
+   *
+   * @param cfg - The node, the server key and the timing knobs.
+   */
   constructor(cfg: ChannelManagerConfig) {
     this.cfg = cfg;
     this.chain = cfg.chain;
@@ -91,31 +101,47 @@ export class ChannelManager {
     this.fundingPollMs = cfg.fundingPollMs ?? 500;
   }
 
-  /** The voucher outputs of a channel of `asset` holding D (YEC, or YED with the dollar floor). */
-  protected layoutFor(asset: string, deposit: bigint): VoucherLayout {
-    return layoutFor(asset, deposit);
-  }
-
-  /** Channels this process opened, was told to watch, or resumed from the store. */
+  /**
+   * Channels this process opened, was told to watch, or resumed from the store.
+   *
+   * @returns The tracked channel ids.
+   */
   tracked(): string[] {
     return [...this.lastActivity.keys()];
   }
 
-  /** Watch a channel recorded by another process (after a restart). */
+  /**
+   * Watch a channel recorded by another process (after a restart).
+   *
+   * @param channelId - The channel id.
+   * @param now - The time its idle clock starts from, ms.
+   */
   track(channelId: string, now = Date.now()): void {
     if (!this.lastActivity.has(channelId)) this.lastActivity.set(channelId, now);
   }
 
-  /** Re-tracks every open channel in the store, as of `now`: a restarted server keeps closing them. */
+  /**
+   * Re-tracks every open channel in the store, as of `now`: a restarted server keeps closing them.
+   *
+   * @param now - The time their idle clocks start from, ms.
+   * @returns The ids it re-tracked.
+   */
   async resume(now = Date.now()): Promise<string[]> {
     const ids = await this.ledger.openChannelIds();
     for (const id of ids) this.track(id, now);
     return ids;
   }
 
-  // ------------------------------------------------------------------ verify
-
-  /** Every rule before the handler. On success the channel's in-flight lock is held. */
+  /**
+   * Every rule before the handler. A new `open` is verified, its funding relayed and recorded, and
+   * then waited on up to `fundingWaitMs`; a retried open is checked as a voucher. On success the
+   * channel's in-flight lock is held until `settle` or `release`.
+   *
+   * @param payload - The client's payment payload (`open`, `voucher` or `close`; never `claim`).
+   * @param requirements - The requirements it answers.
+   * @returns The verified voucher, carrying the lock token.
+   * @throws BatchSettlementError with the failing rule's reason.
+   */
   async verify(payload: PaymentPayload, requirements: PaymentRequirements): Promise<VerifiedVoucher> {
     if (payload.x402Version !== 2 || !sameOffer(payload.accepted, requirements)) {
       throw new BatchSettlementError(BatchError.REQUIREMENTS, "accepted does not match the requirements");
@@ -149,6 +175,202 @@ export class ChannelManager {
     }
   }
 
+  /**
+   * After the handler: charges the actual price (≤ the ceiling) and releases the lock; a client
+   * `close` is broadcast instead. Closes the channel when the next request would not fit.
+   *
+   * @param v - The voucher `verify` returned.
+   * @param actualCharge - The price charged, in the asset's base units.
+   * @returns The settle response, with the charge and the channel state in `extra`.
+   * @throws BatchSettlementError when the charge is negative or above the ceiling (the lock is still released).
+   */
+  async settle(v: VerifiedVoucher, actualCharge: bigint): Promise<SettleResponse> {
+    if (v.kind === "close") return this.settleClientClose(v);
+    let charged: bigint;
+    try {
+      if (actualCharge < 0n || actualCharge > v.ceiling) {
+        throw new BatchSettlementError(BatchError.CUMULATIVE_MISMATCH, `charge ${actualCharge} is above the ceiling ${v.ceiling}`);
+      }
+      charged = await this.ledger.addCharge(v.channelId, actualCharge);
+    } finally {
+      await this.ledger.release(v.channelId, v.token);
+    }
+    this.lastActivity.set(v.channelId, Date.now());
+    const state = await this.channelState(v.channelId);
+    const response: SettleResponse = {
+      success: true,
+      transaction: v.kind === "open" ? v.fundingTxid : "",
+      network: v.network,
+      payer: v.channelId,
+      amount: "",
+      extra: { commitmentId: commitmentIdOf(v.channelId, v.cumulative), chargedAmount: actualCharge.toString(), channelState: state },
+    };
+    // exhausted: the deposit is fully signed, or the next voucher at the ceiling would exceed it
+    // (YED: or leave the client less than $1.00)
+    const asset = (await this.ledger.get(v.channelId))?.terms.asset ?? "";
+    if (isExhausted(asset, BigInt(state.deposit), charged, v.ceiling, v.cumulative)) {
+      await this.close(v.channelId, "exhausted").catch((e: unknown) => this.log(`exhausted close of ${v.channelId} failed: ${String(e)}`));
+    }
+    return response;
+  }
+
+  /**
+   * A verified request that will not be settled (the handler failed): charged is unchanged.
+   *
+   * @param v - The voucher `verify` returned; its lock is given back.
+   */
+  async release(v: VerifiedVoucher): Promise<void> {
+    await this.ledger.release(v.channelId, v.token);
+  }
+
+  /**
+   * Completes the highest stored voucher with sigS and broadcasts it. Idempotent: a channel
+   * already closing or closed returns its close txid (undefined while another close is running,
+   * or when the channel was spent by something else, such as the client's refund).
+   * A channel with no stored voucher is marked closed without a transaction.
+   *
+   * @param channelId - The channel id.
+   * @param reason - The trigger, reported to `onClose` and the log.
+   * @returns The close txid, or undefined as above.
+   * @throws When completion fails while the channel output is still unspent (the channel is reopened).
+   */
+  async close(channelId: string, reason: CloseReason = "demand"): Promise<string | undefined> {
+    if (!(await this.ledger.claimClose(channelId))) return (await this.ledger.get(channelId))?.closeTxid;
+    const ch = await this.ledger.get(channelId);
+    if (!ch) throw new BatchSettlementError(BatchError.UNKNOWN_CHANNEL, channelId);
+    if (!ch.voucherTx) {
+      await this.ledger.markClosed(channelId, undefined);
+      return undefined;
+    }
+    const channel = this.channelOf(ch.terms);
+    let hex: string;
+    try {
+      const { branchId } = await chainContext(this.chain, ch.terms.network as BatchTerms["network"]);
+      hex = await checkCompleted(this.chain, completeVoucher(parseTx(ch.voucherTx), channel, this.serverPrivKey, branchId));
+    } catch (e) {
+      if (!(await this.chain.getTxOut(channel.outpoint.txid, channel.outpoint.vout, true))) {
+        await this.ledger.markClosed(channelId, undefined); // spent by a refund or an earlier close
+        return undefined;
+      }
+      await this.ledger.reopen(channelId);
+      throw e;
+    }
+    const txid = await this.broadcastClose(channelId, hex);
+    this.log(`close ${channelId} (${reason}) at ${ch.signedCumulative}: ${txid ?? "channel already spent"}`);
+    this.cfg.onClose?.({ channelId, reason, txid, cumulative: ch.signedCumulative });
+    return txid;
+  }
+
+  /**
+   * Runs the close triggers for every tracked open channel: margin (tip ≥ t − margin) and idle.
+   * Channels no longer open are untracked.
+   *
+   * @param tip - The chain height; fetched from the node when omitted.
+   * @param now - The current time, ms.
+   * @returns The channels it closed, with the trigger and txid.
+   */
+  async sweep(tip?: number, now = Date.now()): Promise<{ channelId: string; reason: CloseReason; txid: string | undefined }[]> {
+    const height = tip ?? (await this.chain.getBlockCount());
+    const closed: { channelId: string; reason: CloseReason; txid: string | undefined }[] = [];
+    for (const id of this.tracked()) {
+      const ch = await this.ledger.get(id);
+      if (!ch || ch.state !== CHANNEL_OPEN) {
+        this.lastActivity.delete(id);
+        continue;
+      }
+      let reason: CloseReason | null = null;
+      if (height >= ch.terms.refundHeight - ch.terms.closeMarginBlocks) reason = "margin";
+      else if (now - (this.lastActivity.get(id) ?? now) >= this.idleMs) reason = "idle";
+      if (reason) closed.push({ channelId: id, reason, txid: await this.close(id, reason) });
+    }
+    return closed;
+  }
+
+  /**
+   * The server's watcher: closes at t − margin, and sweeps idle channels each tick. Its first tick
+   * resumes the store's open channels (retried on the next tick if that fails).
+   *
+   * @param opts - Watcher options.
+   * @param opts.pollMs - How often the watcher polls the tip, ms (default 15 s).
+   * @param opts.warn - Where the once-per-channel margin warning goes (default console.warn).
+   * @returns The watcher, not yet started.
+   */
+  watcher(opts: { pollMs?: number; warn?: (msg: string) => void } = {}): ChannelWatcher {
+    // The first tick re-tracks the store's open channels (tracked() is in memory only).
+    let resumed: Promise<unknown> | undefined;
+    return new ChannelWatcher({
+      ...opts,
+      tip: () => this.chain.getBlockCount(),
+      channels: async () => {
+        await (resumed ??= this.resume().catch((e: unknown) => {
+          resumed = undefined;
+          throw e;
+        }));
+        const open: WatchedChannel[] = [];
+        for (const id of this.tracked()) {
+          const ch = await this.ledger.get(id);
+          if (ch?.state === CHANNEL_OPEN) open.push({ channelId: id, refundHeight: ch.terms.refundHeight, closeMarginBlocks: ch.terms.closeMarginBlocks });
+        }
+        return open;
+      },
+      onMargin: async (ch) => {
+        await this.close(ch.channelId, "margin");
+      },
+      onTick: async (tip) => {
+        await this.sweep(tip);
+      },
+    });
+  }
+
+  /**
+   * The channel's public state, as returned in a settle response's `extra.channelState`.
+   *
+   * @param channelId - The channel id.
+   * @returns Deposit, charged and signed cumulatives (decimal strings), refund height and margin.
+   * @throws BatchSettlementError when the channel is unknown.
+   */
+  async channelState(channelId: string): Promise<BatchChannelState> {
+    const ch = await this.ledger.get(channelId);
+    if (!ch) throw new BatchSettlementError(BatchError.UNKNOWN_CHANNEL, channelId);
+    return {
+      channelId,
+      deposit: ch.terms.deposit,
+      chargedCumulative: ch.chargedCumulative.toString(),
+      signedCumulative: ch.signedCumulative.toString(),
+      refundHeight: ch.terms.refundHeight,
+      closeMarginBlocks: ch.terms.closeMarginBlocks,
+    };
+  }
+
+  /**
+   * The voucher outputs of a channel of `asset` holding D (YEC, or YED with the dollar floor).
+   * Protected so a test can substitute a layout.
+   *
+   * @param asset - The channel's asset.
+   * @param deposit - D, in the asset's base units.
+   * @returns The voucher output layout.
+   */
+  protected layoutFor(asset: string, deposit: bigint): VoucherLayout {
+    return layoutFor(asset, deposit);
+  }
+
+  /**
+   * The voucher rules, numbered as in the spec: known and open, the close margin (which also triggers
+   * a margin close), the funding output unspent at depth, the amount bounds, the completed voucher
+   * accepted by the node's script verifier, and the compare-and-set store. A client `close` must sit
+   * exactly at the charged total (or the YED dollar floor) and is not stored.
+   *
+   * @param kind - The payload type the voucher came in.
+   * @param channelId - The channel id.
+   * @param txHex - The client-signed voucher.
+   * @param cumulative - Its cumulative, in the asset's base units.
+   * @param terms - The offer, which must match the channel's terms.
+   * @param ctx - The chain context.
+   * @param ctx.tip - The chain height.
+   * @param ctx.branchId - The consensus branch id the voucher's sighash commits to.
+   * @returns The verified voucher, holding the lock.
+   * @throws BatchSettlementError with the failing rule's reason; the lock is released first.
+   */
   private async verifyVoucher(
     kind: VerifiedVoucher["kind"],
     channelId: string,
@@ -220,47 +442,12 @@ export class ChannelManager {
     }
   }
 
-  // ------------------------------------------------------------------ settle
-
   /**
-   * After the handler: charges the actual price (≤ the ceiling) and releases the lock; a client
-   * `close` is broadcast instead. Closes the channel when the next request would not fit.
+   * Broadcasts a client's completed close, if this caller wins the open-to-closing transition.
+   *
+   * @param v - The verified `close` voucher.
+   * @returns The settle response with the close txid.
    */
-  async settle(v: VerifiedVoucher, actualCharge: bigint): Promise<SettleResponse> {
-    if (v.kind === "close") return this.settleClientClose(v);
-    let charged: bigint;
-    try {
-      if (actualCharge < 0n || actualCharge > v.ceiling) {
-        throw new BatchSettlementError(BatchError.CUMULATIVE_MISMATCH, `charge ${actualCharge} is above the ceiling ${v.ceiling}`);
-      }
-      charged = await this.ledger.addCharge(v.channelId, actualCharge);
-    } finally {
-      await this.ledger.release(v.channelId, v.token);
-    }
-    this.lastActivity.set(v.channelId, Date.now());
-    const state = await this.channelState(v.channelId);
-    const response: SettleResponse = {
-      success: true,
-      transaction: v.kind === "open" ? v.fundingTxid : "",
-      network: v.network,
-      payer: v.channelId,
-      amount: "",
-      extra: { commitmentId: commitmentIdOf(v.channelId, v.cumulative), chargedAmount: actualCharge.toString(), channelState: state },
-    };
-    // exhausted: the deposit is fully signed, or the next voucher at the ceiling would exceed it
-    // (YED: or leave the client less than $1.00)
-    const asset = (await this.ledger.get(v.channelId))?.terms.asset ?? "";
-    if (isExhausted(asset, BigInt(state.deposit), charged, v.ceiling, v.cumulative)) {
-      await this.close(v.channelId, "exhausted").catch((e: unknown) => this.log(`exhausted close of ${v.channelId} failed: ${String(e)}`));
-    }
-    return response;
-  }
-
-  /** A verified request that will not be settled (the handler failed): charged is unchanged. */
-  async release(v: VerifiedVoucher): Promise<void> {
-    await this.ledger.release(v.channelId, v.token);
-  }
-
   private async settleClientClose(v: VerifiedVoucher): Promise<SettleResponse> {
     try {
       if (!(await this.ledger.claimClose(v.channelId))) throw new BatchSettlementError(BatchError.CHANNEL_CLOSING, "already closing");
@@ -275,40 +462,15 @@ export class ChannelManager {
     }
   }
 
-  // ------------------------------------------------------------------ close
-
   /**
-   * Completes the highest stored voucher with sigS and broadcasts it. Idempotent: a channel
-   * already closing or closed returns its close txid (undefined while another close is running,
-   * or when the channel was spent by something else, such as the client's refund).
+   * Broadcasts a completed close and marks the channel closed. A rejected broadcast whose channel
+   * output is already spent closes the channel anyway (with this txid only if it is the spender);
+   * otherwise the channel is reopened and the error rethrown.
+   *
+   * @param channelId - The channel id.
+   * @param hex - The completed close transaction.
+   * @returns The close txid, or undefined when something else spent the channel.
    */
-  async close(channelId: string, reason: CloseReason = "demand"): Promise<string | undefined> {
-    if (!(await this.ledger.claimClose(channelId))) return (await this.ledger.get(channelId))?.closeTxid;
-    const ch = await this.ledger.get(channelId);
-    if (!ch) throw new BatchSettlementError(BatchError.UNKNOWN_CHANNEL, channelId);
-    if (!ch.voucherTx) {
-      await this.ledger.markClosed(channelId, undefined);
-      return undefined;
-    }
-    const channel = this.channelOf(ch.terms);
-    let hex: string;
-    try {
-      const { branchId } = await chainContext(this.chain, ch.terms.network as BatchTerms["network"]);
-      hex = await checkCompleted(this.chain, completeVoucher(parseTx(ch.voucherTx), channel, this.serverPrivKey, branchId));
-    } catch (e) {
-      if (!(await this.chain.getTxOut(channel.outpoint.txid, channel.outpoint.vout, true))) {
-        await this.ledger.markClosed(channelId, undefined); // spent by a refund or an earlier close
-        return undefined;
-      }
-      await this.ledger.reopen(channelId);
-      throw e;
-    }
-    const txid = await this.broadcastClose(channelId, hex);
-    this.log(`close ${channelId} (${reason}) at ${ch.signedCumulative}: ${txid ?? "channel already spent"}`);
-    this.cfg.onClose?.({ channelId, reason, txid, cumulative: ch.signedCumulative });
-    return txid;
-  }
-
   private async broadcastClose(channelId: string, hex: string): Promise<string | undefined> {
     const txid = txidOf(hexToBytes(hex));
     try {
@@ -331,69 +493,13 @@ export class ChannelManager {
   }
 
   /**
-   * Runs the close triggers for every tracked open channel: margin (tip ≥ t − margin) and idle.
-   * Returns the channels it closed.
+   * Broadcasts the funding transaction; "already in chain" or an output already visible counts as success.
+   *
+   * @param hex - The funding transaction.
+   * @param txid - Its txid, display-order hex.
+   * @param vout - The channel output index.
+   * @throws BatchSettlementError (`funding`) when the relay fails and the output is not visible.
    */
-  async sweep(tip?: number, now = Date.now()): Promise<{ channelId: string; reason: CloseReason; txid: string | undefined }[]> {
-    const height = tip ?? (await this.chain.getBlockCount());
-    const closed: { channelId: string; reason: CloseReason; txid: string | undefined }[] = [];
-    for (const id of this.tracked()) {
-      const ch = await this.ledger.get(id);
-      if (!ch || ch.state !== CHANNEL_OPEN) {
-        this.lastActivity.delete(id);
-        continue;
-      }
-      let reason: CloseReason | null = null;
-      if (height >= ch.terms.refundHeight - ch.terms.closeMarginBlocks) reason = "margin";
-      else if (now - (this.lastActivity.get(id) ?? now) >= this.idleMs) reason = "idle";
-      if (reason) closed.push({ channelId: id, reason, txid: await this.close(id, reason) });
-    }
-    return closed;
-  }
-
-  /** The server's watcher: closes at t − margin, and sweeps idle channels each tick. */
-  watcher(opts: { pollMs?: number; warn?: (msg: string) => void } = {}): ChannelWatcher {
-    // The first tick re-tracks the store's open channels (tracked() is in memory only).
-    let resumed: Promise<unknown> | undefined;
-    return new ChannelWatcher({
-      ...opts,
-      tip: () => this.chain.getBlockCount(),
-      channels: async () => {
-        await (resumed ??= this.resume().catch((e: unknown) => {
-          resumed = undefined;
-          throw e;
-        }));
-        const open: WatchedChannel[] = [];
-        for (const id of this.tracked()) {
-          const ch = await this.ledger.get(id);
-          if (ch?.state === CHANNEL_OPEN) open.push({ channelId: id, refundHeight: ch.terms.refundHeight, closeMarginBlocks: ch.terms.closeMarginBlocks });
-        }
-        return open;
-      },
-      onMargin: async (ch) => {
-        await this.close(ch.channelId, "margin");
-      },
-      onTick: async (tip) => {
-        await this.sweep(tip);
-      },
-    });
-  }
-
-  async channelState(channelId: string): Promise<BatchChannelState> {
-    const ch = await this.ledger.get(channelId);
-    if (!ch) throw new BatchSettlementError(BatchError.UNKNOWN_CHANNEL, channelId);
-    return {
-      channelId,
-      deposit: ch.terms.deposit,
-      chargedCumulative: ch.chargedCumulative.toString(),
-      signedCumulative: ch.signedCumulative.toString(),
-      refundHeight: ch.terms.refundHeight,
-      closeMarginBlocks: ch.terms.closeMarginBlocks,
-    };
-  }
-
-  // ------------------------------------------------------------------ helpers
-
   private async relayFunding(hex: string, txid: string, vout: number): Promise<void> {
     try {
       await this.chain.sendRawTransaction(hex);
@@ -404,6 +510,12 @@ export class ChannelManager {
     }
   }
 
+  /**
+   * Polls the funding output until it reaches the channel's policy depth or `fundingWaitMs` passes.
+   *
+   * @param channelId - A recorded channel.
+   * @throws BatchSettlementError (`funding_depth`) at the deadline.
+   */
   private async waitForDepth(channelId: string): Promise<void> {
     const ch = (await this.ledger.get(channelId)) as LedgerChannel;
     const want = requiredDepth(ch.terms.confirmations);
@@ -418,6 +530,16 @@ export class ChannelManager {
     }
   }
 
+  /**
+   * The ledger record of a newly verified channel.
+   *
+   * @param ch - The channel rebuilt from its funding output.
+   * @param channelId - Its id.
+   * @param fundingTx - The raw funding transaction.
+   * @param t - The offer it was opened under.
+   * @param deposit - D, in the asset's base units.
+   * @returns The terms, bigints as decimal strings (without `returnScript`).
+   */
   private termsOf(ch: Channel, channelId: string, fundingTx: string, t: BatchTerms, deposit: bigint): ChannelTerms {
     return {
       channelId,
@@ -438,6 +560,12 @@ export class ChannelManager {
     };
   }
 
+  /**
+   * Rebuilds the channel from its stored terms.
+   *
+   * @param t - The stored terms.
+   * @returns The channel.
+   */
   private channelOf(t: ChannelTerms): Channel {
     return channelFromScript({
       outpoint: { txid: t.fundingTxid, vout: t.vout },
@@ -448,13 +576,24 @@ export class ChannelManager {
     });
   }
 
-  /** A voucher is checked under the terms the channel was opened with. */
+  /**
+   * A voucher is checked under the terms the channel was opened with.
+   *
+   * @param ch - The stored channel.
+   * @param t - The terms of the current request.
+   * @throws BatchSettlementError when network, asset, payTo or close fee differ.
+   */
   private checkSameTerms(ch: LedgerChannel, t: BatchTerms): void {
     if (ch.terms.network !== t.network || ch.terms.asset !== t.asset || ch.terms.payTo !== t.payTo || BigInt(ch.terms.closeFee) !== t.closeFee) {
       throw new BatchSettlementError(BatchError.REQUIREMENTS, "the requirements differ from the channel's terms");
     }
   }
 
+  /**
+   * Logs through the configured sink, prefixed with the scheme name.
+   *
+   * @param msg - The message.
+   */
   private log(msg: string): void {
     this.cfg.log?.(`[batch-settlement] ${msg}`);
   }

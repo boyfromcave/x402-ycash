@@ -42,7 +42,13 @@ export const OP = {
 /** A script element: a number is an opcode, bytes are a data push, a bigint is a number push. */
 export type ScriptItem = number | bigint | Uint8Array;
 
-/** The minimal push of `data` (CheckMinimalPush, src/script/interpreter.cpp). */
+/**
+ * The minimal push of `data` (CheckMinimalPush, src/script/interpreter.cpp): a small-integer
+ * opcode for single bytes 1..16 and 0x81, otherwise the shortest length prefix.
+ *
+ * @param data - The bytes to push.
+ * @returns The push opcode(s) followed by the data.
+ */
 export function pushData(data: Uint8Array): Uint8Array {
   const n = data.length;
   if (n === 0) return Uint8Array.of(OP.OP_0);
@@ -59,7 +65,12 @@ export function pushData(data: Uint8Array): Uint8Array {
   return w.bytes(data).finish();
 }
 
-/** CScriptNum serialisation: little-endian magnitude with a sign bit. */
+/**
+ * CScriptNum serialisation: minimal little-endian magnitude with a sign bit; zero is empty.
+ *
+ * @param n - The number to encode.
+ * @returns The encoded number, without a push opcode.
+ */
 export function scriptNum(n: bigint | number): Uint8Array {
   let v = BigInt(n);
   if (v === 0n) return new Uint8Array();
@@ -76,6 +87,13 @@ export function scriptNum(n: bigint | number): Uint8Array {
   return Uint8Array.from(out);
 }
 
+/**
+ * Decodes a CScriptNum (little-endian magnitude, sign in the top bit of the last byte). Does not
+ * check minimality or a length limit.
+ *
+ * @param b - The encoded number.
+ * @returns The value.
+ */
 export function decodeScriptNum(b: Uint8Array): bigint {
   if (b.length === 0) return 0n;
   let v = 0n;
@@ -85,7 +103,12 @@ export function decodeScriptNum(b: Uint8Array): bigint {
   return v;
 }
 
-/** Push a number as CScript << int64 does: OP_0, OP_1NEGATE, OP_1..OP_16, else a CScriptNum push. */
+/**
+ * Push a number as CScript << int64 does: OP_0, OP_1NEGATE, OP_1..OP_16, else a CScriptNum push.
+ *
+ * @param n - The number to push.
+ * @returns The push.
+ */
 export function pushInt(n: bigint | number): Uint8Array {
   const v = BigInt(n);
   if (v === 0n) return Uint8Array.of(OP.OP_0);
@@ -94,6 +117,13 @@ export function pushInt(n: bigint | number): Uint8Array {
   return pushData(scriptNum(v));
 }
 
+/**
+ * Assembles a script from opcodes, minimal data pushes and number pushes.
+ *
+ * @param items - The script elements, in order.
+ * @returns The serialized script.
+ * @throws Error when a number item is not a byte-sized opcode.
+ */
 export function buildScript(items: readonly ScriptItem[]): Uint8Array {
   return concatBytes(
     ...items.map((it) => {
@@ -111,7 +141,13 @@ export interface ScriptChunk {
   data?: Uint8Array;
 }
 
-/** Split a script into opcodes and pushes; throws on a truncated push. */
+/**
+ * Split a script into opcodes and pushes.
+ *
+ * @param script - The serialized script.
+ * @returns The chunks, in order.
+ * @throws Error on a truncated push.
+ */
 export function parseScript(script: Uint8Array): ScriptChunk[] {
   const r = new ByteReader(script);
   const out: ScriptChunk[] = [];
@@ -129,27 +165,56 @@ export function parseScript(script: Uint8Array): ScriptChunk[] {
   return out;
 }
 
+/**
+ * Guards that a hash is 20 bytes before it goes into a template.
+ *
+ * @param h - The hash.
+ * @param what - The name used in the error message.
+ * @returns `h` unchanged.
+ * @throws Error when `h` is not 20 bytes.
+ */
 function check20(h: Uint8Array, what: string): Uint8Array {
   if (h.length !== 20) throw new Error(`${what} must be 20 bytes`);
   return h;
 }
 
-/** OP_DUP OP_HASH160 <pkh> OP_EQUALVERIFY OP_CHECKSIG */
+/**
+ * The P2PKH scriptPubKey: OP_DUP OP_HASH160 <pkh> OP_EQUALVERIFY OP_CHECKSIG.
+ *
+ * @param pkh - The 20-byte public key hash.
+ * @returns The script.
+ */
 export function p2pkhScript(pkh: Uint8Array): Uint8Array {
   return buildScript([OP.OP_DUP, OP.OP_HASH160, check20(pkh, "key hash"), OP.OP_EQUALVERIFY, OP.OP_CHECKSIG]);
 }
 
-/** OP_HASH160 <scriptHash> OP_EQUAL */
+/**
+ * The P2SH scriptPubKey: OP_HASH160 <scriptHash> OP_EQUAL.
+ *
+ * @param scriptHash - The 20-byte redeem script hash.
+ * @returns The script.
+ */
 export function p2shScript(scriptHash: Uint8Array): Uint8Array {
   return buildScript([OP.OP_HASH160, check20(scriptHash, "script hash"), OP.OP_EQUAL]);
 }
 
-/** OP_RETURN <data>; standard up to 80 data bytes, one per tx (src/script/standard.h:34). */
+/**
+ * OP_RETURN <data>; standard up to 80 data bytes, one per tx (src/script/standard.h:34). The size is
+ * not checked here.
+ *
+ * @param data - The payload.
+ * @returns The script.
+ */
 export function opReturnScript(data: Uint8Array): Uint8Array {
   return buildScript([OP.OP_RETURN, data]);
 }
 
-/** The key hash of a P2PKH scriptPubKey, or null. */
+/**
+ * Extracts the key hash of an exact P2PKH template.
+ *
+ * @param spk - The scriptPubKey.
+ * @returns The 20-byte key hash, or null if `spk` is not P2PKH.
+ */
 export function p2pkhHash(spk: Uint8Array): Uint8Array | null {
   return spk.length === 25 && spk[0] === OP.OP_DUP && spk[1] === OP.OP_HASH160 && spk[2] === 20 &&
     spk[23] === OP.OP_EQUALVERIFY && spk[24] === OP.OP_CHECKSIG
@@ -157,14 +222,25 @@ export function p2pkhHash(spk: Uint8Array): Uint8Array | null {
     : null;
 }
 
-/** The script hash of a P2SH scriptPubKey, or null. */
+/**
+ * Extracts the script hash of an exact P2SH template.
+ *
+ * @param spk - The scriptPubKey.
+ * @returns The 20-byte script hash, or null if `spk` is not P2SH.
+ */
 export function p2shHash(spk: Uint8Array): Uint8Array | null {
   return spk.length === 23 && spk[0] === OP.OP_HASH160 && spk[1] === 20 && spk[22] === OP.OP_EQUAL
     ? spk.slice(2, 22)
     : null;
 }
 
-/** <sig> <pubkey> */
+/**
+ * The P2PKH scriptSig: <sig> <pubkey>.
+ *
+ * @param sig - The DER signature with its hash-type byte.
+ * @param pubkey - The serialized public key.
+ * @returns The scriptSig.
+ */
 export function p2pkhScriptSig(sig: Uint8Array, pubkey: Uint8Array): Uint8Array {
   return buildScript([sig, pubkey]);
 }
@@ -173,6 +249,10 @@ export function p2pkhScriptSig(sig: Uint8Array, pubkey: Uint8Array): Uint8Array 
  * A P2SH scriptSig: the items (opcodes such as OP.OP_0 / OP.OP_1, or byte pushes) followed by a
  * push of the redeem script. The channel close is
  * `p2shScriptSig([OP.OP_0, sigC, sigS, OP.OP_1], rs)` and the refund `p2shScriptSig([sigC, OP.OP_0], rs)`.
+ *
+ * @param items - The redeem script's arguments, in push order.
+ * @param redeemScript - The redeem script, pushed last.
+ * @returns The scriptSig.
  */
 export function p2shScriptSig(items: readonly ScriptItem[], redeemScript: Uint8Array): Uint8Array {
   return buildScript([...items, redeemScript]);

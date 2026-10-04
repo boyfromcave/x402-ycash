@@ -53,7 +53,12 @@ const TYPE_NAMES: ReadonlyMap<number, PayloadTypeName> = new Map([
   [PayloadType.ATTESTOR_REVIVE, "revive"],
 ]);
 
-/** The node's name for a type byte, or undefined for a reserved one. */
+/**
+ * The node's name for a payload type byte.
+ *
+ * @param typeByte - The payload's type byte.
+ * @returns The RPC name, or undefined for a reserved type.
+ */
 export function payloadTypeName(typeByte: number): PayloadTypeName | undefined {
   return TYPE_NAMES.get(typeByte);
 }
@@ -135,6 +140,12 @@ export interface PayloadError {
   readonly error: PayloadDecodeError;
 }
 
+/**
+ * Narrows a decodePayload result to the failure case.
+ *
+ * @param x - A decodePayload result.
+ * @returns True when the bytes were not a Yellowback payload.
+ */
 export function isPayloadError(x: Payload | PayloadError): x is PayloadError {
   return "error" in x;
 }
@@ -150,32 +161,76 @@ const U32_MAX = 0xffff_ffff;
 /** Bounds-checked little-endian reader. Callers check sizes first, so a short read is a bug guard. */
 class Reader {
   private pos = 0;
+
+  /**
+   * Starts reading at offset 0.
+   *
+   * @param data - The payload bytes.
+   */
   constructor(private readonly data: Uint8Array) {}
+
+  /**
+   * Reads one byte.
+   *
+   * @returns The byte value.
+   * @throws RangeError past the end.
+   */
   u8(): number {
     const v = this.data[this.pos];
     if (v === undefined) throw new RangeError("short read");
     this.pos += 1;
     return v;
   }
+
+  /**
+   * Reads a little-endian u16.
+   *
+   * @returns The value.
+   */
   u16(): number {
     return this.u8() | (this.u8() << 8);
   }
+
+  /**
+   * Reads a little-endian u32.
+   *
+   * @returns The value, unsigned.
+   */
   u32(): number {
     // >>> 0 keeps the top byte unsigned.
     return (this.u8() | (this.u8() << 8) | (this.u8() << 16) | (this.u8() << 24)) >>> 0;
   }
+
+  /**
+   * Reads `n` bytes.
+   *
+   * @param n - The number of bytes.
+   * @returns A copy of those bytes.
+   * @throws RangeError when fewer than `n` bytes remain.
+   */
   bytes(n: number): Uint8Array {
     if (this.pos + n > this.data.length) throw new RangeError("short read");
     const out = this.data.slice(this.pos, this.pos + n);
     this.pos += n;
     return out;
   }
+
+  /**
+   * Whether every byte has been read.
+   *
+   * @returns True at the end of the data.
+   */
   atEnd(): boolean {
     return this.pos === this.data.length;
   }
 }
 
-/** ValidAssignments (payload.cpp:90-99): no zero cents, no duplicate vout, in that order. */
+/**
+ * ValidAssignments (payload.cpp:90-99): no zero cents, no duplicate vout, in that order.
+ *
+ * @param assignments - The decoded or to-be-encoded assignments.
+ * @returns The first codec error, or undefined when they are well-formed.
+ */
 function assignmentsError(assignments: readonly Assignment[]): PayloadDecodeError | undefined {
   const seen = new Set<number>();
   for (const a of assignments) {
@@ -186,19 +241,39 @@ function assignmentsError(assignments: readonly Assignment[]): PayloadDecodeErro
   return undefined;
 }
 
+/**
+ * Reads `count` (u8 vout, u32 cents) pairs.
+ *
+ * @param r - The reader, positioned at the first pair.
+ * @param count - The number of pairs.
+ * @returns The assignments in payload order.
+ */
 function readAssignments(r: Reader, count: number): Assignment[] {
   const out: Assignment[] = [];
   for (let i = 0; i < count; i++) out.push({ vout: r.u8(), cents: r.u32() });
   return out;
 }
 
+/**
+ * Hex of bytes in reverse order: an internal-order txid in display (RPC) order.
+ *
+ * @param b - The internal-order bytes.
+ * @returns The display-order hex.
+ */
 function toHexReversed(b: Uint8Array): string {
   let s = "";
   for (let i = b.length - 1; i >= 0; i--) s += (b[i] as number).toString(16).padStart(2, "0");
   return s;
 }
 
-/** DecodeBodyV3 (payload.cpp:239-301). `size` is the whole payload's length. */
+/**
+ * DecodeBodyV3 (payload.cpp:239-301): checks the exact body length for the type, then reads it.
+ *
+ * @param r - The reader, positioned after the four-byte header.
+ * @param type - The payload type byte.
+ * @param size - The whole payload's length, header included.
+ * @returns The decoded payload, or the reason it is non-Yellowback.
+ */
 function decodeBody(r: Reader, type: number, size: number): Payload | PayloadError {
   const bad = (error: PayloadDecodeError): PayloadError => ({ error });
   switch (type) {
@@ -261,6 +336,10 @@ function decodeBody(r: Reader, type: number, size: number): Payload | PayloadErr
 /**
  * DecodePayload (payload.cpp:365-381): the payload, or the reason the bytes are non-Yellowback.
  * Checks that need the transaction (the vout exists and is not the OP_RETURN) are in findPayload.
+ * Never throws.
+ *
+ * @param data - The OP_RETURN's pushed bytes.
+ * @returns The payload, or the decode error.
  */
 export function decodePayload(data: Uint8Array): Payload | PayloadError {
   if (data.length < MIN_PAYLOAD) return { error: "payload_too_short" };
@@ -278,6 +357,13 @@ export function decodePayload(data: Uint8Array): Payload | PayloadError {
   return p;
 }
 
+/**
+ * Refuses an assignment whose fields do not fit the wire types (vout u8, cents u32).
+ *
+ * @param a - The assignment.
+ * @param i - Its index, for the error message.
+ * @throws RangeError when a field is out of range.
+ */
 function checkAssignmentShape(a: Assignment, i: number): void {
   if (!Number.isInteger(a.vout) || a.vout < 0 || a.vout > 0xff) {
     throw new RangeError(`assignment ${i}: vout ${a.vout} is not a u8`);
@@ -292,6 +378,10 @@ function checkAssignmentShape(a: Assignment, i: number): void {
  * (ycash-dd/qa/rpc-tests/test_framework/yellowback_attest.py:360). Throws where the node's encoder
  * returns an empty vector: more than 15 assignments, a zero cents or a duplicate vout. The overlay's
  * range rule (XFER-1, $1.00 to $100,000) is not a codec rule: see validateTransferAssignments.
+ *
+ * @param assignments - The (vout, cents) pairs, in payload order.
+ * @returns The payload bytes, ready to push after OP_RETURN.
+ * @throws RangeError on too many assignments, a field out of range, a zero cents or a duplicate vout.
  */
 export function encodeTransferPayload(assignments: readonly Assignment[]): Uint8Array {
   if (assignments.length > MAX_ASSIGNMENTS) {

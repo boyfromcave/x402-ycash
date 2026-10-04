@@ -20,6 +20,13 @@ export class JsonFile<T> {
   private readonly lockTimeoutMs: number;
   private readonly empty: () => T;
 
+  /**
+   * Binds the document at `path`; nothing is read or created until first use.
+   *
+   * @param path - The document's path; the lock is `<path>.lock`.
+   * @param empty - The document to use while the file does not exist.
+   * @param opts - Lock timing.
+   */
   constructor(path: string, empty: () => T, opts: JsonFileOptions = {}) {
     this.path = path;
     this.lockPath = `${path}.lock`;
@@ -28,6 +35,11 @@ export class JsonFile<T> {
     this.lockTimeoutMs = opts.lockTimeoutMs ?? 10_000;
   }
 
+  /**
+   * Reads the document without the lock (safe: writes are atomic renames).
+   *
+   * @returns The parsed document, or `empty()` when the file does not exist.
+   */
   async read(): Promise<T> {
     try {
       return JSON.parse(await readFile(this.path, "utf8")) as T;
@@ -37,7 +49,13 @@ export class JsonFile<T> {
     }
   }
 
-  /** Runs fn on the current document under the lock; writes it back when fn returns `write: true`. */
+  /**
+   * Runs fn on the current document under the lock; writes it back when fn returns `write: true`.
+   *
+   * @param fn - Mutates the document in place and says whether to persist it.
+   * @returns The `result` fn returned.
+   * @throws Error when the lock cannot be acquired within `lockTimeoutMs`.
+   */
   async update<R>(fn: (doc: T) => { result: R; write: boolean }): Promise<R> {
     const token = await this.lock();
     try {
@@ -50,6 +68,11 @@ export class JsonFile<T> {
     }
   }
 
+  /**
+   * Writes the document to a fsynced temporary file and renames it over the document.
+   *
+   * @param doc - The document.
+   */
   private async write(doc: T): Promise<void> {
     const tmp = `${this.path}.tmp.${process.pid}.${randomBytes(4).toString("hex")}`;
     const fh = await open(tmp, "w");
@@ -62,6 +85,12 @@ export class JsonFile<T> {
     await rename(tmp, this.path);
   }
 
+  /**
+   * Acquires the O_EXCL lock file, backing off up to 20 ms between attempts and breaking stale locks.
+   *
+   * @returns The random token written into the lock, needed to release it.
+   * @throws Error when `lockTimeoutMs` passes.
+   */
   private async lock(): Promise<string> {
     const token = `${process.pid}.${randomBytes(8).toString("hex")}`;
     const deadline = Date.now() + this.lockTimeoutMs;
@@ -85,8 +114,12 @@ export class JsonFile<T> {
     }
   }
 
+  /**
+   * Removes the lock only if it is still ours: if it was broken as stale, someone else may hold it now.
+   *
+   * @param token - The token {@link JsonFile.lock} returned.
+   */
   private async unlock(token: string): Promise<void> {
-    // Only remove our own lock: if it was broken as stale, someone else may hold it now.
     try {
       if ((await readFile(this.lockPath, "utf8")) === token) await unlink(this.lockPath);
     } catch (e) {

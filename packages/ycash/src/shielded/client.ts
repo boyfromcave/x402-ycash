@@ -37,22 +37,47 @@ export interface ShieldedExactClientConfig {
   now?: () => number;
 }
 
-/** The tier a source address gives, from its prefix. */
+/**
+ * The tier a source address gives, from its prefix: a Sapling address is P1, a transparent `s…` one P0.
+ *
+ * @param from - The payer's source address.
+ * @param network - The network, for the Sapling HRP.
+ * @returns The privacy tier.
+ * @throws Error when the address is neither.
+ */
 export function tierOf(from: string, network: YcashNetwork): PrivacyTier {
   if (from.startsWith(SAPLING_HRP[network] + "1")) return "P1";
   if (/^s[1-9A-HJ-NP-Za-km-z]{20,}$/.test(from)) return "P0";
   throw new Error(`${from} is neither a ${network} Sapling address nor a transparent address`);
 }
 
+/**
+ * The `sapling-proof` client: pays an `exact` YEC requirement with the payer node's `z_sendmany`
+ * to the Sapling `payTo`, with the request's memo, and presents the txid as the payload.
+ */
 export class ShieldedExactClient {
   readonly scheme = SCHEME_EXACT;
   private readonly config: ShieldedExactClientConfig;
 
+  /**
+   * Creates a client paying from the configured source.
+   *
+   * @param config - The payer node, source address and z_sendmany options.
+   */
   constructor(config: ShieldedExactClientConfig) {
     this.config = config;
   }
 
-  /** Sends `amount` to `payTo` with the memo, waits for the txid, and returns the payload. */
+  /**
+   * Sends `amount` to `payTo` with the memo, waits for the txid, and returns the payload. Every check
+   * runs before any money moves; on a 6.x node a transparent source sends with `AllowFullyTransparent`
+   * unless a policy is configured.
+   *
+   * @param x402Version - The protocol version, echoed into the payload.
+   * @param requirements - The `sapling-proof` requirement to pay.
+   * @returns The payload carrying the txid.
+   * @throws Error when the requirement is not payable here, or the z_sendmany operation fails or times out.
+   */
   async createPaymentPayload(x402Version: number, requirements: PaymentRequirements): Promise<{ x402Version: number; payload: { txid: string } }> {
     const { tier } = await this.check(requirements);
     const caps = await this.config.rpc.capabilities();
@@ -68,7 +93,14 @@ export class ShieldedExactClient {
     return { x402Version, payload: { txid } };
   }
 
-  /** The requirement is one this client can pay, on the chain its node is on, before any money moves. */
+  /**
+   * The requirement is one this client can pay, on the chain its node is on, before any money moves:
+   * an unexpired `exact` YEC `sapling-proof` upfront offer with a well-formed memo and a Sapling payTo.
+   *
+   * @param requirements - The requirement to pay.
+   * @returns The network and the source's privacy tier.
+   * @throws Error naming the first check that fails.
+   */
   private async check(requirements: PaymentRequirements): Promise<{ network: YcashNetwork; tier: PrivacyTier }> {
     const network = requirements.network as YcashNetwork;
     if (!YCASH_NETWORKS.includes(network)) throw new Error(`not a Ycash network: ${requirements.network}`);

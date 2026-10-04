@@ -19,14 +19,27 @@ export interface ChannelWatcherOptions {
   pollMs?: number;
 }
 
+/**
+ * Polls the tip and reports every channel whose tip has reached `refundHeight - closeMarginBlocks`,
+ * warning once per channel. Ticks never overlap: a slow pass skips the next interval.
+ */
 export class ChannelWatcher {
   private timer: ReturnType<typeof setInterval> | undefined;
   private running: Promise<void> | undefined;
   private readonly warned = new Set<string>();
 
+  /**
+   * Creates an idle watcher; call {@link ChannelWatcher.start} to begin polling.
+   *
+   * @param opts - Tip and channel sources, the margin and tick callbacks, and the poll interval.
+   */
   constructor(private readonly opts: ChannelWatcherOptions) {}
 
-  /** One pass; returns the channels at or past their margin. */
+  /**
+   * Runs one pass: calls `onMargin` for each channel at or past its margin, then `onTick`.
+   *
+   * @returns The channels at or past their margin.
+   */
   async check(): Promise<WatchedChannel[]> {
     const tip = await this.opts.tip();
     const due: WatchedChannel[] = [];
@@ -45,6 +58,10 @@ export class ChannelWatcher {
     return due;
   }
 
+  /**
+   * Starts polling every `pollMs` (default 15 s); a no-op if already started. The timer is
+   * unref'd, so it does not keep the process alive, and a failed pass is only warned.
+   */
   start(): void {
     if (this.timer) return;
     this.timer = setInterval(() => {
@@ -56,6 +73,9 @@ export class ChannelWatcher {
     this.timer.unref?.();
   }
 
+  /**
+   * Stops polling and waits for an in-flight pass to finish.
+   */
   async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;

@@ -46,6 +46,11 @@ export interface ChannelFunder {
 /**
  * How a funding holds its coins: until its expiry height, or, for a funding that never expires
  * (expiryHeight 0), for `holdMs`.
+ *
+ * @param req - The funding request.
+ * @param spentBy - The txid of the signed funding.
+ * @param holdMs - The wall-clock hold for a funding that never expires.
+ * @returns The reservation to record for its coins.
  */
 function holdOf(req: FundingRequest, spentBy: string, holdMs: number): CoinReservation {
   const expiryHeight = req.expiryHeight ?? 0;
@@ -69,7 +74,13 @@ type FunderRpc = Pick<YcashRpc, "listUnspent" | "call" | "signRawTransactionWith
 
 const DEFAULT_HOLD_MS = 1_800_000;
 
-/** The wallet's YED outputs, or none on a node without the Yellowback wallet. */
+/**
+ * The wallet's YED outputs, or none on a node without the Yellowback wallet (`yed_listunspent`
+ * answers −32601).
+ *
+ * @param rpc - The wallet node.
+ * @returns The `yed_listunspent` rows.
+ */
 async function walletTokens(rpc: FunderRpc): Promise<YedCoinRow[]> {
   try {
     return await rpc.call<YedCoinRow[]>("yed_listunspent");
@@ -82,10 +93,16 @@ async function walletTokens(rpc: FunderRpc): Promise<YedCoinRow[]> {
 /**
  * Funds from a node wallet's confirmed transparent P2PKH coins (never coinbase): the SDK builds the
  * transaction at the fee floor, the wallet signs (`signrawtransaction hex`), and the inputs are
- * locked so the wallet cannot spend them again before the server relays (plan X-F13). The lock is
- * lifted once the funding has expired unmined (plan X-F52). Coins holding YED are never spent as
- * plain YEC (that would burn them, plan Y-4); a YED channel spends them in a TRANSFER that assigns D
- * to the channel and returns the rest as YED change. The remainder returns to a new wallet address.
+ * locked so the wallet cannot spend them again before the server relays. The lock is lifted once
+ * the funding has expired unmined. Coins holding YED are never spent as plain YEC (that would burn
+ * them); a YED channel spends them in a TRANSFER that assigns D to the channel and returns the rest
+ * as YED change. The remainder returns to a new wallet address.
+ *
+ * @param rpc - The wallet node.
+ * @param opts - Funder options.
+ * @param opts.reservations - Store for the YED outputs this funder signed away; shared to survive restarts.
+ * @param opts.holdMs - How long a funding that never expires holds its coins (default 30 min).
+ * @returns The funder.
  */
 export function rpcWalletFunder(rpc: FunderRpc, opts: { reservations?: CoinReservationStore; holdMs?: number } = {}): ChannelFunder {
   // YED outputs this funder signed away. The Yellowback wallet keeps all its YED outputs locked
@@ -94,7 +111,11 @@ export function rpcWalletFunder(rpc: FunderRpc, opts: { reservations?: CoinReser
   // Plain YEC coins this funder locked (lockunspent), by the expiry of the funding that spends them.
   const locked = new InMemoryCoinReservationStore();
   const holdMs = opts.holdMs ?? DEFAULT_HOLD_MS;
-  /** Unlocks the plain coins of fundings that expired unmined; a coin a block spent just drops out. */
+  /**
+   * Unlocks the plain coins of fundings that expired unmined; a coin a block spent just drops out.
+   *
+   * @param tip - The tip height the client saw.
+   */
   const unlockExpired = async (tip: number): Promise<void> => {
     const before = [...(await locked.list()).keys()];
     if (before.length === 0) return;
@@ -146,7 +167,20 @@ export function rpcWalletFunder(rpc: FunderRpc, opts: { reservations?: CoinReser
   };
 }
 
-/** The YED funding TRANSFER from the wallet's confirmed, unlocked YED outputs (plan Y-7). */
+/**
+ * Builds and wallet-signs the YED funding TRANSFER from the wallet's confirmed, unlocked YED
+ * outputs, then locks the plain inputs and reserves the YED ones.
+ *
+ * @param rpc - The wallet node.
+ * @param req - The funding request; `deposit` is required, in cents.
+ * @param rows - The wallet's YED outputs not already reserved.
+ * @param yecCoins - Plain YEC coins for V and the fee, largest first.
+ * @param yecChange - The YEC change script.
+ * @param lock - Locks the plain inputs of the signed funding.
+ * @param reserve - Reserves the YED inputs of the signed funding.
+ * @returns The signed funding transaction, hex.
+ * @throws Error when `deposit` is missing or the wallet cannot sign.
+ */
 async function fundYed(
   rpc: FunderRpc,
   req: FundingRequest,
@@ -179,7 +213,14 @@ async function fundYed(
   return signed.hex;
 }
 
-/** The address of a P2PKH or P2SH script (a funder's change script as its return address). */
+/**
+ * The address of a P2PKH or P2SH script (a funder's change script as its return address).
+ *
+ * @param network - The network to encode for.
+ * @param script - The output script.
+ * @returns The transparent address.
+ * @throws Error for any other script type.
+ */
 function addressOfScript(network: YcashNetwork, script: Uint8Array): string {
   const pkh = p2pkhHash(script);
   if (pkh) return encodeAddress(network, "p2pkh", pkh);
@@ -187,7 +228,15 @@ function addressOfScript(network: YcashNetwork, script: Uint8Array): string {
   throw new Error("the change script is neither P2PKH nor P2SH");
 }
 
-/** Funds a YEC channel from known coins with local keys; `privKeys[i]` owns `coins[i]`. The remainder returns to the change script. */
+/**
+ * Funds a YEC channel from known coins with local keys; `privKeys[i]` owns `coins[i]`. The
+ * remainder returns to the change script.
+ *
+ * @param coins - The coins to spend, all of them.
+ * @param privKeys - One private key per coin, in the same order.
+ * @param changeScript - The change script, also the return address (P2PKH or P2SH).
+ * @returns The funder; it refuses YED requests.
+ */
 export function localKeyFunder(coins: readonly FundingInput[], privKeys: readonly Uint8Array[], changeScript: Uint8Array): ChannelFunder {
   return {
     async returnAddress(req) {
@@ -220,6 +269,11 @@ const byValueDesc = <T extends { value: bigint }>(a: T, b: T): number => (a.valu
  * that returns the YED change to the key. The coins of a signed funding are held, in the source's
  * reservations and in this funder, until the funding's expiry height, since the server, not the
  * funder, broadcasts it.
+ *
+ * @param privKey - The key's 32-byte secret.
+ * @param source - Lists (and optionally reserves) the key's coins and YED outputs.
+ * @param compressed - Whether the key's address uses the compressed public key.
+ * @returns The funder.
  */
 export function utxoSourceFunder(privKey: Uint8Array, source: FundingCoinSource, compressed = true): ChannelFunder {
   const pub = pubkeyFromPriv(privKey, compressed);
@@ -230,7 +284,13 @@ export function utxoSourceFunder(privKey: Uint8Array, source: FundingCoinSource,
     const exp = used.get(`${o.txid}:${o.vout}`);
     return exp === undefined || (exp > 0 && req.tip !== undefined && req.tip > exp);
   };
-  /** Holds the signed funding's inputs; false when another spend took one of them meanwhile. */
+  /**
+   * Holds the signed funding's inputs until its expiry height.
+   *
+   * @param req - The funding request.
+   * @param hex - The signed funding.
+   * @returns False when another spend took one of the inputs meanwhile.
+   */
   const hold = async (req: FundingRequest, hex: string): Promise<boolean> => {
     const signed = parseTx(hex);
     const outpoints = signed.vin.map((i) => i.prevout);
@@ -244,7 +304,13 @@ export function utxoSourceFunder(privKey: Uint8Array, source: FundingCoinSource,
       .filter((c) => equalBytes(c.scriptPubKey, script) && free(req, c))
       .sort(byValueDesc)
       .map((c) => ({ outpoint: { txid: c.txid, vout: c.vout }, value: c.value, scriptPubKey: c.scriptPubKey }));
-  /** One selection; undefined when another spend took one of the picked coins meanwhile. */
+  /**
+   * One selection: the largest coins until they cover V and the fee.
+   *
+   * @param req - The funding request.
+   * @param address - The key's P2PKH address.
+   * @returns The signed funding, or undefined when another spend took a picked coin meanwhile.
+   */
   const fundYecOnce = async (req: FundingRequest, address: string): Promise<string | undefined> => {
     const coins = await yecCoins(req, address);
     for (let n = 1; n <= coins.length; n++) {
@@ -285,6 +351,14 @@ export function utxoSourceFunder(privKey: Uint8Array, source: FundingCoinSource,
 /**
  * Funds a YED channel with local keys: `tokens` (confirmed YED outputs) and `yecCoins` (plain YEC
  * for V and the fee), each owned by the key `keyOf` returns for its outpoint.
+ *
+ * @param tokens - The YED outputs to select from.
+ * @param yecCoins - Plain YEC coins for V and the fee.
+ * @param keyOf - The private key owning an outpoint.
+ * @param change - The change scripts.
+ * @param change.yed - Where the YED change goes; also the return address (P2PKH).
+ * @param change.yec - Where the YEC change goes.
+ * @returns The funder; it refuses YEC requests.
  */
 export function localKeyYedFunder(
   tokens: readonly TokenCoin[],
