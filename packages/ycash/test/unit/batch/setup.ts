@@ -7,6 +7,8 @@ export const serverPriv = T.hexToBytes("44".repeat(32));
 export const payToAddr = T.encodeAddress(NET, "p2pkh", T.hexToBytes("aa".repeat(20)));
 const coinKey = T.hexToBytes("33".repeat(32));
 const coinSpk = T.p2pkhScript(T.hash160(T.pubkeyFromPriv(coinKey)));
+/** The funder's wallet address: every voucher returns the client's remainder here. */
+export const returnAddr = T.encodeAddress(NET, "p2pkh", T.hash160(T.pubkeyFromPriv(coinKey)));
 
 export interface Setup {
   chain: FakeChain;
@@ -19,25 +21,54 @@ export interface Setup {
   /** verify then settle at `charge` (default the ceiling) */
   request(charge?: bigint, r?: PaymentRequirements): Promise<{ payload: PaymentPayload; settle: Awaited<ReturnType<BatchYcashServerScheme["manager"]["settle"]>> }>;
   closes: { channelId: string; reason: string; txid: string | undefined; cumulative: bigint }[];
+  /** the funding requests the client made */
+  fundings: batch.client.FundingRequest[];
 }
 
-export async function setup(o: { confirmations?: number; maxDeposit?: bigint; deposit?: bigint; idleMs?: number; amount?: string; store?: ChannelStore; slack?: number; clientMaxDeposit?: bigint; clientDeposit?: false } = {}): Promise<Setup> {
+export interface SetupOptions {
+  confirmations?: number;
+  maxDeposit?: bigint;
+  deposit?: bigint;
+  idleMs?: number;
+  amount?: string;
+  store?: ChannelStore;
+  slack?: number;
+  clientMaxDeposit?: bigint;
+  clientDeposit?: false;
+  /** the server's closeFee */
+  closeFee?: bigint;
+  clientMaxCloseFee?: bigint;
+  /** the client's configured returnAddress (otherwise the funder's, returnAddr) */
+  returnAddress?: string;
+  /** a funder without returnAddress() */
+  funderWithoutReturn?: boolean;
+  fundingExpiryBlocks?: number;
+  /** the server's closedRetentionMs */
+  closedRetentionMs?: number;
+}
+
+export async function setup(o: SetupOptions = {}): Promise<Setup> {
   const chain = new FakeChain();
   const closes: Setup["closes"] = [];
   const server = new BatchYcashServerScheme({
     chain, serverPrivKey: serverPriv, maxDeposit: o.maxDeposit ?? 1_000_000n, confirmations: o.confirmations ?? 1,
     minLockBlocks: 100, closeMarginBlocks: 10, idleMs: o.idleMs ?? 600_000, ...(o.store ? { store: o.store } : {}),
+    ...(o.closeFee !== undefined ? { closeFee: o.closeFee } : {}),
+    ...(o.closedRetentionMs !== undefined ? { closedRetentionMs: o.closedRetentionMs } : {}),
     onClose: (e) => closes.push(e),
   });
   const base: PaymentRequirements = { scheme: "batch-settlement", network: NET, asset: "YEC", amount: o.amount ?? "2000", payTo: payToAddr, maxTimeoutSeconds: 300, extra: {} };
   const req = await server.enhancePaymentRequirements(base, { x402Version: 2, scheme: "batch-settlement", network: NET }, []);
   let n = 0;
+  const fundings: batch.client.FundingRequest[] = [];
   const funder: batch.client.ChannelFunder = {
+    ...(o.funderWithoutReturn ? {} : { returnAddress: async () => returnAddr }),
     async fund(fr) {
+      fundings.push(fr);
       const txid = (++n).toString(16).padStart(64, "e");
       chain.addCoin(txid, 0, 10_000_000n, coinSpk);
       const coin = { outpoint: { txid, vout: 0 }, value: 10_000_000n, scriptPubKey: coinSpk };
-      const tx = channel.buildFundingTx({ inputs: [coin], redeemScript: fr.redeemScript, value: fr.value, changeScript: coinSpk });
+      const tx = channel.buildFundingTx({ inputs: [coin], redeemScript: fr.redeemScript, value: fr.value, changeScript: coinSpk, expiryHeight: fr.expiryHeight ?? 0 });
       return T.serializeTxHex(channel.signFundingTx(tx, [coin], [coinKey], fr.branchId));
     },
   };
@@ -45,6 +76,9 @@ export async function setup(o: { confirmations?: number; maxDeposit?: bigint; de
     chain, funder, lockSlackBlocks: o.slack ?? 0,
     ...(o.clientDeposit === false ? {} : { deposit: () => o.deposit ?? 100_000n }),
     ...(o.clientMaxDeposit !== undefined ? { maxDeposit: { YEC: o.clientMaxDeposit } } : {}),
+    ...(o.clientMaxCloseFee !== undefined ? { maxCloseFee: { YEC: o.clientMaxCloseFee } } : {}),
+    ...(o.returnAddress !== undefined ? { returnAddress: o.returnAddress } : {}),
+    ...(o.fundingExpiryBlocks !== undefined ? { fundingExpiryBlocks: o.fundingExpiryBlocks } : {}),
   });
   const wrap = (payload: Record<string, unknown>, r = req): PaymentPayload => ({ x402Version: 2, accepted: r, payload });
   const pay = async (r = req) => wrap((await client.createPaymentPayload(2, r)).payload, r);
@@ -55,7 +89,7 @@ export async function setup(o: { confirmations?: number; maxDeposit?: bigint; de
     await client.applySettleResponse(settle);
     return { payload, settle };
   };
-  return { chain, server, client, req, pay, wrap, request, closes };
+  return { chain, server, client, req, pay, wrap, request, closes, fundings };
 }
 
 /** The reason of a refused promise. */

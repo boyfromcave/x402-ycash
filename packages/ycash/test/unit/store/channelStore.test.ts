@@ -58,4 +58,27 @@ describe.each(stores)("%s", (_name, make) => {
     await s.delete("b");
     expect((await s.list()).sort()).toEqual(["a", "a#state"]);
   });
+
+  it("retires records: kept until their retention, then gone from get, list and prune (plan X-F51)", async () => {
+    const s = make();
+    for (const id of ["a", "a#state", "b"]) await s.open({ channelId: id, cumulative: 0n });
+    const now = Date.now();
+    await s.retire(["a", "a#state", "unknown"], now + 60_000);
+    expect(await s.get("a")).toMatchObject({ channelId: "a", retainUntilMs: now + 60_000 });
+    expect(await s.prune(now)).toBe(0);
+    expect((await s.list()).sort()).toEqual(["a", "a#state", "b"]);
+    expect(await s.prune(now + 60_000)).toBe(2);
+    expect(await s.list()).toEqual(["b"]);
+    expect(await s.get("b")).toEqual({ channelId: "b", cumulative: 0n });
+  });
+
+  it("treats a record past its retention as pruned before prune runs: list drops it, and its id can open again", async () => {
+    const s = make();
+    await s.open({ channelId: "a", cumulative: 7n });
+    await s.retire(["a"], Date.now() - 1);
+    expect(await s.get("a")).toBeUndefined();
+    expect(await s.compareAndSetCumulative("a", 7n, 8n)).toBe(false);
+    expect(await s.list()).toEqual([]);
+    expect(await s.open({ channelId: "a", cumulative: 0n })).toBe(true);
+  });
 });

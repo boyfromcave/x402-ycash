@@ -42,6 +42,7 @@ async function setup(o: { deposit?: bigint; price?: string; tokenCents?: number;
   const req = await server.enhancePaymentRequirements(base, { x402Version: 2, scheme: "batch-settlement", network: NET }, []);
   let n = 0;
   const funder: batch.client.ChannelFunder = {
+    returnAddress: async () => T.encodeAddress(NET, "yed", T.hash160(T.pubkeyFromPriv(coinKey))),
     async fund(fr) {
       expect(fr.asset).toBe("YED");
       const tid = (++n).toString(16).padStart(64, "d");

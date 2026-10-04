@@ -6,7 +6,17 @@ import { channelScriptPubKey, parseChannelScript } from "../channel/script.js";
 import { checkVoucherShape, verifyVoucherSignature } from "../channel/voucher.js";
 import { yecVoucherOutputs, type VoucherLayout } from "../channel/outputs.js";
 import { assignedTo, YED_TRANSFER_VOUT, yedChannelValue, yedVoucherAssignments, yedVoucherLayout } from "../channel/yed.js";
-import { ASSET_YEC, ASSET_YED, YCASH_MAINNET, YCASH_REGTEST, YCASH_TESTNET, YED_MAX_OUTPUT_CENTS, YED_MIN_OUTPUT_CENTS, type YcashNetwork } from "../constants.js";
+import {
+  ASSET_YEC,
+  ASSET_YED,
+  TX_EXPIRING_SOON_THRESHOLD,
+  YCASH_MAINNET,
+  YCASH_REGTEST,
+  YCASH_TESTNET,
+  YED_MAX_OUTPUT_CENTS,
+  YED_MIN_OUTPUT_CENTS,
+  type YcashNetwork,
+} from "../constants.js";
 import { yecToZat } from "../node/amount.js";
 import { RPC_METHOD_NOT_FOUND, RpcError } from "../node/errors.js";
 import type { BlockchainInfo, TxOutInfo, VerifyScriptsResult, YedPayload, YedValidation } from "../node/types.js";
@@ -18,7 +28,8 @@ import { equalBytes, hexToBytes } from "../tx/bytes.js";
 import { feeFloor, txFee } from "../tx/fee.js";
 import { hasShielded, parseTx, serializeTxHex, txid as txidOf, type Tx } from "../tx/tx.js";
 import { BatchError, BatchSettlementError } from "./errors.js";
-import type { BatchOpenPayload, BatchTerms } from "./types.js";
+import { returnScriptOf } from "./returnAddress.js";
+import { requiredDepth, type BatchOpenPayload, type BatchTerms } from "./types.js";
 
 /** The node calls verification needs; YcashRpc satisfies it. */
 export interface ChainView {
@@ -144,12 +155,24 @@ export interface VerifiedOpen {
   fundingTxid: string;
   /** D, in the asset's unit */
   deposit: bigint;
+  /** The client's output script in every voucher, from `returnAddress`. */
+  returnScript: Uint8Array;
   /** The funding output already exists (in the mempool or a block). */
   alreadyBroadcast: boolean;
 }
 
 /**
- * Open rules 2–6, and voucher rules 4–6 for the first voucher. Read-only: nothing is relayed.
+ * The least funding `nExpiryHeight` a server accepts at `tip` (0, never, is also accepted): the
+ * funding must still relay at the next block, which refuses an expiry below next + 3
+ * (TX_EXPIRING_SOON_THRESHOLD; ycash-dd/src/main.cpp:742, ycash6 :799), and leave one block per
+ * confirmation of the policy depth.
+ */
+export function minFundingExpiry(tip: number, confirmations: number): number {
+  return tip + TX_EXPIRING_SOON_THRESHOLD + requiredDepth(confirmations);
+}
+
+/**
+ * Open rules 2–8, and voucher rules 4–6 for the first voucher (rule 9). Read-only: nothing is relayed.
  * Rule 1 (the envelope) is the caller's.
  */
 export async function verifyOpen(
@@ -178,12 +201,14 @@ export async function verifyOpen(
     throw new BatchSettlementError(BatchError.FUNDING, `vout ${p.vout} does not pay the channel script`);
   }
   const fundingTxid = txidOf(fundingTx);
+  const payToScript = addressToScript(terms.payTo, terms.network);
+  const returnScript = returnScriptOf(p.returnAddress, terms.network, terms.asset, payToScript);
   const channel = channelFromScript({
     outpoint: { txid: fundingTxid, vout: p.vout },
     redeemScript: rs,
     value: out.value,
     closeFee: terms.closeFee,
-    payToScript: addressToScript(terms.payTo, terms.network),
+    payToScript,
   });
   // 4. the deposit: V − closeFee for YEC; for YED the cents the funding TRANSFER assigns the channel
   const deposit = yed ? yedFundingDeposit(fundingTx, p.vout, channel.value, terms.closeFee) : yecDeposit(channel);
@@ -191,6 +216,11 @@ export async function verifyOpen(
   if (deposit > terms.maxDeposit) throw new BatchSettlementError(BatchError.DEPOSIT_TOO_LARGE, `D = ${deposit} > ${terms.maxDeposit}`);
   // 5–6. unspent inputs, fee floor, scripts — or the funding output already exists
   const existing = await chain.getTxOut(fundingTxid, p.vout, true);
+  // The funding expiry: until the funding is in a block, it must be able to land and reach the
+  // policy depth before it expires (an unrelayed funding then frees the client's coins by height).
+  if ((!existing || existing.confirmations === 0) && fundingTx.expiryHeight !== 0 && fundingTx.expiryHeight < minFundingExpiry(ctx.tip, terms.confirmations)) {
+    throw new BatchSettlementError(BatchError.FUNDING, `the funding expires at ${fundingTx.expiryHeight}, before ${minFundingExpiry(ctx.tip, terms.confirmations)}`);
+  }
   if (!existing) {
     const values: bigint[] = [];
     for (const i of fundingTx.vin) {
@@ -209,9 +239,9 @@ export async function verifyOpen(
   // 7. the first voucher, rules 4–6 (charged is 0)
   const cumulative = BigInt(p.voucher.cumulative);
   checkVoucher(decodeTx(p.voucher.tx, BatchError.VOUCHER_SHAPE), channel, cumulative, {
-    charged: 0n, amount: terms.amount, deposit, branchId: ctx.branchId, layout: layoutFor(terms.asset, deposit), floor: cumulativeFloor(terms.asset),
+    charged: 0n, amount: terms.amount, deposit, branchId: ctx.branchId, layout: layoutFor(terms.asset, deposit), floor: cumulativeFloor(terms.asset), returnScript,
   });
-  return { channel, channelId: channelIdOf(channel.outpoint), fundingTx, fundingTxid, deposit, alreadyBroadcast: existing !== null };
+  return { channel, channelId: channelIdOf(channel.outpoint), fundingTx, fundingTxid, deposit, returnScript, alreadyBroadcast: existing !== null };
 }
 
 /**
@@ -260,13 +290,19 @@ export interface VoucherBounds {
   allowCompleted?: boolean;
   /** the least cumulative (YED: $1.00, the dollar floor X-7) */
   floor?: bigint;
+  /** the channel's bound client script (from `returnAddress`); absent only for a verifier that never saw the open */
+  returnScript?: Uint8Array;
 }
 
 /** Voucher rules 4 (shape), 5 (charged + amount ≤ cumulative ≤ D, plan X-F16) and 6 (sigC). */
 export function checkVoucher(tx: Tx, channel: Channel, cumulative: bigint, b: VoucherBounds): void {
   if (cumulative > b.deposit) throw new BatchSettlementError(BatchError.CUMULATIVE_EXCEEDS_DEPOSIT, `${cumulative} > D = ${b.deposit}`);
   if (b.floor !== undefined && cumulative < b.floor) throw new BatchSettlementError(BatchError.YED_FLOOR, `cumulative ${cumulative} is below the $1.00 floor`);
-  const shape = checkVoucherShape(tx, channel, cumulative, { ...(b.layout ? { layout: b.layout } : {}), allowCompleted: b.allowCompleted ?? false });
+  const shape = checkVoucherShape(tx, channel, cumulative, {
+    ...(b.layout ? { layout: b.layout } : {}),
+    ...(b.returnScript ? { clientScript: b.returnScript } : {}),
+    allowCompleted: b.allowCompleted ?? false,
+  });
   if (shape) throw new BatchSettlementError(BatchError.VOUCHER_SHAPE, shape);
   if (cumulative < b.charged + b.amount) {
     throw new BatchSettlementError(BatchError.CUMULATIVE_MISMATCH, `${cumulative} < charged ${b.charged} + amount ${b.amount}`);

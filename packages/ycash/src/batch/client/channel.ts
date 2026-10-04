@@ -26,15 +26,20 @@ export interface ClientChannelRecord {
   closeMarginBlocks: number;
   /** C's private key, hex */
   clientPrivKey: string;
-  /** where each voucher returns the client's remainder */
+  /** where each voucher (and the refund, by default) returns the client's remainder: the return address's script */
   clientScript: string;
+  /** the open's `returnAddress` (absent in records written before it existed, whose clientScript is C's) */
+  returnAddress?: string;
+  /** the funding's nExpiryHeight (0 or absent: never expires) */
+  fundingExpiryHeight?: number;
   /** the server's charged total, as last reported */
   charged: string;
   /** the highest cumulative signed */
   signed: string;
   /** the open payload, resent until the server accepts it (funding depth) */
   open?: BatchOpenPayload;
-  status: "opening" | "open" | "retired" | "closed" | "refunded";
+  /** `expired`: the funding expired unrelayed, so the channel never existed */
+  status: "opening" | "open" | "retired" | "closed" | "refunded" | "expired";
   closeTxid?: string;
   refundTxid?: string;
 }

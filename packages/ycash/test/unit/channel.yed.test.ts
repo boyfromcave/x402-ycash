@@ -8,8 +8,8 @@ const h = T.hexToBytes;
 
 interface Doc {
   branchId: string;
-  channel: { clientPriv: string; serverPriv: string; funderPriv: string; refundHeight: number; depositCents: string; redeemScript: string; scriptPubKey: string; value: string; closeFee: string; payTo: string; clientScript: string };
-  funding: { token: { outpoint: T.OutPoint; cents: number; value: string }; yecCoin: { outpoint: T.OutPoint; value: string }; assignments: Y.Assignment[]; opReturnIndex: number; fee: string; tx: string; txid: string };
+  channel: { clientPriv: string; serverPriv: string; funderPriv: string; refundHeight: number; depositCents: string; redeemScript: string; scriptPubKey: string; value: string; closeFee: string; payTo: string; returnAddress: string; clientScript: string };
+  funding: { tip: number; expiryHeight: number; token: { outpoint: T.OutPoint; cents: number; value: string }; yecCoin: { outpoint: T.OutPoint; value: string }; assignments: Y.Assignment[]; opReturnIndex: number; fee: string; tx: string; txid: string };
   vouchers: { cumulative: string; serverCents: number; clientCents: number; assignments: Y.Assignment[]; sighash: string; voucher: string; close: string; closeTxid: string }[];
   refund: { lockTime: number; sequence: number; assignments: Y.Assignment[]; tx: string; txid: string };
 }
@@ -27,6 +27,8 @@ const ch = C.channelFromScript({
   payToScript: T.addressToScript(doc.channel.payTo, NET),
 });
 const clientScript = h(doc.channel.clientScript);
+// the client's YED returns to the open's returnAddress, the funder's ye… address, never to C
+if (!T.equalBytes(T.addressToScript(doc.channel.returnAddress, NET), clientScript) || !T.equalBytes(clientScript, fScript)) throw new Error("vector: clientScript is not the returnAddress");
 const assignmentsOf = (tx: T.Tx) => {
   const f = Y.findPayload(tx.vout);
   return f && !Y.isFindPayloadFailure(f) && f.payload.type === "transfer" ? { index: f.index, assignments: [...f.payload.assignments] } : null;
@@ -49,6 +51,13 @@ describe("the YED voucher layout", () => {
     expect(() => layout({ channel: { ...ch, value: ch.value + 1n }, cumulative: 100n, clientScript })).toThrow(/2 × TOKEN_VALUE/);
     expect(() => layout({ channel: ch, cumulative: 100n })).toThrow(/client output/);
     expect(() => layout({ channel: ch, cumulative: 100n, clientScript: ch.payToScript })).toThrow(/payTo/);
+    // a YED holder is a key hash: the client's return output is never P2SH
+    expect(() => layout({ channel: ch, cumulative: 100n, clientScript: T.p2shScript(h("cc".repeat(20))) })).toThrow(/P2PKH/);
+  });
+  it("binds the client output to the channel's return script in checkVoucherShape", () => {
+    const v = C.buildVoucher({ channel: ch, cumulative: 500n, clientScript, clientPrivKey: cPriv, branchId: branch, layout });
+    expect(C.checkVoucherShape(v, ch, 500n, { layout, clientScript })).toBeNull();
+    expect(C.checkVoucherShape(v, ch, 500n, { layout, clientScript: T.p2pkhScript(h("ee".repeat(20))) })).toBe("outputs");
   });
   it("is what checkVoucherShape demands: a tampered TRANSFER is refused", () => {
     const v = C.buildVoucher({ channel: ch, cumulative: 500n, clientScript, clientPrivKey: cPriv, branchId: branch, layout });
@@ -82,7 +91,8 @@ describe("vectors/yed-channel/channel_yed.json", () => {
   it("reproduces the funding TRANSFER", () => {
     const tokens = [{ outpoint: doc.funding.token.outpoint, cents: doc.funding.token.cents, value: BigInt(doc.funding.token.value), scriptPubKey: fScript }];
     const yecCoins = [{ outpoint: doc.funding.yecCoin.outpoint, value: BigInt(doc.funding.yecCoin.value), scriptPubKey: fScript }];
-    const b = C.buildYedFundingTx({ redeemScript: rs, depositCents: D, closeFee: BigInt(doc.channel.closeFee), tokens, yecCoins, yedChangeScript: fScript, yecChangeScript: fScript });
+    const b = C.buildYedFundingTx({ redeemScript: rs, depositCents: D, closeFee: BigInt(doc.channel.closeFee), tokens, yecCoins, yedChangeScript: fScript, yecChangeScript: fScript, expiryHeight: doc.funding.expiryHeight });
+    expect(b.tx.expiryHeight).toBe(doc.funding.tip + 3 + 40);
     expect(b.assignments).toEqual(doc.funding.assignments);
     expect(b.opReturnIndex).toBe(doc.funding.opReturnIndex);
     expect(b.fee.toString()).toBe(doc.funding.fee);

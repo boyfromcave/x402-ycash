@@ -11,7 +11,15 @@ export interface ChannelRecord {
   cumulative: bigint;
   /** opaque binding-specific fields (funding outpoint, keys, refund height, …), JSON-serialisable */
   data?: Record<string, unknown>;
+  /**
+   * Set by `retire` once the channel is closed: from this time (ms since the epoch) the record is
+   * gone (plan X-F51). Absent: kept forever. A binding retires only closed channels.
+   */
+  retainUntilMs?: number;
 }
+
+/** How long a closed channel's records are kept by default: 30 days, for audit and late queries. */
+export const DEFAULT_CLOSED_RETENTION_MS = 30 * 24 * 3600 * 1000;
 
 export interface ChannelStore {
   get(channelId: string): Promise<ChannelRecord | undefined>;
@@ -20,30 +28,46 @@ export interface ChannelStore {
   /** Sets `cumulative` to `next` only if it is currently `expected`; false otherwise (or unknown channel). */
   compareAndSetCumulative(channelId: string, expected: bigint, next: bigint): Promise<boolean>;
   delete(channelId: string): Promise<void>;
-  /** Every record id, in no particular order (a restarted server re-tracks its channels from it). */
+  /**
+   * Every live record id, in no particular order (a restarted server re-tracks its channels from
+   * it). Records past their retention are pruned first, so the list stays as short as the open
+   * channels plus the retention window.
+   */
   list(): Promise<string[]>;
+  /** Marks records for pruning from `untilMs` on (a closed channel's). Unknown ids are ignored. */
+  retire(channelIds: readonly string[], untilMs: number): Promise<void>;
+  /** Deletes every record past its retention; returns how many. */
+  prune(now?: number): Promise<number>;
 }
 
 function copy(r: ChannelRecord): ChannelRecord {
-  return { channelId: r.channelId, cumulative: r.cumulative, ...(r.data ? { data: structuredClone(r.data) } : {}) };
+  return {
+    channelId: r.channelId,
+    cumulative: r.cumulative,
+    ...(r.data ? { data: structuredClone(r.data) } : {}),
+    ...(r.retainUntilMs !== undefined ? { retainUntilMs: r.retainUntilMs } : {}),
+  };
 }
+
+/** A record is gone once its retention is over: reads treat it as pruned even before prune runs. */
+const expired = (r: { retainUntilMs?: number }, now: number): boolean => r.retainUntilMs !== undefined && now >= r.retainUntilMs;
 
 export class InMemoryChannelStore implements ChannelStore {
   private readonly channels = new Map<string, ChannelRecord>();
 
   async get(channelId: string): Promise<ChannelRecord | undefined> {
-    const r = this.channels.get(channelId);
+    const r = this.live(channelId);
     return r ? copy(r) : undefined;
   }
 
   async open(record: ChannelRecord): Promise<boolean> {
-    if (this.channels.has(record.channelId)) return false;
+    if (this.live(record.channelId)) return false;
     this.channels.set(record.channelId, copy(record));
     return true;
   }
 
   async compareAndSetCumulative(channelId: string, expected: bigint, next: bigint): Promise<boolean> {
-    const r = this.channels.get(channelId);
+    const r = this.live(channelId);
     if (!r || r.cumulative !== expected) return false;
     r.cumulative = next;
     return true;
@@ -54,14 +78,46 @@ export class InMemoryChannelStore implements ChannelStore {
   }
 
   async list(): Promise<string[]> {
+    await this.prune();
     return [...this.channels.keys()];
+  }
+
+  async retire(channelIds: readonly string[], untilMs: number): Promise<void> {
+    for (const id of channelIds) {
+      const r = this.channels.get(id);
+      if (r) r.retainUntilMs = untilMs;
+    }
+  }
+
+  async prune(now = Date.now()): Promise<number> {
+    let n = 0;
+    for (const [id, r] of this.channels) {
+      if (expired(r, now)) {
+        this.channels.delete(id);
+        n++;
+      }
+    }
+    return n;
+  }
+
+  private live(channelId: string): ChannelRecord | undefined {
+    const r = this.channels.get(channelId);
+    return r && !expired(r, Date.now()) ? r : undefined;
   }
 }
 
 interface ChannelsDoc {
   version: 1;
   /** bigints are stored as decimal strings */
-  channels: Record<string, { cumulative: string; data?: Record<string, unknown> }>;
+  channels: Record<string, { cumulative: string; data?: Record<string, unknown>; retainUntilMs?: number }>;
+}
+
+type FileRecord = ChannelsDoc["channels"][string];
+
+/** The live record of `channelId` in `doc`, or undefined (absent or past its retention). */
+function liveIn(doc: ChannelsDoc, channelId: string, now = Date.now()): FileRecord | undefined {
+  const r = Object.hasOwn(doc.channels, channelId) ? doc.channels[channelId] : undefined;
+  return r && !expired(r, now) ? r : undefined;
 }
 
 /** A channel store in one JSON file, safe across processes on one host (see JsonFile). */
@@ -73,15 +129,14 @@ export class FileChannelStore implements ChannelStore {
   }
 
   async get(channelId: string): Promise<ChannelRecord | undefined> {
-    const doc = await this.file.read();
-    if (!Object.hasOwn(doc.channels, channelId)) return undefined;
-    const r = doc.channels[channelId] as ChannelsDoc["channels"][string];
-    return { channelId, cumulative: BigInt(r.cumulative), ...(r.data ? { data: r.data } : {}) };
+    const r = liveIn(await this.file.read(), channelId);
+    if (!r) return undefined;
+    return { channelId, cumulative: BigInt(r.cumulative), ...(r.data ? { data: r.data } : {}), ...(r.retainUntilMs !== undefined ? { retainUntilMs: r.retainUntilMs } : {}) };
   }
 
   open(record: ChannelRecord): Promise<boolean> {
     return this.file.update((doc) => {
-      if (Object.hasOwn(doc.channels, record.channelId)) return { result: false, write: false };
+      if (liveIn(doc, record.channelId)) return { result: false, write: false };
       doc.channels[record.channelId] = { cumulative: record.cumulative.toString(), ...(record.data ? { data: record.data } : {}) };
       return { result: true, write: true };
     });
@@ -89,7 +144,7 @@ export class FileChannelStore implements ChannelStore {
 
   compareAndSetCumulative(channelId: string, expected: bigint, next: bigint): Promise<boolean> {
     return this.file.update((doc) => {
-      const r = Object.hasOwn(doc.channels, channelId) ? doc.channels[channelId] : undefined;
+      const r = liveIn(doc, channelId);
       if (!r || BigInt(r.cumulative) !== expected) return { result: false, write: false };
       r.cumulative = next.toString();
       return { result: true, write: true };
@@ -105,6 +160,26 @@ export class FileChannelStore implements ChannelStore {
   }
 
   async list(): Promise<string[]> {
-    return Object.keys((await this.file.read()).channels);
+    const now = Date.now();
+    const doc = await this.file.read();
+    // Prune under the lock only when something is due, so a plain list stays a lock-free read.
+    if (Object.values(doc.channels).some((r) => expired(r, now))) await this.prune(now);
+    return Object.keys(doc.channels).filter((id) => !expired(doc.channels[id] as FileRecord, now));
+  }
+
+  retire(channelIds: readonly string[], untilMs: number): Promise<void> {
+    return this.file.update((doc) => {
+      const present = channelIds.filter((id) => Object.hasOwn(doc.channels, id));
+      for (const id of present) (doc.channels[id] as FileRecord).retainUntilMs = untilMs;
+      return { result: undefined, write: present.length > 0 };
+    });
+  }
+
+  prune(now = Date.now()): Promise<number> {
+    return this.file.update((doc) => {
+      const due = Object.keys(doc.channels).filter((id) => expired(doc.channels[id] as FileRecord, now));
+      for (const id of due) delete doc.channels[id];
+      return { result: due.length, write: due.length > 0 };
+    });
   }
 }

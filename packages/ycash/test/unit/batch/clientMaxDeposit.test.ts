@@ -2,7 +2,7 @@
 // so a client refuses to lock more than its maxDeposit in one channel.
 import { describe, expect, it } from "vitest";
 import { type batch, tx as T } from "../../../src/index.js";
-import { DEFAULT_CLIENT_MAX_DEPOSIT } from "../../../src/batch/client/index.js";
+import { DEFAULT_CLIENT_MAX_CLOSE_FEE, DEFAULT_CLIENT_MAX_DEPOSIT } from "../../../src/batch/client/index.js";
 import { setup } from "./setup.js";
 
 const DEFAULT_CLIENT_MAX_DEPOSIT_YEC = DEFAULT_CLIENT_MAX_DEPOSIT.YEC;
@@ -33,5 +33,23 @@ describe("client maxDeposit", () => {
   it("refuses a request whose amount alone exceeds it", async () => {
     const s = await setup({ amount: "60000", clientMaxDeposit: 50_000n, clientDeposit: false });
     await expect(s.pay()).rejects.toThrow(/cannot carry one request/);
+  });
+});
+
+// The server also chooses closeFee, which is locked in V and paid to miners at close (plan X-F50).
+describe("client maxCloseFee", () => {
+  it("defaults to 5,000 zatoshis: a closeFee above it is refused before funding anything", async () => {
+    expect(DEFAULT_CLIENT_MAX_CLOSE_FEE).toEqual({ YEC: 5_000n, YED: 5_000n });
+    const ok = await setup({ closeFee: 5_000n });
+    expect((await ok.pay()).payload.type).toBe("open");
+    const s = await setup({ closeFee: 5_001n });
+    await expect(s.pay()).rejects.toThrow(/closeFee 5001 is above this client's maxCloseFee 5000 for YEC/);
+    expect(s.fundings).toHaveLength(0);
+  });
+
+  it("takes a configured cap", async () => {
+    const s = await setup({ closeFee: 2_000n, clientMaxCloseFee: 1_999n });
+    await expect(s.pay()).rejects.toThrow(/maxCloseFee 1999/);
+    expect((await (await setup({ closeFee: 2_000n, clientMaxCloseFee: 2_000n })).pay()).payload.type).toBe("open");
   });
 });

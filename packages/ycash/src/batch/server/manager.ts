@@ -48,6 +48,8 @@ export interface ChannelManagerConfig {
   fundingPollMs?: number;
   /** A held in-flight lock expires after this long (default 60 s), for a crashed handler. */
   inflightTtlMs?: number;
+  /** How long a closed channel's records are kept before the store prunes them (default 30 days, plan X-F51). */
+  closedRetentionMs?: number;
   /** Notified after each broadcast close. */
   onClose?: (event: { channelId: string; reason: CloseReason; txid: string | undefined; cumulative: bigint }) => void;
   log?: (msg: string) => void;
@@ -83,7 +85,7 @@ export class ChannelManager {
     this.chain = cfg.chain;
     this.serverPrivKey = cfg.serverPrivKey;
     this.serverPubKey = pubkeyFromPriv(cfg.serverPrivKey);
-    this.ledger = new ChannelLedger(cfg.store ?? new InMemoryChannelStore(), cfg.inflightTtlMs);
+    this.ledger = new ChannelLedger(cfg.store ?? new InMemoryChannelStore(), cfg.inflightTtlMs, cfg.closedRetentionMs);
     this.idleMs = cfg.idleMs ?? 600_000;
     this.fundingWaitMs = cfg.fundingWaitMs ?? 0;
     this.fundingPollMs = cfg.fundingPollMs ?? 500;
@@ -133,7 +135,7 @@ export class ChannelManager {
           const v = await verifyOpen(p, terms, this.chain, ctx);
           channelId = v.channelId;
           if (!v.alreadyBroadcast) await this.relayFunding(p.fundingTx, v.fundingTxid, p.vout);
-          await this.ledger.open(this.termsOf(v.channel, channelId, p.fundingTx, terms, v.deposit));
+          await this.ledger.open({ ...this.termsOf(v.channel, channelId, p.fundingTx, terms, v.deposit), returnScript: bytesToHex(v.returnScript) });
           this.log(`open ${channelId} V=${v.channel.value} D=${v.deposit} t=${v.channel.refundHeight}`);
         }
         this.track(channelId);
@@ -183,7 +185,11 @@ export class ChannelManager {
       const tx = decodeTx(txHex, BatchError.VOUCHER_SHAPE);
       const deposit = BigInt(ch.terms.deposit);
       const asset = ch.terms.asset;
-      const bounds = { deposit, branchId: ctx.branchId, layout: this.layoutFor(asset, deposit), floor: cumulativeFloor(asset) };
+      const bounds = {
+        deposit, branchId: ctx.branchId, layout: this.layoutFor(asset, deposit), floor: cumulativeFloor(asset),
+        // every voucher returns the client's remainder to the open's returnAddress
+        ...(ch.terms.returnScript !== undefined ? { returnScript: hexToBytes(ch.terms.returnScript) } : {}),
+      };
       if (kind === "close") {
         // At the charged total, or the pre-paid $1.00 for YED (the dollar floor).
         const want = closeCumulative(asset, ch.chargedCumulative);

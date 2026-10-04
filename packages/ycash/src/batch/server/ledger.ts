@@ -8,7 +8,11 @@
 //   <id>#inflight   cumulative = 0 when free, else the lock's expiry (ms): one voucher in flight
 //   <id>#state      cumulative = 0 open, 1 closing, 2 closed
 //   <id>#close      data.txid = the close transaction
-import type { ChannelStore } from "../../store/channelStore.js";
+//
+// A closed channel's records are retired for `closedRetentionMs` and then pruned by the store
+// (plan X-F51), so list() and resume() stay as fast as the open channels; an open or closing
+// channel is never retired.
+import { DEFAULT_CLOSED_RETENTION_MS, type ChannelStore } from "../../store/channelStore.js";
 
 export const CHANNEL_OPEN = 0n;
 export const CHANNEL_CLOSING = 1n;
@@ -35,6 +39,8 @@ export interface ChannelTerms {
   confirmations: number;
   /** the per-request ceiling at open, for the exhaustion trigger */
   amount: string;
+  /** the client's output script in every voucher (hex), from the open's `returnAddress` */
+  returnScript?: string;
 }
 
 export interface LedgerChannel {
@@ -54,6 +60,7 @@ export class ChannelLedger {
   constructor(
     readonly store: ChannelStore,
     private readonly inflightTtlMs = 60_000,
+    private readonly closedRetentionMs = DEFAULT_CLOSED_RETENTION_MS,
   ) {}
 
   /** Records a new channel; false if it is already known. */
@@ -149,11 +156,15 @@ export class ChannelLedger {
     return this.store.compareAndSetCumulative(`${channelId}#state`, CHANNEL_OPEN, CHANNEL_CLOSING);
   }
 
-  /** Records the close transaction and marks the channel closed. */
-  async markClosed(channelId: string, txid: string | undefined): Promise<void> {
+  /** Records the close transaction, marks the channel closed and retires its records. */
+  async markClosed(channelId: string, txid: string | undefined, now = Date.now()): Promise<void> {
     if (txid) await this.store.open({ channelId: `${channelId}#close`, cumulative: 0n, data: { txid } });
     const state = await this.store.get(`${channelId}#state`);
     if (state && state.cumulative !== CHANNEL_CLOSED) await this.store.compareAndSetCumulative(`${channelId}#state`, state.cumulative, CHANNEL_CLOSED);
+    const main = await this.store.get(channelId);
+    const ids = [channelId, `${channelId}#charged`, `${channelId}#inflight`, `${channelId}#state`, `${channelId}#close`];
+    if (main && main.cumulative > 0n) ids.push(`${channelId}@${main.cumulative}`);
+    await this.store.retire(ids, now + this.closedRetentionMs);
   }
 
   /** Back to open after a close that could not be broadcast (so a later trigger retries). */

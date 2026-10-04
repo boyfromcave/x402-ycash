@@ -41,7 +41,7 @@ the refund is a script branch, not a pre-signed transaction
 | Monotonic amount | The server's charged total, compare-and-set on the stored voucher; only the highest voucher is ever broadcast. |
 | Batched redemption | The server completes the latest voucher with its key S and broadcasts it: one close per channel. |
 | Recipient binding | The voucher's outputs are fixed by the client's `SIGHASH_ALL` signature. |
-| Recovery of unused deposit | The refund branch: after height t the client spends the channel alone. |
+| Recovery of unused deposit | Every voucher returns the client's remainder to the `returnAddress` it named at open; and if the server never closes, the refund branch: after height t the client spends the channel alone. |
 
 ## Channel Script
 
@@ -143,8 +143,9 @@ sequenceDiagram
 ```
 
 1. **Open.** The client creates C, builds the redeem script with S and a refund height t, and
-   builds a funding transaction paying the P2SH address. It sends the funding transaction and the
-   first voucher in an `open` payload. The server verifies both, relays the funding transaction
+   builds a funding transaction paying the P2SH address. It sends the funding transaction, the
+   address of its own wallet that gets its remainder back (`returnAddress`) and the first voucher
+   in an `open` payload. The server verifies both, relays the funding transaction
    (or finds it already relayed), and accepts vouchers once the funding transaction reaches the
    funding policy depth.
 2. **Vouchers.** For each request the client signs a voucher for `cumulative`, the server's charged
@@ -184,7 +185,7 @@ sequenceDiagram
 | `extra.minLockBlocks` | yes | the least t − tip the server accepts at open; default 1152 (about 24 hours at 75 seconds) |
 | `extra.closeMarginBlocks` | yes | the server stops accepting vouchers at t − `closeMarginBlocks` and closes; default 96 (about 2 hours); MUST be less than `minLockBlocks` |
 | `extra.maxDeposit` | yes | the largest D the server accepts, in the asset's unit |
-| `extra.closeFee` | yes | the fee, in zatoshis, every voucher (and so the close) pays; at least the close transaction's fee floor (below) |
+| `extra.closeFee` | yes | the fee, in zatoshis, every voucher (and so the close) pays; at least the close transaction's fee floor (below). A client caps it ([Security Considerations](#security-considerations)) |
 | `extra.areFeesSponsored` | no | MUST be `false` when present |
 | `extra.confirmationPolicy.confirmations` | no | the depth the funding transaction must reach before the first voucher is accepted; −1 to 20; default 1. −1 (mempool) is a server opt-in for small YEC channels; **YED channels require at least 0** (below). |
 | `extra.assetTransferMethod` | no | not used: the binding has one method |
@@ -210,6 +211,7 @@ close fee.
     "fundingTx": "0400008085202f8901…",
     "vout": 0,
     "redeemScript": "63522103efe7…4ba6ac68",
+    "returnAddress": "s1e9Le9bXvWGxsj15HFzf1SU2vppkYNAHm1",
     "voucher": {
       "tx": "0400008085202f89019f…",
       "cumulative": "2000"
@@ -220,10 +222,30 @@ close fee.
 
 - `fundingTx`: the complete funding transaction, client-signed, lowercase hex. It follows the
   [`exact` construction rules](./scheme_exact_ycash.md#transaction-construction-transparent)
-  except the expiry window, and pays V zatoshis to the P2SH script of `redeemScript` at `vout`.
-  The client MAY have broadcast it already.
+  except the expiry window (below), and pays V zatoshis to the P2SH script of `redeemScript` at
+  `vout`. The client MAY have broadcast it already.
 - `redeemScript`: lowercase hex of the channel script.
+- `returnAddress`: required (the example is the P2PKH address of the key SHA-256("x402-ycash spec
+  example client wallet")). The client's own address that every voucher of the channel (and so
+  the close) pays the client's remainder to, and where the client's refund normally goes. For a
+  YEC channel a transparent P2PKH or P2SH address; for a YED channel a P2PKH address, transparent
+  (`s1…`) or Yellowback (`ye…`), since a YED holder is a key hash. It is never `payTo`, and it
+  takes its network from `PaymentRequirements.network`. The server binds it for the channel's
+  life. A client SHOULD use an address of the wallet that funded the channel: a remainder paid to
+  C's own key hash would sit where no wallet looks, since C exists only in the client's channel
+  store.
 - `voucher`: the first voucher, as below.
+
+**Funding expiry.** The funding transaction's `nExpiryHeight` is a client choice: 0 (never
+expires) or a height. A client SHOULD set tip + 3 + a window (the TypeScript SDK uses 40 blocks,
+about 50 minutes), tip being the height of the best block it sees, so that a funding the server
+never relays becomes invalid and the client's coins are free again at a known height, rather than
+held for an arbitrary time. A server refuses a funding that is not yet in a block and whose
+non-zero `nExpiryHeight` is below tip + 3 + d, where d is the policy depth in blocks
+(`confirmations`, at least 1): the next block must still accept it (the node refuses at relay an
+expiry closer than 3 blocks, [`exact` Appendix A, R-2](./scheme_exact_ycash.md)) and it must have
+a block for each confirmation of the depth. Vouchers, the close and the refund keep
+`nExpiryHeight` 0.
 
 ### `voucher`
 
@@ -266,7 +288,7 @@ gets its remainder without waiting for t. The protected resource is not run.
 | Vout | Script | Value |
 |---|---|---|
 | 0 | `payTo` | `cumulative`, plus the client remainder when that is below the dust threshold |
-| 1 | the client's choice (not `payTo`) | V − `closeFee` − `cumulative`, omitted when below the dust threshold (54 zatoshis) |
+| 1 | the open's `returnAddress` (its P2PKH or P2SH script) | V − `closeFee` − `cumulative`, omitted when below the dust threshold (54 zatoshis) |
 
 So `cumulative` is at least 54 zatoshis from the first voucher on (an output below the dust
 threshold is non-standard), and at most V − `closeFee`. The deposit is D = V − `closeFee`.
@@ -295,9 +317,16 @@ The server (or a facilitator's `/verify`) MUST check:
    funding output is found by `gettxout(txid, vout, true)`.
 6. The fee floor (`exact` rule 7) and the scripts (`exact` rule 9) hold for the funding
    transaction.
-7. The first voucher passes voucher rules 4 to 7 below, against this channel.
+7. `returnAddress` decodes on `PaymentRequirements.network`, is P2PKH or P2SH for YEC and P2PKH
+   (`s…` or `ye…`) for YED, and its script is not `payTo`'s
+   (`invalid_batch_settlement_ycash_return_address`).
+8. Unless the funding transaction is already in a block, its `nExpiryHeight` is 0 or at least
+   tip + 3 + d ([Funding expiry](#open)).
+9. The first voucher passes voucher rules 4 to 7 below, against this channel, its client output
+   paying `returnAddress`.
 
 The server then relays the funding transaction with `sendrawtransaction` and records the channel.
+It records `returnAddress` with the channel: every later voucher's client output must pay it.
 It accepts the first voucher, and serves the request that carried the `open`, once the funding
 transaction reaches the funding policy depth, observed with `gettxout(txid, vout, true)`; voucher
 rules 1 to 3 and 8 (and, for YED, the overlay checks) are applied at that point. Below the depth
@@ -312,7 +341,10 @@ rules 1 to 3 and 8 (and, for YED, the overlay checks) are applied at that point.
    nor a refund has been broadcast.
 4. **Shape.** The transaction is as in [`voucher`](#voucher): one input, the channel outpoint,
    `nLockTime` 0, `nExpiryHeight` 0, no shielded components, and the outputs exactly as in
-   [Voucher outputs](#voucher-outputs) for this `cumulative`.
+   [Voucher outputs](#voucher-outputs) for this `cumulative`, the client output paying the
+   channel's recorded `returnAddress`. A stateless facilitator that did not relay the channel's
+   `open` has no `returnAddress` to compare and takes the client output's script from the voucher
+   (the server, which holds the record, binds it).
 5. **Amount.** charged + `amount` ≤ `cumulative` ≤ D, where charged is the server's charged total
    for this channel. Dynamic pricing may then charge less than `amount`.
 6. **Client signature.** sigC is a valid low-S `SIGHASH_ALL` signature by C over the voucher's
@@ -394,7 +426,8 @@ If the server does not close, the client spends the channel alone from height t:
 
 - one input, the channel outpoint, `nSequence` 0xFFFFFFFE, scriptSig `<sigC> OP_0 <redeemScript>`;
 - `nLockTime` = t (or any height from t to the current tip);
-- outputs to the client totalling V minus a fee at the fee floor;
+- outputs to the client totalling V minus a fee at the fee floor, by default to the channel's
+  `returnAddress` (the client's wallet);
 - for a YED channel, a TRANSFER assigning all of D to a client output (see below), never a bare
   spend.
 
@@ -423,7 +456,7 @@ voucher spending an unconfirmed channel shows `yedIn` 0. YED channels therefore 
 | Vout | Script | YEC value | YED assignment |
 |---|---|---|---|
 | 0 | P2PKH of `payTo`'s key hash | `TOKEN_VALUE` | serverCents |
-| 1 | the client's choice (not `payTo`) | `TOKEN_VALUE` | clientCents, or none when it is 0 |
+| 1 | P2PKH of the open's `returnAddress` (never P2SH) | `TOKEN_VALUE` | clientCents, or none when it is 0 |
 | 2 | `OP_RETURN` TRANSFER | 0 | — |
 
 The fee is V − 2 × `TOKEN_VALUE` = `closeFee`. Output 1 always exists, so the shape is constant; it
@@ -477,7 +510,7 @@ Yellowback's halts stop mints only, never transfers, so YED channels keep workin
 |---|---|---|
 | 1 | **Commitment format** | A voucher: a v4 transaction spending the channel outpoint, with the client's `SIGHASH_ALL` signature in the close scriptSig, paying `payTo` the cumulative amount and the client the rest (with a TRANSFER payload for YED), in the `voucher` payload with its `channelId` and `cumulative`. |
 | 2 | **Verification rules** | The eight voucher steps: channel known and open, margin, channel output unspent, exact outputs, amount bounds, the client's signature over the ZIP-243 hash, completion verified by the node's script verifier, compare-and-set; plus the overlay verdict for YED. Replay is prevented by the single channel outpoint; expiry by the refund height. |
-| 3 | **Storage behaviour** | The server stores the highest voucher per channel and its charged total. The commitment identifier is `"<channelId>@<cumulative>"`. |
+| 3 | **Storage behaviour** | The server stores the highest voucher per channel, its charged total and the client's `returnAddress`. The commitment identifier is `"<channelId>@<cumulative>"`. A closed channel's records MAY be pruned after a retention window (the TypeScript SDK keeps them 30 days); an open or closing channel's never are. |
 | 4 | **Double-spend prevention** | Every voucher spends the same outpoint, so only one can ever be mined. The server broadcasts only its highest, keeps one voucher per channel in flight, and stops accepting vouchers at t − `closeMarginBlocks` so its close lands before the client's refund becomes valid. |
 | 5 | **Commitment expiry** | A voucher never expires (`nExpiryHeight` 0) and is usable until t. From t the client can refund, and an unclosed voucher can lose the race. Vouchers not accepted by the server are simply never broadcast. |
 | 6 | **Redemption** | The server, through a close: it completes the highest voucher with sigS and broadcasts it on a close trigger (idle, margin, exhausted, client `close`, schedule). The rail is a Ycash transaction, broadcast directly or through a facilitator's `/settle` (`claim`). |
@@ -503,7 +536,8 @@ The core codes apply. Scheme-specific codes:
 |---|---|
 | `invalid_batch_settlement_ycash_payload_type` | the `type` is not valid for the operation |
 | `invalid_batch_settlement_ycash_redeem_script` | not the channel script, wrong S, C = S, or t below tip + `minLockBlocks` |
-| `invalid_batch_settlement_ycash_funding` | the funding transaction fails the `exact` rules or does not pay the P2SH script |
+| `invalid_batch_settlement_ycash_funding` | the funding transaction fails the `exact` rules, does not pay the P2SH script, or expires too soon ([Funding expiry](#open)) |
+| `invalid_batch_settlement_ycash_return_address` | `returnAddress` not an address of the network, `payTo`'s, a YED address for a YEC channel, or not P2PKH for a YED channel |
 | `invalid_batch_settlement_ycash_deposit_too_large` | D above `maxDeposit` |
 | `invalid_batch_settlement_ycash_funding_depth` | the funding transaction has not reached the funding depth |
 | `invalid_batch_settlement_ycash_unknown_channel` | no open channel with that id |
@@ -528,6 +562,17 @@ The core codes apply. Scheme-specific codes:
   YEC channels only.
 - **Bounded authorization.** The client's exposure is the latest voucher it signed, never more than
   D; each voucher pays at most one `amount` beyond what the server charged.
+- **Server-chosen amounts the client locks.** The server alone sets `maxDeposit` and `closeFee`,
+  and both are locked in the channel output until t. Spend controls cap only the per-request
+  `amount`, so a client MUST cap D and `closeFee` itself and refuse an offer above its caps
+  before funding anything (the TypeScript SDK: D at 1 YEC or $50, `closeFee` at 5,000 zatoshis,
+  about three times the floor). An inflated `closeFee` would otherwise go to miners at close.
+- **The client's remainder.** The remainder goes to `returnAddress`, fixed at open and bound by
+  the server; the client signs every voucher's outputs, so nobody can redirect it. A client MUST
+  NOT return it to the channel key C's key hash, which no wallet watches.
+- **Unrelayed funding.** A server that never relays a client's funding transaction ties up the
+  client's coins only until the funding's `nExpiryHeight`; a client tracks its coin reservations by
+  that height.
 - **Burned YED.** Every YED spend of the channel carries a TRANSFER that assigns all of D; the
   server's verify refuses any other verdict, and the client's refund builder never omits the
   payload.
