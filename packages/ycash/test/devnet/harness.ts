@@ -2,6 +2,7 @@
 // `scripts/devnet.sh up {dd|6} <seed>`, read from the devnet.json named by X402_DEVNET_JSON.
 // Without it every devnet suite is skipped.
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe } from "vitest";
 import { RPC_INVALID_ADDRESS_OR_KEY, RpcError, YcashRpc, type NodeCapabilities, type TxOutInfo } from "../../src/node/index.js";
 
@@ -66,12 +67,37 @@ async function load(path: string): Promise<Devnet> {
   const [wallet, stock, pool] = [nodes[0], nodes[1], nodes[poolIndex]] as [YcashRpc, YcashRpc, YcashRpc];
   const caps = await wallet.capabilities();
 
+  // v4.5.0 scores 10 per relayed transaction already expired by two blocks (ycash-dd src/main.cpp:876-883)
+  // and drops the peer at 100. Suites that mine fast past short expiries make that routine, so over a
+  // long run the devnet's one-shot connections fall apart and the mesh can split ({0,1,4} and {2,3}
+  // was seen). A reconnect does not replay the mempool, so heal both: re-add every peer, then hand each
+  // node the mempool transactions it lacks. Errors are ignored: a refusal is the node's to make.
+  const p2pPorts = nodes.map((_, i) => /^port=(\d+)$/m.exec(readFileSync(join(state.dir, `node${i}`, "ycash.conf"), "utf8"))?.[1]);
+  const heal = async (pools: string[][]) => {
+    for (const [i, node] of nodes.entries()) {
+      const others = p2pPorts.filter((port, j) => j !== i && port);
+      for (const port of others) await node.call("addnode", [`127.0.0.1:${port}`, "onetry"]).catch(() => undefined);
+    }
+    for (const txid of new Set(pools.flat())) {
+      const holder = nodes[pools.findIndex((p) => p.includes(txid))] as YcashRpc;
+      const hex = await holder.call<string>("getrawtransaction", [txid]).catch(() => undefined);
+      const lacking = nodes.filter((_, i) => !pools[i]?.includes(txid));
+      if (hex) for (const node of lacking) await node.sendRawTransaction(hex).catch(() => undefined);
+    }
+  };
   const syncMempools = async () => {
+    const healAt = Date.now() + 5_000;
+    let healed = false;
     await waitFor(
       async () => {
         const pools = await Promise.all(nodes.map((n) => n.getRawMempool()));
         const first = JSON.stringify([...(pools[0] ?? [])].sort());
-        return pools.every((p) => JSON.stringify([...p].sort()) === first);
+        if (pools.every((p) => JSON.stringify([...p].sort()) === first)) return true;
+        if (!healed && Date.now() > healAt) {
+          healed = true;
+          await heal(pools);
+        }
+        return false;
       },
       { what: "mempools to agree" },
     );
