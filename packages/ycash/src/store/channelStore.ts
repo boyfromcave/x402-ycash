@@ -20,6 +20,8 @@ export interface ChannelStore {
   /** Sets `cumulative` to `next` only if it is currently `expected`; false otherwise (or unknown channel). */
   compareAndSetCumulative(channelId: string, expected: bigint, next: bigint): Promise<boolean>;
   delete(channelId: string): Promise<void>;
+  /** Every record id, in no particular order (a restarted server re-tracks its channels from it). */
+  list(): Promise<string[]>;
 }
 
 function copy(r: ChannelRecord): ChannelRecord {
@@ -49,6 +51,10 @@ export class InMemoryChannelStore implements ChannelStore {
 
   async delete(channelId: string): Promise<void> {
     this.channels.delete(channelId);
+  }
+
+  async list(): Promise<string[]> {
+    return [...this.channels.keys()];
   }
 }
 
@@ -96,5 +102,9 @@ export class FileChannelStore implements ChannelStore {
       delete doc.channels[channelId];
       return { result: undefined, write: true };
     });
+  }
+
+  async list(): Promise<string[]> {
+    return Object.keys((await this.file.read()).channels);
   }
 }

@@ -1,5 +1,8 @@
 // Agent configuration from the environment: where to call, how many times, which node it reads,
 // and which wallet pays each method.
+import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { tx, YCASH_NETWORKS, YcashRpc, type YcashNetwork } from "x402-ycash-mechanism";
 
 /** How the agent signs transparent payments and channel funding (plan §5.6 "two signer backends"). */
@@ -27,6 +30,14 @@ export interface AgentConfig {
   channelStorePath?: string;
   /** batch-settlement: the deposit D of a new channel, zatoshis; default amount × 100, capped at maxDeposit. */
   channelDepositZat?: bigint;
+  /** batch-settlement: the most this agent locks in one channel, zatoshis; default 1 YEC, whatever the server allows. */
+  channelMaxDepositZat?: bigint;
+  /**
+   * Coins held by this payer's signed, unconfirmed spends (a file shared by every agent process
+   * of the same payer, so the next run never reselects a coin the last one spent). Default: a
+   * file in the OS temp directory named after the payer (loadAgentConfig); absent, in memory.
+   */
+  reservationsPath?: string;
 }
 
 type Env = Record<string, string | undefined>;
@@ -64,6 +75,9 @@ export function loadAgentConfig(env: Env = process.env): AgentConfig {
   if (!node) throw new Error("the agent needs its node: AGENT_DEVNET_JSON, or AGENT_RPC_URL with AGENT_RPC_USER/AGENT_RPC_PASSWORD or AGENT_RPC_COOKIE_FILE");
   const deposit = env.AGENT_CHANNEL_DEPOSIT_ZAT;
   if (deposit !== undefined && !/^[1-9]\d{0,15}$/.test(deposit)) throw new Error("AGENT_CHANNEL_DEPOSIT_ZAT must be a positive whole number of zatoshis");
+  const maxDeposit = env.AGENT_CHANNEL_MAX_DEPOSIT_ZAT;
+  if (maxDeposit !== undefined && !/^[1-9]\d{0,15}$/.test(maxDeposit)) throw new Error("AGENT_CHANNEL_MAX_DEPOSIT_ZAT must be a positive whole number of zatoshis");
+  const payerId = signer.kind === "wif" ? signer.address : `node-${createHash("sha256").update(node.url).digest("hex").slice(0, 16)}`;
   return {
     url: env.RESOURCE_URL ?? "http://127.0.0.1:4021/exact/quote",
     requests,
@@ -74,5 +88,7 @@ export function loadAgentConfig(env: Env = process.env): AgentConfig {
     ...(env.AGENT_SHIELDED_FROM ? { shieldedFrom: env.AGENT_SHIELDED_FROM } : {}),
     ...(env.AGENT_CHANNEL_STORE ? { channelStorePath: env.AGENT_CHANNEL_STORE } : {}),
     ...(deposit ? { channelDepositZat: BigInt(deposit) } : {}),
+    ...(maxDeposit ? { channelMaxDepositZat: BigInt(maxDeposit) } : {}),
+    reservationsPath: env.AGENT_RESERVATIONS ?? join(tmpdir(), `x402-ycash-reservations-${payerId}.json`),
   };
 }

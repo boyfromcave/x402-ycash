@@ -1,6 +1,7 @@
 // Signer backend (b): the keys stay in a node wallet. `listunspent` + `createrawtransaction`
 // (with the expiry) + `signrawtransaction`, which both lines have (plan §5.6).
 import { RPC_METHOD_NOT_FOUND, RpcError, yecToZat, type YcashRpc } from "../../node/index.js";
+import { heldOutpoints, InMemoryCoinReservationStore, type CoinReservationStore } from "../../store/coinReservations.js";
 import { addressToScript, hexToBytes, serializeTxHex, txid, type OutPoint } from "../../tx/index.js";
 import { buildYedTransfer, selectTokenCoins, type TokenCoin } from "../../yed/index.js";
 import { selectCoins, type Coin } from "./coinSelection.js";
@@ -16,6 +17,8 @@ export interface RpcWalletSignerOptions {
   retries?: number;
   /** Where change goes. Default: a fresh `getrawchangeaddress`. */
   changeAddress?: string;
+  /** Where YED outputs of signed, unsettled payments are held (a file shares them across processes). Default: in memory. */
+  reservations?: CoinReservationStore;
 }
 
 /** `yed_listunspent` row (ycash-dd/src/rpc/yellowbackwallet.cpp:699-718). */
@@ -44,13 +47,14 @@ export class RpcWalletSigner implements YcashClientSigner {
    * every YED output `lockunspent`-locked against plain YEC spends (ycash-dd/src/yellowback/wallet.cpp:404-410,
    * 450-465), so a lock cannot mark one as taken: the signer tracks its own.
    */
-  private readonly reservedTokens = new Map<string, number>();
+  private readonly reservedTokens: CoinReservationStore;
 
   constructor(
     private readonly rpc: RpcWalletSignerRpc,
     private readonly options: RpcWalletSignerOptions = {},
   ) {
     this.retries = options.retries ?? 3;
+    this.reservedTokens = options.reservations ?? new InMemoryCoinReservationStore();
   }
 
   async chainState(): Promise<ChainState> {
@@ -97,10 +101,10 @@ export class RpcWalletSigner implements YcashClientSigner {
     const yecChange = addressToScript(this.options.changeAddress ?? (await this.rpc.call<string>("getrawchangeaddress")), order.network);
     const yedChange = addressToScript(await this.rpc.call<string>("yed_getnewaddress"), order.network);
     const excluded = new Set<string>();
-    for (const [k, expiry] of this.reservedTokens) if (expiry < order.tip) this.reservedTokens.delete(k);
+    const held = await heldOutpoints(this.reservedTokens, order.tip, async (t, n) => !(await this.rpc.getTxOut(t, n, false)));
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.retries; attempt++) {
-      const tokens = (await this.tokenCandidates()).filter((t) => !excluded.has(key(t.outpoint)) && !this.reservedTokens.has(key(t.outpoint)));
+      const tokens = (await this.tokenCandidates()).filter((t) => !excluded.has(key(t.outpoint)) && !held.has(key(t.outpoint)));
       const yec = (await this.candidates()).filter((c) => c.confirmations >= 1 && !excluded.has(key(c)));
       const sel = selectTokenCoins(tokens, order.amountCents);
       const built = buildYedTransfer({
@@ -116,7 +120,12 @@ export class RpcWalletSigner implements YcashClientSigner {
       try {
         const signed = await this.rpc.signRawTransactionWithWallet(serializeTxHex(built.tx));
         if (signed.complete) {
-          for (const t of sel.coins) this.reservedTokens.set(key(t.outpoint), order.expiryHeight);
+          const spend = { spentBy: txid(signed.hex), expiryHeight: order.expiryHeight };
+          if (!(await this.reservedTokens.reserve(sel.coins.map((t) => key(t.outpoint)), spend))) {
+            for (const t of sel.coins) excluded.add(key(t.outpoint)); // another process took one: select again
+            await this.unlock(inputs);
+            continue;
+          }
           return { hex: signed.hex, txid: txid(signed.hex), inputs };
         }
         for (const e of signed.errors ?? []) excluded.add(`${e.txid}:${e.vout}`);

@@ -43,6 +43,7 @@ describeDevnet("HTTP end to end: facilitator, merchant and agent as processes", 
     X402_NETWORK: NETWORK,
     RESOURCE_URL: url,
     AGENT_DEVNET_JSON: devnetJson,
+    AGENT_RESERVATIONS: join(dir, "agent-reservations.json"), // shared by every agent run, as the per-payer default is
     MAX_PAYMENT_ZAT: "5000000",
     ...extra,
   });
@@ -275,9 +276,9 @@ describeDevnet("HTTP end to end: facilitator, merchant and agent as processes", 
     try {
       const [fast] = await agent(`${shop2.url}/exact/ticker`, { AGENT_DEVNET_NODE: "0", AGENT_WIF: wif });
       expect(fast).toMatchObject({ status: 200, settlement: { success: true, extra: { status: "mempool" } } });
-      // The agent's coin source (node 0) must see the first payment's spend before it picks coins
-      // again, or it re-selects a coin that node 1's mempool already spends (rule 6).
-      await d.syncMempools();
+      const seenByNode0 = (await d.wallet.getRawMempool()).includes(fast!.settlement!.transaction);
+      // Started at once: node 0 may not have seen the first payment (relayed by node 1) yet, so only
+      // the reservation file keeps the second agent process off the first one's coin (rule 6).
       let mined: string | undefined;
       const [slow] = await agent(`${shop2.url}/exact/quote`, { AGENT_DEVNET_NODE: "0", AGENT_WIF: wif }, async (p) => {
         mined = await mineWhenSeen(p, 2); // the ticker payment is still in the mempool
@@ -286,8 +287,11 @@ describeDevnet("HTTP end to end: facilitator, merchant and agent as processes", 
       const txs = await blockTxs(mined as string);
       expect(txs).toContain(fast!.settlement!.transaction);
       expect(txs).toContain(slow!.settlement!.transaction);
+      const inputsOf = async (id: string) => (await d.stock.call<DecodedTransaction>("getrawtransaction", [id, 1])).vin.map((i) => `${i.txid}:${i.vout}`);
+      const [a, b] = await Promise.all([inputsOf(fast!.settlement!.transaction), inputsOf(slow!.settlement!.transaction)]);
+      expect(a.filter((o) => b.includes(o))).toEqual([]);
       await waitFor(async () => (await receivedBy(payTo2)) === PRICE.exact + PRICE.ticker, { timeoutMs: 20_000, what: "both payments at payTo" });
-      record(d.line, "HTTP OP-6 stock facilitator", { line: health.node.line, fastMs: fast!.ms, slowMs: slow!.ms });
+      record(d.line, "HTTP OP-6 stock facilitator", { line: health.node.line, fastMs: fast!.ms, slowMs: slow!.ms, firstSpendSeenByNode0AtSecondStart: seenByNode0 });
     } finally {
       await shop2.stop();
       await fac2.stop();

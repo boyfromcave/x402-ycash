@@ -85,6 +85,16 @@ export class ChannelLedger {
     };
   }
 
+  /** The ids of every channel still open (main records only: ids carry no `#` or `@`). */
+  async openChannelIds(): Promise<string[]> {
+    const open: string[] = [];
+    for (const id of await this.store.list()) {
+      if (id.includes("#") || id.includes("@")) continue;
+      if ((await this.store.get(`${id}#state`))?.cumulative === CHANNEL_OPEN) open.push(id);
+    }
+    return open;
+  }
+
   /** Takes the channel's in-flight lock; returns its token, or null when another voucher holds it. */
   async acquire(channelId: string, now = Date.now()): Promise<bigint | null> {
     const key = `${channelId}#inflight`;

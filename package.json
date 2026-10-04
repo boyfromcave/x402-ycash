@@ -11,6 +11,17 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "test:devnet": "npm run test:devnet --workspaces --if-present",
-    "test:devnet:http": "npm run test:devnet -w x402-ycash-example-merchant-express"
+    "test:devnet:http": "npm run test:devnet -w x402-ycash-example-merchant-express",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@typescript-eslint/eslint-plugin": "^8.71.0",
+    "@typescript-eslint/parser": "^8.71.0",
+    "eslint": "^9.39.5",
+    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-jsdoc": "^50.8.0",
+    "eslint-plugin-sonarjs": "^3.0.7"
   }
 }

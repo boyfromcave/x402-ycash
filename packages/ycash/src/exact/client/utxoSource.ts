@@ -2,7 +2,8 @@
 // trusts; a light-client source (lightwalletd GetAddressUtxos + GetAddressTokens) fits the same
 // interface.
 import { RPC_METHOD_NOT_FOUND, RpcError, yecToZat, type YcashRpc } from "../../node/index.js";
-import { addressToScript, hexToBytes } from "../../tx/index.js";
+import { heldOutpoints, InMemoryCoinReservationStore, type CoinReservationStore } from "../../store/coinReservations.js";
+import { addressToScript, hexToBytes, type OutPoint } from "../../tx/index.js";
 import type { TokenCoin } from "../../yed/index.js";
 import type { Coin } from "./coinSelection.js";
 import { chainStateOf, type ChainState } from "./signer.js";
@@ -11,6 +12,12 @@ export interface UtxoSource {
   chainState(): Promise<ChainState>;
   /** Spendable coins paying `address`: confirmed, unspent also in the mempool, and holding no YED. */
   listCoins(address: string): Promise<Coin[]>;
+  /**
+   * Holds the coins a signed spend uses until it confirms or expires (0 = never: held for a
+   * while instead), so no later selection, in any process sharing the store, picks them again.
+   * False when another spend already holds one of them: select again.
+   */
+  reserve?(coins: readonly OutPoint[], spend: { txid: string; expiryHeight: number }): Promise<boolean>;
   /**
    * The YED outputs paying `address` (its `ye…` or transparent form): token records, so confirmed
    * by construction, and unspent also in the mempool. Optional: only a YED payer needs it.
@@ -27,6 +34,13 @@ export interface RpcUtxoSourceOptions {
    * import. Default: no import (the address is already in the node's wallet).
    */
   importAddress?: boolean | "rescan";
+  /**
+   * Where coins of signed, not yet confirmed spends are held. A FileCoinReservationStore shares
+   * them with the next agent process; the default lives as long as this source.
+   */
+  reservations?: CoinReservationStore;
+  /** How long a spend that never expires (a channel funding) holds its coins (default 30 min). */
+  noExpiryHoldMs?: number;
 }
 
 /** One token record of `yed_listtokens` (plan Y-9; ycash-dd/src/rpc/yellowback.cpp:1185, :1246-1254). */
@@ -46,11 +60,14 @@ interface TokenRow {
  */
 export class RpcUtxoSource implements UtxoSource {
   private readonly imported = new Set<string>();
+  private readonly reservations: CoinReservationStore;
 
   constructor(
     private readonly rpc: UtxoSourceRpc,
     private readonly options: RpcUtxoSourceOptions = {},
-  ) {}
+  ) {
+    this.reservations = options.reservations ?? new InMemoryCoinReservationStore();
+  }
 
   async chainState(): Promise<ChainState> {
     return chainStateOf(await this.rpc.getBlockchainInfo());
@@ -60,9 +77,10 @@ export class RpcUtxoSource implements UtxoSource {
     await this.ensureImported(address);
     const unspent = await this.rpc.listUnspent(1, 9_999_999, [address]);
     const tokens = await this.yedOutpoints(address);
+    const held = await this.heldCoins();
     const coins: Coin[] = [];
     for (const u of unspent) {
-      if (tokens.has(`${u.txid}:${u.vout}`)) continue;
+      if (tokens.has(`${u.txid}:${u.vout}`) || held.has(`${u.txid}:${u.vout}`)) continue;
       if (!(await this.rpc.getTxOut(u.txid, u.vout, true))) continue;
       coins.push({
         txid: u.txid,
@@ -75,11 +93,28 @@ export class RpcUtxoSource implements UtxoSource {
     return coins;
   }
 
+  async reserve(coins: readonly OutPoint[], spend: { txid: string; expiryHeight: number }): Promise<boolean> {
+    return this.reservations.reserve(coins.map((c) => `${c.txid}:${c.vout}`), {
+      spentBy: spend.txid,
+      expiryHeight: spend.expiryHeight,
+      ...(spend.expiryHeight === 0 ? { untilMs: Date.now() + (this.options.noExpiryHoldMs ?? 1_800_000) } : {}),
+    });
+  }
+
+  /** The outpoints still held (a reservation ends when its spend lapses or a block spends the coin). */
+  private async heldCoins(): Promise<Set<string>> {
+    if ((await this.reservations.list()).size === 0) return new Set();
+    const tip = (await this.rpc.getBlockchainInfo()).blocks;
+    return heldOutpoints(this.reservations, tip, async (txid, vout) => !(await this.rpc.getTxOut(txid, vout, false)));
+  }
+
   async listTokens(address: string): Promise<TokenCoin[]> {
     if (!(await this.rpc.capabilities()).yellowback) throw new Error("listing YED outputs needs a Yellowback node (-experimentalfeatures -yellowback)");
     const rows = await this.rpc.call<TokenRow[]>("yed_listtokens", [[address]]);
+    const held = await this.heldCoins();
     const tokens: TokenCoin[] = [];
     for (const r of rows) {
+      if (held.has(`${r.txid}:${r.vout}`)) continue;
       if (!(await this.rpc.getTxOut(r.txid, r.vout, true))) continue; // spent in the mempool (X-F13)
       tokens.push({ outpoint: { txid: r.txid, vout: r.vout }, cents: r.cents, value: BigInt(r.valueZat), scriptPubKey: addressToScript(r.address) });
     }

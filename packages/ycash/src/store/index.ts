@@ -2,4 +2,5 @@
 export * from "./settlementStore.js";
 export * from "./fileSettlementStore.js";
 export * from "./channelStore.js";
+export * from "./coinReservations.js";
 export { JsonFile, type JsonFileOptions } from "./jsonFile.js";

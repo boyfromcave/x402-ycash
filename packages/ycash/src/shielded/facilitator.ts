@@ -6,14 +6,6 @@ import type { PaymentPayload, PaymentRequirements, SettleResponse, VerifyRespons
 import { ASSET_YEC, YCASH_NETWORKS, type YcashNetwork } from "../constants.js";
 import { yecToZat, type BlockchainInfo, type ZReceived } from "../node/index.js";
 import { RETAIN_FOREVER, consumptionKey, type SettlementStore } from "../store/index.js";
-
-/**
- * The consumption key is per (txid, payTo): payTo is a diversified address issued for exactly one
- * request, so one transaction paying two requests buys both, and a proof still binds to one request.
- */
-export function paymentKey(network: Parameters<typeof consumptionKey>[0], txid: string, payTo: string): string {
-  return consumptionKey(network, `${txid}@${payTo}`);
-}
 import {
   ASSET_TRANSFER_METHOD_SAPLING_PROOF,
   CHAIN_OF,
@@ -28,6 +20,14 @@ import { receiptExtension, signReceipt, type JwsSigner } from "./receipt.js";
 import type { IssuedAddressRegistry, IssuedRequest } from "./registry.js";
 import { jcs } from "./jcs.js";
 import { memoForRecord, noteMemoEquals } from "./request.js";
+
+/**
+ * The consumption key is per (txid, payTo): payTo is a diversified address issued for exactly one
+ * request, so one transaction paying two requests buys both, and a proof still binds to one request.
+ */
+export function paymentKey(network: Parameters<typeof consumptionKey>[0], txid: string, payTo: string): string {
+  return consumptionKey(network, `${txid}@${payTo}`);
+}
 
 /** The merchant wallet calls the facilitator makes. `YcashRpc` satisfies it. */
 export interface ShieldedFacilitatorRpc {

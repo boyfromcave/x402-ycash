@@ -134,6 +134,25 @@ be used, with the same keys in camelCase; the environment wins over the file.
   routes, channels (`AGENT_CHANNEL_STORE`, `AGENT_CHANNEL_DEPOSIT_ZAT`) and, with
   `AGENT_SHIELDED_FROM`, sapling-proof routes. Run it with `npm start -w x402-ycash-example-agent-client`.
 
+  Two limits protect the agent's funds, and they are independent of anything the merchant says:
+  - **`MAX_PAYMENT_ZAT`**, the spend control, caps each payment's `amount` (and so each channel
+    voucher's per-request ceiling).
+  - **`AGENT_CHANNEL_MAX_DEPOSIT_ZAT`** (default `100000000`, 1 YEC) caps the deposit D a channel
+    locks until its refund height. Spend controls never see D, and the server alone chooses its
+    `maxDeposit`, so the client caps it too. The default deposit (`amount` × 100) is capped at both
+    limits; an explicit `AGENT_CHANNEL_DEPOSIT_ZAT` above the client's cap refuses the `open`. In
+    code: `new BatchYcashClientScheme({ maxDeposit: { YEC: … , YED: … } })`, whose defaults are
+    `DEFAULT_CLIENT_MAX_DEPOSIT` (1 YEC and $50).
+
+  A local-key agent hands its signed transactions to the facilitator or the channel server, which
+  broadcast them, often through another node. Until the agent's own node sees such a spend, the
+  coin still looks unspent there, so the agent keeps the coins of its signed, unconfirmed spends in
+  a reservation file (`AGENT_RESERVATIONS`; default a per-payer file in the OS temp directory). Every
+  agent process of the same payer shares it, and a coin is released when its spend confirms or
+  expires (a channel funding, which never expires, holds its coins for 30 minutes). The node-wallet
+  signer uses the same file for its YED outputs, which `lockunspent` cannot mark (the Yellowback
+  wallet keeps every YED output locked).
+
 ## CLI
 
 `packages/cli` is the `x402-ycash` command (`npm start -s -w x402-ycash-cli -- <args>` with absolute paths, or `x402-ycash`
@@ -150,7 +169,9 @@ x402-ycash channel refund <channelId> [--to A]   the client alone, from the refu
 It reads its node from `--devnet devnet.json [--node N]` or `--rpc-url` with `--rpc-user` and
 `--rpc-password` (or `--rpc-cookie`), and pays with `--wif` or the node's wallet; the same
 settings come from `X402_DEVNET_JSON`, `X402_RPC_*`, `X402_WIF`, `X402_SHIELDED_FROM`,
-`X402_CHANNEL_STORE` (default `~/.x402-ycash/channels.json`, a wallet file: it holds channel keys)
-and `X402_MAX_PAYMENT_ZAT`.
+`X402_CHANNEL_STORE` (default `~/.x402-ycash/channels.json`, a wallet file: it holds channel keys),
+`X402_MAX_PAYMENT_ZAT`, `X402_MAX_DEPOSIT_ZAT` (`--max-deposit`, the most one channel may lock;
+default 1 YEC) and `X402_RESERVATIONS` (`--reservations`, the coin reservation file; default
+`reservations.json` next to the channel store).
 
 MIT licensed.

@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { batch as B, channel, FileClientChannelStorage, tx as T, YcashRpc } from "x402-ycash-mechanism";
+import { batch as B, channel, FileClientChannelStorage, tx as T, type YcashRpc } from "x402-ycash-mechanism";
 import { loadCliConfig, parseCli, run, UsageError } from "../src/index.js";
 
 const NET = "ycash:regtest" as const;
@@ -15,6 +15,14 @@ describe("configuration", () => {
     expect(c).toMatchObject({ network: "ycash:testnet", count: 3, channelStorePath: "/c.json", maxPaymentZat: 1_000_000n });
     expect(c.node.url).toBe("http://127.0.0.1:1/");
     expect(loadCliConfig(parseCli(["pay", "x"]), { ...devnetEnv, X402_WIF: wif, X402_MAX_PAYMENT_ZAT: "5000" })).toMatchObject({ wif, maxPaymentZat: 5000n });
+  });
+
+  it("keeps coin reservations next to the channel store by default, and takes the client's deposit cap", () => {
+    expect(loadCliConfig(parseCli(["pay", "x", "--channels", "/w/c.json"]), devnetEnv)).toMatchObject({ reservationsPath: "/w/reservations.json" });
+    const c = loadCliConfig(parseCli(["channel", "open", "x", "--max-deposit", "3000000", "--reservations", "/r.json"]), devnetEnv);
+    expect(c).toMatchObject({ reservationsPath: "/r.json", maxDepositZat: 3_000_000n });
+    expect(loadCliConfig(parseCli(["pay", "x"]), { ...devnetEnv, X402_MAX_DEPOSIT_ZAT: "7" }).maxDepositZat).toBe(7n);
+    expect(() => loadCliConfig(parseCli(["pay", "x", "--max-deposit", "0"]), devnetEnv)).toThrow(/--max-deposit/);
   });
 
   it("refuses a missing node, a bad network, a mainnet WIF on regtest, and bad numbers", () => {

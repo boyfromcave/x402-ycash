@@ -1,6 +1,7 @@
 // Funding a channel. A funder returns the signed funding transaction paying V to the channel's
 // P2SH script; it never broadcasts (the server relays it). Two funders: a node wallet over RPC, and
 // local keys over known coins (channel/funding.ts).
+import { heldOutpoints, InMemoryCoinReservationStore, type CoinReservationStore } from "../../store/coinReservations.js";
 import { buildFundingTx, signFundingTx, type FundingInput } from "../../channel/funding.js";
 import { buildYedFundingTx, yedChannelValue } from "../../channel/yed.js";
 import { ASSET_YED, type YcashNetwork } from "../../constants.js";
@@ -13,7 +14,7 @@ import { equalBytes, hexToBytes } from "../../tx/bytes.js";
 import { hash160 } from "../../tx/hash.js";
 import { pubkeyFromPriv } from "../../tx/keys.js";
 import { p2pkhHash, p2pkhScript } from "../../tx/script.js";
-import { serializeTxHex } from "../../tx/tx.js";
+import { serializeTxHex, txid as txidOf } from "../../tx/tx.js";
 
 export interface FundingRequest {
   network: YcashNetwork;
@@ -65,12 +66,13 @@ async function walletTokens(rpc: FunderRpc): Promise<YedCoinRow[]> {
  * YED are never spent as plain YEC (that would burn them, plan Y-4); a YED channel spends them in a
  * TRANSFER that assigns D to the channel and returns the rest as YED change.
  */
-export function rpcWalletFunder(rpc: FunderRpc): ChannelFunder {
+export function rpcWalletFunder(rpc: FunderRpc, opts: { reservations?: CoinReservationStore; holdMs?: number } = {}): ChannelFunder {
   // YED outputs this funder signed away. The Yellowback wallet keeps all its YED outputs locked
   // against plain YEC spends (ycash-dd/src/yellowback/wallet.cpp:404-410), so a lock marks nothing.
-  const reserved = new Set<string>();
+  const reservations = opts.reservations ?? new InMemoryCoinReservationStore();
   return {
     async fund(req) {
+      const reserved = await heldOutpoints(reservations, 0); // a funding never expires: held for holdMs
       const tokenRows = await walletTokens(rpc);
       const tokenKeys = new Set(tokenRows.map((r) => `${r.txid}:${r.vout}`));
       const coins = (await rpc.listUnspent(1))
@@ -78,7 +80,12 @@ export function rpcWalletFunder(rpc: FunderRpc): ChannelFunder {
         .map((u) => ({ outpoint: { txid: u.txid, vout: u.vout }, value: yecToZat(u.amount), scriptPubKey: hexToBytes(u.scriptPubKey) }))
         .sort((a, b) => (a.value > b.value ? -1 : a.value < b.value ? 1 : 0));
       const changeScript = addressToScript(await rpc.call<string>("getrawchangeaddress"), req.network);
-      if (req.asset === ASSET_YED) return fundYed(rpc, req, tokenRows.filter((r) => !reserved.has(`${r.txid}:${r.vout}`)), coins, changeScript, reserved);
+      if (req.asset === ASSET_YED) {
+        const free = tokenRows.filter((r) => !reserved.has(`${r.txid}:${r.vout}`));
+        return fundYed(rpc, req, free, coins, changeScript, async (outpoints, spentBy) => {
+          await reservations.reserve(outpoints, { spentBy, expiryHeight: 0, untilMs: Date.now() + (opts.holdMs ?? 1_800_000) });
+        });
+      }
       const picked: FundingInput[] = [];
       for (const c of coins) {
         picked.push(c);
@@ -104,7 +111,7 @@ async function fundYed(
   rows: readonly YedCoinRow[],
   yecCoins: readonly FundingInput[],
   yecChange: Uint8Array,
-  reserved: Set<string>,
+  reserve: (outpoints: string[], spentBy: string) => Promise<void>,
 ): Promise<string> {
   if (req.deposit === undefined) throw new Error("a YED funding needs the deposit in cents");
   const tokens: TokenCoin[] = rows
@@ -123,7 +130,7 @@ async function fundYed(
   const signed = await rpc.signRawTransactionWithWallet(serializeTxHex(built.tx));
   if (!signed.complete) throw new Error(`the wallet could not sign the funding inputs: ${JSON.stringify(signed.errors)}`);
   await rpc.call("lockunspent", [false, built.inputs.map((i) => i.outpoint)]);
-  for (const t of sel.coins) reserved.add(`${t.outpoint.txid}:${t.outpoint.vout}`);
+  await reserve(sel.coins.map((t) => `${t.outpoint.txid}:${t.outpoint.vout}`), txidOf(hexToBytes(signed.hex)));
   return signed.hex;
 }
 
@@ -141,6 +148,8 @@ export function localKeyFunder(coins: readonly FundingInput[], privKeys: readonl
 /** Where `utxoSourceFunder` lists the key's coins (exact's RpcUtxoSource fits). */
 export interface FundingCoinSource {
   listCoins(address: string): Promise<{ txid: string; vout: number; value: bigint; scriptPubKey: Uint8Array }[]>;
+  /** As UtxoSource.reserve: holds the funding's coins (it never expires, so 0); false = select again. */
+  reserve?(coins: readonly { txid: string; vout: number }[], spend: { txid: string; expiryHeight: number }): Promise<boolean>;
 }
 
 /**
@@ -153,26 +162,35 @@ export function utxoSourceFunder(privKey: Uint8Array, source: FundingCoinSource,
   const pub = pubkeyFromPriv(privKey, compressed);
   const script = p2pkhScript(hash160(pub));
   const used = new Set<string>();
+  /** One selection; undefined when another spend took one of the picked coins meanwhile. */
+  const fundOnce = async (req: FundingRequest): Promise<string | undefined> => {
+    const address = encodeAddress(req.network, "p2pkh", hash160(pub));
+    const coins = (await source.listCoins(address))
+      .filter((c) => equalBytes(c.scriptPubKey, script) && !used.has(`${c.txid}:${c.vout}`))
+      .sort((a, b) => (a.value > b.value ? -1 : a.value < b.value ? 1 : 0))
+      .map((c) => ({ outpoint: { txid: c.txid, vout: c.vout }, value: c.value, scriptPubKey: c.scriptPubKey }));
+    for (let n = 1; n <= coins.length; n++) {
+      const picked = coins.slice(0, n);
+      let hex: string;
+      try {
+        hex = await localKeyFunder(picked, picked.map(() => privKey), script).fund(req);
+      } catch (e) {
+        if (/cannot pay/.test((e as Error).message)) continue;
+        throw e;
+      }
+      if (source.reserve && !(await source.reserve(picked.map((c) => c.outpoint), { txid: txidOf(hexToBytes(hex)), expiryHeight: 0 }))) return undefined;
+      for (const c of picked) used.add(`${c.outpoint.txid}:${c.outpoint.vout}`);
+      return hex;
+    }
+    throw new Error(`the coins of ${address} cannot fund ${req.value} zatoshis`);
+  };
   return {
     async fund(req) {
-      const address = encodeAddress(req.network, "p2pkh", hash160(pub));
-      const coins = (await source.listCoins(address))
-        .filter((c) => equalBytes(c.scriptPubKey, script) && !used.has(`${c.txid}:${c.vout}`))
-        .sort((a, b) => (a.value > b.value ? -1 : a.value < b.value ? 1 : 0))
-        .map((c) => ({ outpoint: { txid: c.txid, vout: c.vout }, value: c.value, scriptPubKey: c.scriptPubKey }));
-      for (let n = 1; n <= coins.length; n++) {
-        const picked = coins.slice(0, n);
-        let hex: string;
-        try {
-          hex = await localKeyFunder(picked, picked.map(() => privKey), script).fund(req);
-        } catch (e) {
-          if (/cannot pay/.test((e as Error).message)) continue;
-          throw e;
-        }
-        for (const c of picked) used.add(`${c.outpoint.txid}:${c.outpoint.vout}`);
-        return hex;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const hex = await fundOnce(req);
+        if (hex !== undefined) return hex;
       }
-      throw new Error(`the coins of ${address} cannot fund ${req.value} zatoshis`);
+      throw new Error("coins kept being taken by another spend of this key; try again");
     },
   };
 }

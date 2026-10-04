@@ -2,7 +2,7 @@
 // yellowback-devnet devnet.json entry or an RPC URL with credentials; the payer is a WIF key or
 // the node's own wallet.
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { tx, YCASH_NETWORKS, YcashRpc, type YcashNetwork } from "x402-ycash-mechanism";
 
@@ -18,6 +18,10 @@ export interface CliConfig {
   maxPaymentZat: bigint;
   /** D for a channel this CLI opens; default the scheme's (amount × 100, capped at maxDeposit). */
   depositZat?: bigint;
+  /** The most a channel this CLI opens may lock, zatoshis; default 1 YEC, whatever the server allows. */
+  maxDepositZat?: bigint;
+  /** Coins held by signed, unconfirmed spends, shared by every run (default next to the channel store). */
+  reservationsPath: string;
   /** `pay --count` */
   count: number;
   /** `channel refund --to`: where the refund goes; default the channel's client address. */
@@ -33,7 +37,7 @@ export class UsageError extends Error {
 
 export const USAGE = `usage:
   x402-ycash pay <url> [--count N]
-  x402-ycash channel open <url> [--deposit ZAT]
+  x402-ycash channel open <url> [--deposit ZAT] [--max-deposit ZAT]
   x402-ycash channel status [channelId]
   x402-ycash channel close <url> [channelId]
   x402-ycash channel refund <channelId> [--to ADDRESS]
@@ -44,7 +48,9 @@ node (flag / env):   --devnet FILE / X402_DEVNET_JSON, --node N / X402_DEVNET_NO
 payer:               --wif / X402_WIF (a local key; default: the node's wallet signs)
                      --shielded-from / X402_SHIELDED_FROM (pays sapling-proof routes from this address)
 other:               --network / X402_NETWORK (default ycash:regtest), --channels FILE / X402_CHANNEL_STORE
-                     (default ~/.x402-ycash/channels.json), --max-payment ZAT / X402_MAX_PAYMENT_ZAT (default 1000000)`;
+                     (default ~/.x402-ycash/channels.json), --max-payment ZAT / X402_MAX_PAYMENT_ZAT (default 1000000),
+                     --max-deposit ZAT / X402_MAX_DEPOSIT_ZAT (default 100000000, 1 YEC), --reservations FILE /
+                     X402_RESERVATIONS (default reservations.json next to the channel store)`;
 
 type Env = Record<string, string | undefined>;
 
@@ -61,6 +67,8 @@ const OPTIONS = {
   channels: { type: "string" },
   "max-payment": { type: "string" },
   deposit: { type: "string" },
+  "max-deposit": { type: "string" },
+  reservations: { type: "string" },
   count: { type: "string" },
   to: { type: "string" },
   help: { type: "boolean", short: "h" },
@@ -133,15 +141,19 @@ export function loadCliConfig(args: ParsedArgs, env: Env = process.env, node?: Y
   }
   const shieldedFrom = f["shielded-from"] ?? env.X402_SHIELDED_FROM;
   const depositZat = zat("--deposit", f.deposit);
+  const maxDepositZat = zat("--max-deposit", f["max-deposit"] ?? env.X402_MAX_DEPOSIT_ZAT);
+  const channelStorePath = f.channels ?? env.X402_CHANNEL_STORE ?? join(homedir(), ".x402-ycash", "channels.json");
   return {
     network,
     node: node ?? nodeOf(f, env),
-    channelStorePath: f.channels ?? env.X402_CHANNEL_STORE ?? join(homedir(), ".x402-ycash", "channels.json"),
+    channelStorePath,
+    reservationsPath: f.reservations ?? env.X402_RESERVATIONS ?? join(dirname(channelStorePath), "reservations.json"),
     maxPaymentZat: zat("--max-payment", f["max-payment"] ?? env.X402_MAX_PAYMENT_ZAT) ?? 1_000_000n,
     count: Number(count),
     ...(wif ? { wif } : {}),
     ...(shieldedFrom ? { shieldedFrom } : {}),
     ...(depositZat !== undefined ? { depositZat } : {}),
+    ...(maxDepositZat !== undefined ? { maxDepositZat } : {}),
     ...(refundTo ? { refundTo } : {}),
   };
 }

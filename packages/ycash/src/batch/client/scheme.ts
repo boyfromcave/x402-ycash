@@ -31,12 +31,24 @@ export interface ClientChain {
   sendRawTransaction(hex: string): Promise<string>;
 }
 
+/**
+ * The client's own deposit caps, in each asset's unit: 1 YEC and $50 (5,000 YED cents). Spend
+ * controls cap only the per-request `amount`; D is locked until t, and the server alone chooses
+ * its `maxDeposit`, so the client caps it too.
+ */
+export const DEFAULT_CLIENT_MAX_DEPOSIT: Readonly<Record<string, bigint>> = { [ASSET_YEC]: 100_000_000n, [ASSET_YED]: 5_000n };
+
 export interface BatchYcashClientConfig {
   chain: ClientChain;
   funder: ChannelFunder;
   storage?: ClientChannelStorage;
-  /** D for a new channel; default amount × depositMultiplier, capped at maxDeposit. */
+  /** D for a new channel; default amount × depositMultiplier, capped at both maxDeposits. */
   deposit?: (terms: BatchTerms) => bigint;
+  /**
+   * The largest D this client opens with, per asset (merged over DEFAULT_CLIENT_MAX_DEPOSIT),
+   * whatever the server's maxDeposit allows. An open above it is refused.
+   */
+  maxDeposit?: Partial<Record<string, bigint>>;
   /** default 100 */
   depositMultiplier?: number;
   /** Blocks added to tip + minLockBlocks, so the open survives a few blocks of delay (default 10). */
@@ -121,13 +133,16 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     const clientPubKey = pubkeyFromPriv(priv);
     const refundHeight = tip + terms.minLockBlocks + (this.cfg.lockSlackBlocks ?? 10);
     const redeemScript = buildChannelScript({ clientPubKey, serverPubKey: terms.serverPubKey, refundHeight });
+    const cap = this.maxDepositFor(terms.asset);
     let deposit = this.cfg.deposit?.(terms) ?? terms.amount * BigInt(this.cfg.depositMultiplier ?? 100);
-    const cap = yed && terms.maxDeposit > BigInt(YED_MAX_OUTPUT_CENTS) ? BigInt(YED_MAX_OUTPUT_CENTS) : terms.maxDeposit;
-    if (deposit > cap) deposit = cap;
+    const serverCap = yed && terms.maxDeposit > BigInt(YED_MAX_OUTPUT_CENTS) ? BigInt(YED_MAX_OUTPUT_CENTS) : terms.maxDeposit;
+    if (deposit > serverCap) deposit = serverCap;
+    if (!this.cfg.deposit && deposit > cap) deposit = cap;
     const floor = this.floorOf(terms.asset);
     const first = terms.amount > floor ? terms.amount : floor;
     if (yed && deposit < first) deposit = first; // a YED channel holds at least the pre-paid $1.00
-    if (deposit < first || deposit > cap) throw new Error(`maxDeposit ${terms.maxDeposit} cannot carry one request of ${first}`);
+    if (deposit > cap) throw new Error(`deposit ${deposit} is above this client's maxDeposit ${cap} for ${terms.asset}`);
+    if (deposit < first || deposit > serverCap) throw new Error(`maxDeposit ${terms.maxDeposit} cannot carry one request of ${first}`);
     this.layoutFor(terms.asset, deposit); // refuse an asset without a layout before funding anything
     // YED: V carries the two voucher outputs' TOKEN_VALUE and the close fee; D is assigned in cents.
     const value = yed ? yedChannelValue(terms.closeFee) : deposit + terms.closeFee;
@@ -146,6 +161,13 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     await this.storage.put(rec);
     this.cfg.log?.(`opened ${channelId} at ${channelAddress(terms.network, redeemScript)}: V=${value} D=${deposit} t=${refundHeight}`);
     return open;
+  }
+
+  /** The client's cap on D for `asset` (refuses an asset with none). */
+  private maxDepositFor(asset: string): bigint {
+    const cap = this.cfg.maxDeposit?.[asset] ?? DEFAULT_CLIENT_MAX_DEPOSIT[asset];
+    if (cap === undefined) throw new Error(`no client maxDeposit for ${asset}`);
+    return cap;
   }
 
   private sign(rec: ClientChannelRecord, cumulative: bigint, branchId: number): string {

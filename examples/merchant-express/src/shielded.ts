@@ -6,7 +6,7 @@
 // address the payload accepted is reused, so the rebuilt requirements match it exactly.
 import type { HTTPRequestContext } from "@x402/core/server";
 import type { PaymentRequirements } from "@x402/core/types";
-import { exact, shielded, type YcashNetwork } from "x402-ycash-mechanism";
+import { type exact, shielded, type YcashNetwork } from "x402-ycash-mechanism";
 
 export interface ShieldedRouteTemplate {
   network: YcashNetwork;

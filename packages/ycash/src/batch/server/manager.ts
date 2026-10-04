@@ -94,7 +94,7 @@ export class ChannelManager {
     return layoutFor(asset, deposit);
   }
 
-  /** Channels this process opened or was told to watch. */
+  /** Channels this process opened, was told to watch, or resumed from the store. */
   tracked(): string[] {
     return [...this.lastActivity.keys()];
   }
@@ -102,6 +102,13 @@ export class ChannelManager {
   /** Watch a channel recorded by another process (after a restart). */
   track(channelId: string, now = Date.now()): void {
     if (!this.lastActivity.has(channelId)) this.lastActivity.set(channelId, now);
+  }
+
+  /** Re-tracks every open channel in the store, as of `now`: a restarted server keeps closing them. */
+  async resume(now = Date.now()): Promise<string[]> {
+    const ids = await this.ledger.openChannelIds();
+    for (const id of ids) this.track(id, now);
+    return ids;
   }
 
   // ------------------------------------------------------------------ verify
@@ -340,10 +347,16 @@ export class ChannelManager {
 
   /** The server's watcher: closes at t − margin, and sweeps idle channels each tick. */
   watcher(opts: { pollMs?: number; warn?: (msg: string) => void } = {}): ChannelWatcher {
+    // The first tick re-tracks the store's open channels (tracked() is in memory only).
+    let resumed: Promise<unknown> | undefined;
     return new ChannelWatcher({
       ...opts,
       tip: () => this.chain.getBlockCount(),
       channels: async () => {
+        await (resumed ??= this.resume().catch((e: unknown) => {
+          resumed = undefined;
+          throw e;
+        }));
         const open: WatchedChannel[] = [];
         for (const id of this.tracked()) {
           const ch = await this.ledger.get(id);
