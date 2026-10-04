@@ -1,0 +1,29 @@
+{
+  "name": "x402-ycash-cli",
+  "version": "0.0.0",
+  "description": "x402-ycash: pay x402 routes in YEC and manage YEC payment channels (open, status, close, refund) from the command line",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "bin": { "x402-ycash": "./dist/main.js" },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --dir test",
+    "start": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "@x402/core": "~2.28.0",
+    "@x402/fetch": "~2.28.0",
+    "x402-ycash-mechanism": "0.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.2.7"
+  }
+}
