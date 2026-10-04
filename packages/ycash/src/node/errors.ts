@@ -1,5 +1,6 @@
 // JSON-RPC error codes ycashd returns (src/rpc/protocol.h on both lines).
 export const RPC_METHOD_NOT_FOUND = -32601;
+export const RPC_WALLET_ERROR = -4;
 export const RPC_INVALID_ADDRESS_OR_KEY = -5;
 export const RPC_VERIFY_ERROR = -25;
 export const RPC_VERIFY_REJECTED = -26;

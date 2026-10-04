@@ -225,6 +225,16 @@ describe("RpcUtxoSource", () => {
     expect(w.calls.filter((c) => c[0] === "importaddress")).toEqual([["importaddress", [payer.address, "", false]]]);
     expect((await src.chainState()).branchId).toBe(0x19bd2d2f);
   });
+  it("accepts a key the node's wallet already holds (importaddress -4), and rethrows any other import error", async () => {
+    const w = new FakeWallet();
+    w.unspent = [utxo("aa".repeat(32), 1_000)];
+    const rpcWith = (err: RpcError) => ({ getBlockchainInfo: () => w.getBlockchainInfo(), listUnspent: () => w.listUnspent(), getTxOut: (t: string, n: number) => w.getTxOut(t, n), capabilities: () => w.capabilities(),
+      call: async <T,>(m: string): Promise<T> => { if (m === "importaddress") throw err; return null as T; } });
+    const held = new RpcError(-4, "The wallet already contains the private key for this address or script", "importaddress");
+    expect(await new exact.RpcUtxoSource(rpcWith(held), { importAddress: "rescan" }).listCoins(payer.address)).toHaveLength(1);
+    const other = new RpcError(-4, "Error: Please enter the wallet passphrase with walletpassphrase first.", "importaddress");
+    await expect(new exact.RpcUtxoSource(rpcWith(other), { importAddress: true }).listCoins(payer.address)).rejects.toThrow(/passphrase/);
+  });
   it("treats a node without yed_listtokens as stock", async () => {
     const w = new FakeWallet();
     w.yellowback = true;
