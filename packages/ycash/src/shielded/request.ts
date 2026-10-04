@@ -45,7 +45,7 @@ export function memoToHex(memo: string): string {
 
 /**
  * A received note's memo bytes with trailing zero bytes removed. Both lines return the 512-byte
- * memo as hex in `memo` (`ycash-dd/src/wallet/rpcwallet.cpp:3557`, `ycash6/src/wallet/rpcwallet.cpp`
+ * memo as hex in `memo` (`ycash-dd/src/wallet/rpcwallet.cpp:3557`, `ycash6/src/wallet/rpcwallet.cpp:4218-4219`,
  * z_listreceivedbyaddress); 6.21.0 adds `memoStr`, the UTF-8 text when it decodes, used only when
  * `memo` is absent.
  */
