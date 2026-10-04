@@ -75,6 +75,13 @@ network:
 | Yellowback (YED, P2PKH only) | `ye…` | `yt…` | `yr…` |
 | Sapling | `ys1…` | `ytestsapling1…` | `yregtestsapling1…` |
 
+**Client spend controls.** YED is a dollar (cents, 2 decimals), so a client SDK recognises it as
+a default asset (the TypeScript SDK's `findDefaultAsset` returns it) and its USD spend cap
+applies. YEC is not USD-pegged: treating it as a default asset would make a "$1" cap mean 1 YEC.
+An agent that pays YEC therefore adds an explicit `allowedAssets` entry for `YEC` on the network
+with a per-payment cap in zatoshis (the SDK's `yecSpendControl(network, maxZat)`); without one,
+the client refuses every YEC requirement.
+
 Ycash's transparent addresses are not Zcash's `t1…`/`t3…`: the node decodes only its own
 prefixes. A `ye…` address encodes the same 20-byte key hash as an `s1…` address, so a YED output
 is an ordinary P2PKH output; the different prefix exists so that YED is never sent to a wallet
@@ -438,6 +445,12 @@ Any failure is a rejection with the reason in parentheses.
 10. **Not claimed.** The txid is not already claimed in the settlement store
     (`duplicate_settlement`).
 
+Rule 10 is checked right after rule 3 decodes the txid, before rules 6 to 9Y run. Once the
+facilitator has claimed and broadcast a transaction, its inputs are spent by that transaction, so
+rules 6 to 9Y no longer describe it (rule 6 would answer `invalid_exact_ycash_input_spent` for a
+payment that is in fact on its way). For a claimed txid, verify therefore skips rules 6 to 9Y and
+answers `duplicate_settlement`, with `payer` taken from input 0.
+
 On a Yellowback node (one run with `-experimentalfeatures -yellowback`) the facilitator also
 checks, for YEC:
 
@@ -470,11 +483,14 @@ and the burn would be final.
 
 ## Settlement (`transparent`)
 
-1. Re-run rules 2 to 9 (and 9Y), since the handler ran in between.
-2. **Claim the txid** atomically in the settlement store (see
-   [Duplicate Settlement Mitigation](#duplicate-settlement-mitigation-required)). If the txid is
-   already claimed by an earlier settle of the same payload, resume observing it (step 4) and
-   never broadcast again.
+1. **Check the claim first.** If the txid is already claimed (an earlier settle of the same
+   payload, or a settle retried after `settlement_pending`), skip the rules and resume observing
+   it (step 4); never broadcast again.
+2. Otherwise re-run rules 2 to 9 (and 9Y), since the handler ran in between, then **claim the
+   txid** atomically in the settlement store (see
+   [Duplicate Settlement Mitigation](#duplicate-settlement-mitigation-required)). A settle that
+   loses the claim race to a concurrent settle of the same payload only observes (step 4): the
+   winner owns the broadcast.
 3. **Submit** with `sendrawtransaction(hex)`. A transaction already in the mempool returns its
    txid; one already mined returns error −27 while any of its outputs is unspent. Either result
    means the transaction is on its way, and settle continues. A rejection (`-26`, missing or spent
