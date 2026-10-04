@@ -1,0 +1,110 @@
+{
+  "line": "dd",
+  "binary": "/Users/boy/projects/yellowback-workspace/ycash-dd/src/ycashd",
+  "chain": {
+    "height": 3043,
+    "extension_blocks": 2021,
+    "shielded_blocks": 20,
+    "sapling_outputs_in_extension": 1038,
+    "z_to_z_txs": 19,
+    "outputs_per_block": 0.514,
+    "prove_s_per_tx_median": 5.82
+  },
+  "ibd_agent": {
+    "rpc_ready_s": 0.912,
+    "tip_s": 21.382,
+    "wallet_balance_s": 21.597,
+    "connect_genesis_to_start": {
+      "plain": {
+        "n": 1022,
+        "median_ms": 3.0,
+        "mean_ms": 217.563,
+        "sum_s": 222.349
+      },
+      "shielded": {
+        "n": 0,
+        "median_ms": null,
+        "mean_ms": null,
+        "sum_s": 0
+      }
+    },
+    "connect_extension": {
+      "plain": {
+        "n": 2001,
+        "median_ms": 3.0,
+        "mean_ms": 4.949,
+        "sum_s": 9.902
+      },
+      "shielded": {
+        "n": 20,
+        "median_ms": 185.0,
+        "mean_ms": 187.35,
+        "sum_s": 3.747
+      }
+    },
+    "disk": {
+      "blocks_kib": 18452,
+      "chainstate_kib": 2132,
+      "wallet_kib": 1024,
+      "total_kib": 22492
+    }
+  },
+  "ibd_nowallet": {
+    "rpc_ready_s": 0.848,
+    "tip_s": 21.066,
+    "wallet_balance_s": null,
+    "connect_genesis_to_start": {
+      "plain": {
+        "n": 1022,
+        "median_ms": 3.0,
+        "mean_ms": 5.998,
+        "sum_s": 6.13
+      },
+      "shielded": {
+        "n": 0,
+        "median_ms": null,
+        "mean_ms": null,
+        "sum_s": 0
+      }
+    },
+    "connect_extension": {
+      "plain": {
+        "n": 2001,
+        "median_ms": 3.0,
+        "mean_ms": 5.115,
+        "sum_s": 10.235
+      },
+      "shielded": {
+        "n": 20,
+        "median_ms": 191.5,
+        "mean_ms": 196.45,
+        "sum_s": 3.929
+      }
+    },
+    "disk": {
+      "blocks_kib": 18444,
+      "chainstate_kib": 2124,
+      "wallet_kib": 0,
+      "total_kib": 21388
+    }
+  },
+  "restart_at_tip": {
+    "rpc_ready_s": 1.348,
+    "node_at_tip_s": 1.348,
+    "wallet_at_tip_s": 1.348,
+    "z_sendmany_s": 1.38,
+    "payment_accepted_by_own_node_s": 2.728,
+    "merchant_sees_0conf_s": 2.843,
+    "blocks_caught_up": 0
+  },
+  "restart_after_offline": {
+    "rpc_ready_s": 0.856,
+    "node_at_tip_s": 2.601,
+    "wallet_at_tip_s": 2.602,
+    "z_sendmany_s": 1.189,
+    "payment_accepted_by_own_node_s": 3.791,
+    "merchant_sees_0conf_s": 4.246,
+    "blocks_caught_up": 201
+  },
+  "agent_disk_final_kib": 24164
+}

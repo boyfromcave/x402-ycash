@@ -1,0 +1,16 @@
+[package]
+name = "x4m"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+sapling = { package = "sapling-crypto", version = "0.7", default-features = false, features = ["std"] }
+zcash_note_encryption = "0.4.1"
+zip32 = "0.2"
+bech32 = { version = "0.11", features = ["alloc"] }
+rand = "0.8"
+hex = "0.4"
+
+[profile.release]
+debug = false
