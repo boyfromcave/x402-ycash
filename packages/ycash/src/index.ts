@@ -22,3 +22,8 @@ export {
   type PrivacyTier,
 } from "./shielded/index.js";
 export * as exact from "./exact/index.js";
+export * as channel from "./channel/index.js";
+export * as batch from "./batch/index.js";
+export { BatchYcashScheme as BatchYcashClientScheme, rpcWalletFunder, localKeyFunder } from "./batch/client/index.js";
+export { BatchYcashScheme as BatchYcashServerScheme, ChannelManager } from "./batch/server/index.js";
+export { BatchYcashScheme as BatchYcashFacilitatorScheme } from "./batch/facilitator/index.js";
