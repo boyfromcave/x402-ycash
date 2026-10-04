@@ -71,7 +71,7 @@ network:
 
 | Address | `ycash:mainnet` | `ycash:testnet` | `ycash:regtest` |
 |---|---|---|---|
-| transparent P2PKH / P2SH | `s1…` / `s3…` | `sm…` / `s2…` | `sm…` / `s2…` |
+| transparent P2PKH / P2SH | `s1…` / `s2…` or `s3…` | `sm…` / `s2…` | `sm…` / `s2…` |
 | Yellowback (YED, P2PKH only) | `ye…` | `yt…` | `yr…` |
 | Sapling | `ys1…` | `ytestsapling1…` | `yregtestsapling1…` |
 
@@ -79,6 +79,11 @@ Ycash's transparent addresses are not Zcash's `t1…`/`t3…`: the node decodes 
 prefixes. A `ye…` address encodes the same 20-byte key hash as an `s1…` address, so a YED output
 is an ordinary P2PKH output; the different prefix exists so that YED is never sent to a wallet
 that cannot see it.
+
+Testnet and regtest share their transparent version bytes (P2PKH `1C 95`, P2SH `1C 2A`, and WIF
+`0xEF`), so a transparent address alone cannot tell testnet from regtest. Clients and
+facilitators MUST take the network from the requirements' `network` (checked against the node,
+verification rule 2), never infer it from `payTo`. Yellowback addresses are distinct per network.
 
 ## Asset Transfer Methods and Payment Flow
 
@@ -356,9 +361,12 @@ The client builds a transaction with these properties. A facilitator rejects any
   `GetLightdInfo`). Signatures are low-S (standard on both lines).
 - **Fee.** fee = Σ inputs − Σ outputs ≥ **max(1000, 500 × max(2, logical actions))** zatoshis,
   where logical actions = max(⌈Σ serialised input size / 150⌉, ⌈Σ serialised output size / 34⌉)
-  (ZIP-317). This one rule satisfies Ycash 4.5.0's wallet default of 1000 zatoshis and stays above
-  6.21.0's ZIP-317 conventional fee, below which 6.21.0 applies its ZIP-401 eviction penalty. It
-  is 1000 zatoshis for a one-input, two-output payment.
+  (ZIP-317). It is 1000 zatoshis for a one-input, two-output payment. This floor is **SDK and
+  facilitator policy, not a node rule**: neither node line enforces a ZIP-317 floor at relay
+  (4.5.0 requires only its 100 zatoshis/kB minimum relay fee; 6.21.0 ships the ZIP-317 unpaid-action
+  limits off). It is chosen to match Ycash 4.5.0's wallet default of 1000 zatoshis and to stay at
+  or above 6.21.0's ZIP-317 conventional fee, below which 6.21.0 applies its ZIP-401 mempool
+  eviction penalty.
 - **Inputs.** Confirmed, unspent coins of the payer. For YEC, no input may hold YED (see rule
   9Y); a client SHOULD skip token-bearing coins in coin selection, using a Yellowback node or
   lightwalletd `GetAddressTokens` to recognise them.
@@ -418,7 +426,8 @@ Any failure is a rejection with the reason in parentheses.
    and the check no longer applies.
 7. **Fee.** Σ input values (from rule 6) − Σ outputs ≥ the fee floor of
    [Transaction Construction](#transaction-construction-transparent)
-   (`invalid_exact_ycash_fee_too_low`), and ≤ the facilitator's sanity cap, RECOMMENDED 100,000
+   (`invalid_exact_ycash_fee_too_low`; facilitator policy, since the node would relay less), and ≤
+   the facilitator's sanity cap, RECOMMENDED 100,000
    zatoshis (`invalid_exact_ycash_fee_too_high`).
 8. **Expiry.** With tip the node's height, tip + 4 ≤ `nExpiryHeight` ≤ tip + 4 +
    ⌈`maxTimeoutSeconds` / 75⌉ + 1; an expiry of 0 fails (`invalid_exact_ycash_expiry`).
@@ -493,7 +502,7 @@ settle has returned success.
 ```
 
 `transaction` is the txid in display order. `payer` is the address of the script that input 0
-spends: an `s1…`/`s3…` address for YEC (testnet and regtest `sm…`/`s2…`), the `ye…` form for YED
+spends: an `s1…` or `s2…`/`s3…` address for YEC (testnet and regtest `sm…`/`s2…`), the `ye…` form for YED
 when that script is P2PKH. `extra.status` is `"mempool"` (confirmations −1) or `"confirmed"`
 (confirmations ≥ 1, the actual depth). A success response's evidence always meets the policy.
 
@@ -741,7 +750,7 @@ Checked on 2026-10-03 against `ycash-dd` (Ycash 4.5.0 with the Yellowback overla
 | R-7 | `createrawtransaction` cannot write an `OP_RETURN` | `src/rpc/rawtransaction.cpp:647-652` | `:790-808` |
 | S-4 | One `OP_RETURN` per transaction; its script ≤ 83 bytes (80 data bytes with the minimal push) | `src/policy/policy.cpp:51-53`, `:121-125`; `src/script/standard.h:34` | `src/policy/policy.cpp:75-77`, `:153-156`; `src/script/standard.h:26` |
 | S-5 | Dust: 3 × relay fee × (output size + 148) = 54 zatoshis for P2PKH and P2SH at the default 100 zatoshis/kB | `src/primitives/transaction.h:460-479`, `src/main.h:68` | `src/primitives/transaction.cpp:67-79`, `src/main.h:72` |
-| S-6 | Fees: `DEFAULT_FEE` 1000; ZIP-317 `MARGINAL_FEE` 500, `GRACE_ACTIONS` 2, logical actions from sizes 150/34 | `src/policy/fees.h:15` | `src/zip317.h:16-19`, `src/zip317.cpp:24-35`, `src/mempool_limit.h:24-25` |
+| S-6 | Fees: `DEFAULT_FEE` 1000 (wallet); relay needs only the 100 zatoshis/kB minimum relay fee. ZIP-317 `MARGINAL_FEE` 500, `GRACE_ACTIONS` 2, logical actions from sizes 150/34; unpaid-action limits off by default, so the ZIP-317 floor is not enforced at relay | `src/policy/fees.h:15`, `src/main.h:68` | `src/zip317.h:16-19,24-41,53`, `src/zip317.cpp:24-35`, `src/mempool_limit.h:24-25`, `src/main.h:72` |
 | S-7 | Low-S, minimal pushes, NULLDUMMY and CLEANSTACK are standard script flags | `src/policy/policy.h:32-40` | `src/policy/policy.h:45-53` |
 | S-8 | Per-Sapling-output relay fee floor (sapling-proof payers) | `src/main.cpp:1501-1512`, `:1668-1673` | `src/policy/policy.cpp:16-38` |
 | Y-3 | YED output range [100, 10000000] cents (XFER-1); out of range burns everything | `src/yellowback/params.cpp:18-19`, `src/yellowback/state.cpp:447-449` | same |
@@ -756,7 +765,7 @@ Checked on 2026-10-03 against `ycash-dd` (Ycash 4.5.0 with the Yellowback overla
 | Z-1 | No RPC builds a shielded transaction without broadcasting it | `src/wallet/rpcwallet.cpp:5317-5322` | `src/wallet/wallet.cpp:6633,7409,7630` |
 | Z-3 | `z_getnewdiversifiedaddress`; `z_listreceivedbyaddress` returns amount, memo (hex) and confirmations, `minconf` 0 includes the mempool | `src/wallet/rpcwallet.cpp:3462-3557`, `:5327`; `src/wallet/rpcdump.cpp:835` | `src/wallet/rpcdump.cpp:1391`, `src/wallet/rpcwallet.cpp:4198-4260`, `src/rpc/server.cpp:615-628` |
 | G-1 | Ycash's genesis blocks are Zcash's | `src/chainparams.cpp:213,475,663` | same values |
-| G-2 | Transparent prefixes `s1`/`s3` (main), `sm`/`s2` (test, regtest); `t1`/`t3` are not decoded as destinations; Sapling HRPs `ys`, `ytestsapling`, `yregtestsapling` | `src/chainparams.cpp:149-151,164,409-411,424,613-614,623`; `src/key_io.cpp:165-187` | `src/chainparams.cpp:161,456` |
+| G-2 | Transparent version bytes P2PKH `1C 28` (`s1…`) and P2SH `1C 2C` (`s2…`/`s3…`) on mainnet; testnet and regtest share `1C 95` (`sm…`) and `1C 2A` (`s2…`), and WIF `0xEF`; `t1`/`t3` are not decoded as destinations; Sapling HRPs `ys`, `ytestsapling`, `yregtestsapling` | `src/chainparams.cpp:149-151,164,409-411,424,613-614,623`; `src/key_io.cpp:165-187` | `src/chainparams.cpp:161-163,456-458,689-690` |
 
 ## Appendix B: Optionality for node and pool operators
 
