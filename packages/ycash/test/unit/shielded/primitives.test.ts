@@ -37,6 +37,8 @@ describe("JCS (RFC 8785)", () => {
     expect(keys).toEqual(["\\r", "1", "\u0080", "ö", "€", "😀", "דּ"]);
   });
   it("serialises numbers in ECMAScript form and strings with short escapes (RFC 8785 3.2.2)", () => {
+    // RFC 8785 3.2.2.3 sample: the literal is meant to round to 333333333.3333333.
+    // eslint-disable-next-line no-loss-of-precision
     expect(jcs([333333333.33333329, 1e30, 4.5, 2e-3, 0.000000000000000000000000001])).toBe("[333333333.3333333,1e+30,4.5,0.002,1e-27]");
     // U+000F stays a \u escape, U+000A takes the short form, quote and backslash are escaped, "/" is not
     const str = String.fromCharCode(0x20ac, 0x24, 0x0f, 0x0a, 0x41, 0x27, 0x42, 0x22, 0x5c, 0x2f);

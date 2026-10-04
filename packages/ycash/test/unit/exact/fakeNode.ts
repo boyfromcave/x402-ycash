@@ -4,8 +4,7 @@
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import { RpcError, SendRawTransactionError, type BlockchainInfo, type NodeCapabilities, type TxOutInfo, type VerifyScriptsResult, type YedPayload, type YedValidation } from "../../../src/node/index.js";
 import { findPayload, isFindPayloadFailure } from "../../../src/yed/index.js";
-import type { ExactFacilitatorRpc } from "../../../src/exact/index.js";
-import type { ChainState, Coin, UtxoSource } from "../../../src/exact/index.js";
+import type { ChainState, Coin, ExactFacilitatorRpc, UtxoSource } from "../../../src/exact/index.js";
 import type { TokenCoin } from "../../../src/yed/index.js";
 import {
   bytesToHex,

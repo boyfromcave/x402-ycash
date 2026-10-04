@@ -8,5 +8,27 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
       - run: npm ci
+      - run: npm run lint
       - run: npm run typecheck
       - run: npm test
+  facilitator-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: build the facilitator image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/facilitator/Dockerfile
+          tags: x402-ycash-facilitator:ci
+          load: true
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: the image starts and refuses to run without a network (config validation)
+        run: |
+          set +e
+          out=$(docker run --rm x402-ycash-facilitator:ci 2>&1); code=$?
+          echo "$out"
+          [ "$code" -ne 0 ] && echo "$out" | grep -q X402_NETWORK

@@ -80,9 +80,12 @@ export function rpcWalletFunder(rpc: FunderRpc, opts: { reservations?: CoinReser
         .map((u) => ({ outpoint: { txid: u.txid, vout: u.vout }, value: yecToZat(u.amount), scriptPubKey: hexToBytes(u.scriptPubKey) }))
         .sort((a, b) => (a.value > b.value ? -1 : a.value < b.value ? 1 : 0));
       const changeScript = addressToScript(await rpc.call<string>("getrawchangeaddress"), req.network);
-      if (req.asset === ASSET_YED) return fundYed(rpc, req, tokenRows.filter((r) => !reserved.has(`${r.txid}:${r.vout}`)), coins, changeScript, async (outpoints, spentBy) => {
-        await reservations.reserve(outpoints, { spentBy, expiryHeight: 0, untilMs: Date.now() + (opts.holdMs ?? 1_800_000) });
-      });
+      if (req.asset === ASSET_YED) {
+        const free = tokenRows.filter((r) => !reserved.has(`${r.txid}:${r.vout}`));
+        return fundYed(rpc, req, free, coins, changeScript, async (outpoints, spentBy) => {
+          await reservations.reserve(outpoints, { spentBy, expiryHeight: 0, untilMs: Date.now() + (opts.holdMs ?? 1_800_000) });
+        });
+      }
       const picked: FundingInput[] = [];
       for (const c of coins) {
         picked.push(c);

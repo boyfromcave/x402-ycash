@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { batch as B, channel, FileClientChannelStorage, tx as T, YcashRpc } from "x402-ycash-mechanism";
+import { batch as B, channel, FileClientChannelStorage, tx as T, type YcashRpc } from "x402-ycash-mechanism";
 import { loadCliConfig, parseCli, run, UsageError } from "../src/index.js";
 
 const NET = "ycash:regtest" as const;

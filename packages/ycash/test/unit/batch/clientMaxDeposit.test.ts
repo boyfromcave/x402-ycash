@@ -1,11 +1,11 @@
 // The client's own deposit cap: spend controls cap only `amount`, and the server picks maxDeposit,
 // so a client refuses to lock more than its maxDeposit in one channel.
 import { describe, expect, it } from "vitest";
-import { batch, tx as T } from "../../../src/index.js";
+import { type batch, tx as T } from "../../../src/index.js";
 import { DEFAULT_CLIENT_MAX_DEPOSIT } from "../../../src/batch/client/index.js";
+import { setup } from "./setup.js";
 
 const DEFAULT_CLIENT_MAX_DEPOSIT_YEC = DEFAULT_CLIENT_MAX_DEPOSIT.YEC;
-import { setup } from "./setup.js";
 
 const depositOf = async (s: Awaited<ReturnType<typeof setup>>) => {
   const p = (await s.pay()).payload as unknown as batch.BatchOpenPayload;

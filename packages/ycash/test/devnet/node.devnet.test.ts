@@ -1,6 +1,6 @@
 // Every YcashRpc wrapper against a live devnet (either line).
 import { beforeAll, expect, it } from "vitest";
-import { RpcError, SendRawTransactionError, yecToZat, type ZRecipient } from "../../src/node/index.js";
+import { type RpcError, SendRawTransactionError, yecToZat, type ZRecipient } from "../../src/node/index.js";
 import { describeDevnet, devnet, record, waitFor, type Devnet } from "./harness.js";
 
 describeDevnet("YcashRpc on a live devnet", () => {

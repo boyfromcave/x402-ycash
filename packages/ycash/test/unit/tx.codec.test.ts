@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  SAPLING_VERSION_GROUP_ID, SEQUENCE_FINAL, bytesToHex, hasShielded, hexToBytes, newTx, p2pkhScript, parseTx,
+  type SAPLING_VERSION_GROUP_ID, SEQUENCE_FINAL, bytesToHex, hasShielded, hexToBytes, newTx, p2pkhScript, parseTx,
   serializeTx, serializeTxHex, txid, type Tx,
 } from "../../src/tx/index.js";
 import { ByteReader, ByteWriter } from "../../src/tx/bytes.js";

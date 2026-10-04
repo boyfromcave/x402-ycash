@@ -2,7 +2,7 @@
 // (specs/scheme_batch_settlement_ycash.md, "Verification"). State (charged total, stored voucher,
 // in-flight lock) lives in the server's ledger.
 import { channelFromScript, channelIdOf, yecDeposit, type Channel } from "../channel/channel.js";
-import { parseChannelScript } from "../channel/script.js";
+import { channelScriptPubKey, parseChannelScript } from "../channel/script.js";
 import { checkVoucherShape, verifyVoucherSignature } from "../channel/voucher.js";
 import { yecVoucherOutputs, type VoucherLayout } from "../channel/outputs.js";
 import { assignedTo, YED_TRANSFER_VOUT, yedChannelValue, yedVoucherAssignments, yedVoucherLayout } from "../channel/yed.js";
@@ -17,7 +17,6 @@ import { addressToScript } from "../tx/address.js";
 import { equalBytes, hexToBytes } from "../tx/bytes.js";
 import { feeFloor, txFee } from "../tx/fee.js";
 import { hasShielded, parseTx, serializeTxHex, txid as txidOf, type Tx } from "../tx/tx.js";
-import { channelScriptPubKey } from "../channel/script.js";
 import { BatchError, BatchSettlementError } from "./errors.js";
 import type { BatchOpenPayload, BatchTerms } from "./types.js";
 
