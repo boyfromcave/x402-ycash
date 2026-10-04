@@ -5,7 +5,7 @@ import { channel as C, tx as T } from "../../src/index.js";
 interface Doc {
   branchId: string;
   specExample: { clientPubKey: string; serverPubKey: string; refundHeight: number; redeemScript: string; hash160: string };
-  channel: { clientPriv: string; serverPriv: string; refundHeight: number; redeemScript: string; scriptPubKey: string; outpoint: T.OutPoint; value: string; closeFee: string; payTo: string; clientScript: string };
+  channel: { clientPriv: string; serverPriv: string; refundHeight: number; redeemScript: string; scriptPubKey: string; outpoint: T.OutPoint; value: string; closeFee: string; payTo: string; returnAddress: string; clientScript: string };
   vouchers: { cumulative: string; sighash: string; voucher: string; close: string; closeTxid: string }[];
   refund: { lockTime: number; sequence: number; tx: string; txid: string };
 }
@@ -27,6 +27,9 @@ describe("vectors/channel/channel_yec.json", () => {
     expect(T.bytesToHex(T.hash160(ers))).toBe(e.hash160);
     expect(T.bytesToHex(rs)).toBe(doc.channel.redeemScript);
     expect(T.bytesToHex(C.channelScriptPubKey(rs))).toBe(doc.channel.scriptPubKey);
+    // the remainder goes to the open's returnAddress, not to C's key hash
+    expect(T.bytesToHex(T.addressToScript(doc.channel.returnAddress, "ycash:regtest"))).toBe(doc.channel.clientScript);
+    expect(doc.channel.clientScript).not.toBe(T.bytesToHex(T.p2pkhScript(T.hash160(T.pubkeyFromPriv(cPriv)))));
   });
 
   it.each(doc.vouchers)("reproduces the voucher and close at $cumulative", (v) => {

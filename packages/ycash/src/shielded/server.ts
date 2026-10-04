@@ -38,6 +38,11 @@ export interface ShieldedExactServerConfig {
   retentionGraceSeconds?: number;
   /** Refuse to issue beyond this many held records (spec, "Implementation limits"). */
   maxOutstanding?: number;
+  /**
+   * The confirmation range the operator settles. A policy outside it is refused before anything is
+   * issued, so a refusal uses no address and does not count toward maxOutstanding.
+   */
+  confirmationRange?: { minimum: number; maximum: number };
   /** micro-USD per YEC when the node has no live `yed_getprice`. */
   fallbackPriceMicroUsd?: number;
   /** Unix seconds; injectable for tests. */
@@ -93,6 +98,10 @@ export class ShieldedExactServer {
     const confirmations = confirmationsOf(extra) ?? this.config.defaultConfirmations ?? DEFAULT_SAPLING_PROOF_CONFIRMATIONS;
     if (!Number.isInteger(confirmations) || confirmations < MIN_CONFIRMATIONS || confirmations > MAX_CONFIRMATIONS) {
       throw new Error(`confirmations ${confirmations} is outside [${MIN_CONFIRMATIONS}, ${MAX_CONFIRMATIONS}]`);
+    }
+    const range = this.config.confirmationRange;
+    if (range && (confirmations < range.minimum || confirmations > range.maximum)) {
+      throw new Error(`confirmations ${confirmations} is outside the operator's range [${range.minimum}, ${range.maximum}]`);
     }
 
     let amount = requirements.amount;

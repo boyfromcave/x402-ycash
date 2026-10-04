@@ -76,13 +76,15 @@ export type VoucherShapeError = "inputs" | "script_sig" | "redeem_script" | "loc
 /**
  * Voucher rule 4: one input spending the channel outpoint with the close skeleton (server slot
  * empty unless `allowCompleted`), nLockTime 0, nExpiryHeight 0, transparent only, and exactly the
- * layout's outputs at `cumulative`. The client's script is read from vout 1 when there is one.
+ * layout's outputs at `cumulative`. The client's script is the channel's bound return script
+ * (`clientScript`, from the open's returnAddress); only a verifier that never saw the open (a
+ * stateless facilitator) leaves it out, and then it is read from vout 1.
  */
 export function checkVoucherShape(
   tx: Tx,
   channel: Channel,
   cumulative: bigint,
-  opts: { layout?: VoucherLayout; allowCompleted?: boolean } = {},
+  opts: { layout?: VoucherLayout; allowCompleted?: boolean; clientScript?: Uint8Array } = {},
 ): VoucherShapeError | null {
   const input = tx.vin[0];
   if (tx.vin.length !== 1 || !input) return "inputs";
@@ -93,7 +95,7 @@ export function checkVoucherShape(
   if (tx.lockTime !== 0) return "lock_time";
   if (tx.expiryHeight !== 0) return "expiry";
   if (hasShielded(tx) || tx.valueBalance !== 0n) return "shielded";
-  const clientScript = tx.vout[1]?.scriptPubKey;
+  const clientScript = opts.clientScript ?? tx.vout[1]?.scriptPubKey;
   let expected;
   try {
     expected = (opts.layout ?? yecVoucherOutputs)({ channel, cumulative, ...(clientScript ? { clientScript } : {}) });

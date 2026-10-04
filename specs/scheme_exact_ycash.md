@@ -632,7 +632,9 @@ A `sapling-proof` settle response carries an `offer-and-receipt` receipt in JWS 
 not identify payers. The receipt is the off-chain selective disclosure of this binding: the agent
 can prove the payment to anyone who trusts the merchant's key, and nothing more is revealed on
 chain. The receipt payload carries no amount; a verifier that needs it relies on the merchant's
-offer (`extensions["offer-receipt"].info.offers[]`), which signs the requirements.
+offer (`extensions["offer-receipt"].info.offers[]`), which signs the requirements. The receipt is
+signed ES256K: a signer MUST produce a low-S signature, and a verifier accepts a high-S one too
+(it normalises s to the low half before verifying), as both SDKs do and `vectors/shielded` pins.
 
 ## Reserved methods
 

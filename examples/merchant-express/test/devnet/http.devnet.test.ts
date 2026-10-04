@@ -73,6 +73,27 @@ describeDevnet("HTTP end to end: facilitator, merchant and agent as processes", 
     return BigInt(Math.round((await d.stock.call<number>("getreceivedbyaddress", [address, minconf])) * 1e8));
   }
 
+  /**
+   * The client's remainder came home: the close pays the open's returnAddress (a new address of the
+   * payer's node-2 wallet) `want`, the wallet received it, and nothing pays the channel key C.
+   */
+  async function remainderHome(storePath: string, channelId: string, closeTxid: string, want: bigint): Promise<void> {
+    const rec = (JSON.parse(readFileSync(storePath, "utf8")) as { channels: Record<string, { returnAddress?: string; clientPrivKey: string }> }).channels[channelId]!;
+    expect(rec.returnAddress).toBeDefined();
+    const close = tx.parseTx(await d.stock.call<string>("getrawtransaction", [closeTxid]));
+    const cScript = tx.p2pkhScript(tx.hash160(tx.pubkeyFromPriv(tx.hexToBytes(rec.clientPrivKey))));
+    expect(close.vout.some((o) => tx.equalBytes(o.scriptPubKey, cScript))).toBe(false);
+    const home = tx.addressToScript(rec.returnAddress!, NETWORK);
+    expect(close.vout.filter((o) => tx.equalBytes(o.scriptPubKey, home)).reduce((s, o) => s + o.value, 0n)).toBe(want);
+    let got = -1n;
+    await waitFor(async () => {
+      got = BigInt(Math.round((await d.pool.call<number>("getreceivedbyaddress", [rec.returnAddress, 1])) * 1e8));
+      return got === want;
+    }, { timeoutMs: 20_000, what: `the payer's wallet to receive ${want}` }).catch(() => undefined);
+    expect(got).toBe(want);
+    record(d.line, "HTTP remainder home", { channelId, returnAddress: rec.returnAddress, closeTxid, remainderZat: want.toString() });
+  }
+
   async function blockTxs(hash: string): Promise<string[]> {
     return (await d.stock.call<{ tx: string[] }>("getblock", [hash])).tx;
   }
@@ -210,6 +231,7 @@ describeDevnet("HTTP end to end: facilitator, merchant and agent as processes", 
     const [hash] = await d.mine(1, d.stock);
     expect(await blockTxs(hash as string)).toContain(closeTxid);
     await waitFor(async () => (await receivedBy(payTo)) - before === 100n * PRICE.channel, { timeoutMs: 20_000, what: "the close's payment" });
+    await remainderHome(store, channelId, closeTxid, 150_000n - 100n * PRICE.channel);
 
     const after = await runCli(["channel", "status", channelId, ...cliNode]);
     expect(after.lines[0]).toMatchObject({ status: "closed", unspent: false, closeTxid });
@@ -239,6 +261,7 @@ describeDevnet("HTTP end to end: facilitator, merchant and agent as processes", 
     expect(close.code, close.stderr + JSON.stringify(close.lines)).toBe(0);
     await d.mine(1, d.stock);
     await waitFor(async () => (await receivedBy(payTo)) - before === 5n * PRICE.channel, { timeoutMs: 20_000, what: "the CLI channel's close" });
+    await remainderHome(store, ch.channelId, close.lines.at(-1)!.transaction as string, 20_000n - 5n * PRICE.channel);
     const status = await runCli(["channel", "status", ...node]);
     expect(status.lines).toEqual([expect.objectContaining({ channelId: ch.channelId, status: "closed", unspent: false })]);
     record(d.line, "HTTP CLI", { channelId: ch.channelId, closeTxid: close.lines.at(-1)?.transaction, charged: (5n * PRICE.channel).toString() });

@@ -73,7 +73,9 @@ Ycash Yellowback (YED) is paid on two more merchant routes, served only when the
 YED in `/supported` (its node runs `-experimentalfeatures -yellowback`, as node 0 does) and the
 merchant has a Yellowback address: `GET /yed/report` (exact, `PRICE_YED_REPORT`, default `$2`;
 never below $1.00, since a smaller YED output burns) and `GET /yed/stream` (a YED channel,
-`PRICE_YED_STREAM` per request, default `$0.01`, deposits up to `MERCHANT_MAX_DEPOSIT_CENTS`). A
+`PRICE_YED_STREAM` per request, default `$0.01`, deposits up to `MERCHANT_MAX_DEPOSIT_CENTS`). The
+merchant re-reads the facilitator's `/supported` every minute and when a request reaches a YED
+route that is off, so the routes come on when the facilitator starts after the merchant. A
 YED channel's funding must be in a block, so run the merchant of step 3 without
 `MERCHANT_CHANNEL_CONFIRMATIONS=-1` and add, for example,
 `MERCHANT_YED_PAY_TO=$(X402_SCRATCH=$PWD/scratch scripts/devnet.sh cli dd 181 -- yed_getnewaddress)`.
@@ -93,8 +95,10 @@ The agent pays YED from `AGENT_WIF` (the key's `ye…` token outputs) or the nod
 `MAX_PAYMENT_YED_CENTS` (default 100), `AGENT_YED_CHANNEL_DEPOSIT_CENTS` and
 `AGENT_YED_CHANNEL_MAX_DEPOSIT_CENTS` (default $50). The CLI takes `--asset YED` on `pay` and
 `channel open|close` (`--deposit` is then in cents), `--max-payment-yed` and `--max-deposit-yed`;
-`channel refund` of a YED channel carries a TRANSFER of all of D, by default to the WIF key or a new
-Yellowback address of the node's wallet.
+`channel refund` of a YED channel carries a TRANSFER of all of D, by default to the channel's
+return address. Every channel's remainder (its vouchers, the close, the refund) returns to the
+`returnAddress` the client names at open: the WIF key's address (its `ye…` form for YED) or a new
+address of the node's wallet, never the channel key, which no wallet watches.
 
 ## Facilitator
 
@@ -172,13 +176,17 @@ be used, with the same keys in camelCase; the environment wins over the file.
     limits; an explicit `AGENT_CHANNEL_DEPOSIT_ZAT` above the client's cap refuses the `open`. In
     code: `new BatchYcashClientScheme({ maxDeposit: { YEC: … , YED: … } })`, whose defaults are
     `DEFAULT_CLIENT_MAX_DEPOSIT` (1 YEC and $50).
+  - **`AGENT_CHANNEL_MAX_CLOSE_FEE_ZAT`** (default `5000`) caps the server-chosen `closeFee`, which
+    is also locked in the channel and paid to miners at close; an offer above it refuses the
+    `open` (`maxCloseFee` in code, default `DEFAULT_CLIENT_MAX_CLOSE_FEE`).
 
   A local-key agent hands its signed transactions to the facilitator or the channel server, which
   broadcast them, often through another node. Until the agent's own node sees such a spend, the
   coin still looks unspent there, so the agent keeps the coins of its signed, unconfirmed spends in
   a reservation file (`AGENT_RESERVATIONS`; default a per-payer file in the OS temp directory). Every
   agent process of the same payer shares it, and a coin is released when its spend confirms or
-  expires (a channel funding, which never expires, holds its coins for 30 minutes). The node-wallet
+  expires. A channel funding expires at tip + 3 + 40 blocks (`fundingExpiryBlocks`), so a funding
+  the server never relays frees its coins by height. The node-wallet
   signer uses the same file for its YED outputs, which `lockunspent` cannot mark (the Yellowback
   wallet keeps every YED output locked).
 
@@ -200,7 +208,8 @@ It reads its node from `--devnet devnet.json [--node N]` or `--rpc-url` with `--
 settings come from `X402_DEVNET_JSON`, `X402_RPC_*`, `X402_WIF`, `X402_SHIELDED_FROM`,
 `X402_CHANNEL_STORE` (default `~/.x402-ycash/channels.json`, a wallet file: it holds channel keys),
 `X402_MAX_PAYMENT_ZAT`, `X402_MAX_DEPOSIT_ZAT` (`--max-deposit`, the most one channel may lock;
-default 1 YEC) and `X402_RESERVATIONS` (`--reservations`, the coin reservation file; default
+default 1 YEC), `X402_MAX_CLOSE_FEE_ZAT` (`--max-close-fee`, the largest server `closeFee` a channel
+may lock; default 5000) and `X402_RESERVATIONS` (`--reservations`, the coin reservation file; default
 `reservations.json` next to the channel store).
 
 MIT licensed.

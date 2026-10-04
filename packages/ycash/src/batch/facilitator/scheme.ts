@@ -11,12 +11,13 @@ import { channelScriptPubKey, parseChannelScript } from "../../channel/script.js
 import { parseCloseScriptSig } from "../../channel/voucher.js";
 import { ASSET_YED } from "../../constants.js";
 import { SendRawTransactionError } from "../../node/errors.js";
-import { InMemoryChannelStore, type ChannelStore } from "../../store/channelStore.js";
+import { DEFAULT_CLOSED_RETENTION_MS, InMemoryChannelStore, type ChannelStore } from "../../store/channelStore.js";
 import { RETAIN_FOREVER, txidKey, type SettlementStore } from "../../store/settlementStore.js";
 import { addressToScript } from "../../tx/address.js";
 import { bytesToHex, equalBytes, hexToBytes } from "../../tx/bytes.js";
 import { txid as txidOf, type Tx } from "../../tx/tx.js";
 import { BatchError, BatchSettlementError, reasonOf } from "../errors.js";
+import { returnScriptOf } from "../returnAddress.js";
 import { BATCH_SETTLEMENT_SCHEME, isBatchPayload, parseTerms, requiredDepth, sameOffer, type BatchPayload, type BatchTerms } from "../types.js";
 import {
   chainContext,
@@ -44,6 +45,8 @@ export interface BatchYcashFacilitatorConfig {
    * charged total and the voucher watermark are the server's. Default: in memory.
    */
   channelStore?: ChannelStore;
+  /** How long the record of a channel whose close it relayed is kept (default 30 days, plan X-F51). */
+  closedRetentionMs?: number;
   /** The funding depths this facilitator settles (`/supported`); default −1..20. */
   confirmations?: { minimum: number; maximum: number };
   /** How long settle waits for the funding depth before answering settlement_pending (default 0). */
@@ -88,7 +91,10 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
       // YED: D is the channel output's token record, read through the voucher's yedIn.
       const deposit = yed ? await overlayDeposit(this.chain, p.tx) : channel.value - channel.closeFee;
       const cumulative = BigInt(p.cumulative);
+      // The return script is bound when this facilitator relayed the open; a stateless one checks the rest.
+      const recorded = (await this.channels.get(p.channelId))?.data?.returnScript;
       checkVoucher(tx, channel, cumulative, {
+        ...(typeof recorded === "string" ? { returnScript: hexToBytes(recorded) } : {}),
         charged: 0n, // the server's charged total is not known here; it applies rule 5 in full
         amount: p.type === "voucher" ? terms.amount : 0n,
         deposit,
@@ -124,7 +130,9 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
           if (!(await this.waitForDepth(fundingTxid, p.vout, requiredDepth(terms.confirmations)))) {
             return { ...fail(new BatchSettlementError(BatchError.SETTLEMENT_PENDING, "funding below the policy depth"), fundingTxid), payer: channelId };
           }
-          await this.channels.open({ channelId, cumulative: 0n, data: { fundingTxid, vout: p.vout } });
+          // The return script, so this facilitator binds it in the channel's later vouchers and claims.
+          const returnScript = bytesToHex(returnScriptOf(p.returnAddress, terms.network, terms.asset, addressToScript(terms.payTo, terms.network)));
+          await this.channels.open({ channelId, cumulative: 0n, data: { fundingTxid, vout: p.vout, returnScript } });
           return { success: true, transaction: fundingTxid, network, payer: channelId, amount: "", extra: { commitmentId: commitmentId(channelId) } };
         }
         case "voucher":
@@ -183,10 +191,13 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
     return { channel, tx };
   }
 
+  /** Records the relayed close's cumulative, and retires the channel's record: it is spent now. */
   private async recordClaim(channelId: string, cumulative: bigint): Promise<void> {
-    if (await this.channels.open({ channelId, cumulative })) return;
-    const r = await this.channels.get(channelId);
-    if (r && r.cumulative < cumulative) await this.channels.compareAndSetCumulative(channelId, r.cumulative, cumulative);
+    if (!(await this.channels.open({ channelId, cumulative }))) {
+      const r = await this.channels.get(channelId);
+      if (r && r.cumulative < cumulative) await this.channels.compareAndSetCumulative(channelId, r.cumulative, cumulative);
+    }
+    await this.channels.retire([channelId], Date.now() + (this.cfg.closedRetentionMs ?? DEFAULT_CLOSED_RETENTION_MS));
   }
 
   private async relay(hex: string): Promise<void> {

@@ -11,14 +11,14 @@ import { buildRefund } from "../../channel/refund.js";
 import { buildChannelScript, channelAddress } from "../../channel/script.js";
 import { buildVoucher } from "../../channel/voucher.js";
 import { buildYedRefund, yedChannelValue } from "../../channel/yed.js";
-import { ASSET_YEC, ASSET_YED, YED_MAX_OUTPUT_CENTS } from "../../constants.js";
+import { ASSET_YEC, ASSET_YED, TX_EXPIRING_SOON_THRESHOLD, YED_MAX_OUTPUT_CENTS } from "../../constants.js";
 import type { BlockchainInfo, TxOutInfo } from "../../node/types.js";
 import { bytesToHex, hexToBytes } from "../../tx/bytes.js";
-import { hash160 } from "../../tx/hash.js";
+import { addressToScript } from "../../tx/address.js";
 import { pubkeyFromPriv, randomPrivKey } from "../../tx/keys.js";
-import { p2pkhScript } from "../../tx/script.js";
 import { parseTx, serializeTxHex, txid as txidOf } from "../../tx/tx.js";
 import { BatchError } from "../errors.js";
+import { returnScriptOf } from "../returnAddress.js";
 import { parseTerms, type BatchChannelState, type BatchClientPayload, type BatchTerms } from "../types.js";
 import { closeCumulative, cumulativeFloor, layoutFor } from "../verify.js";
 import { channelOfRecord, InMemoryClientChannelStorage, offerKeyOf, type ClientChannelRecord, type ClientChannelStorage } from "./channel.js";
@@ -38,6 +38,19 @@ export interface ClientChain {
  */
 export const DEFAULT_CLIENT_MAX_DEPOSIT: Readonly<Record<string, bigint>> = { [ASSET_YEC]: 100_000_000n, [ASSET_YED]: 5_000n };
 
+/**
+ * The client's cap on the server-chosen `closeFee`, zatoshis for both assets (plan X-F50): the fee
+ * is locked in V and paid to miners at close, so a hostile server could inflate it. The default is
+ * a little over three times the close's fee floor (1,500).
+ */
+export const DEFAULT_CLIENT_MAX_CLOSE_FEE: Readonly<Record<string, bigint>> = { [ASSET_YEC]: 5_000n, [ASSET_YED]: 5_000n };
+
+/**
+ * Blocks a funding stays valid beyond the relay threshold: nExpiryHeight = tip + 3 + this (plan
+ * X-F52). A funding the server never relays then expires, and its coins are free again by height.
+ */
+export const DEFAULT_FUNDING_EXPIRY_BLOCKS = 40;
+
 export interface BatchYcashClientConfig {
   chain: ClientChain;
   funder: ChannelFunder;
@@ -53,6 +66,16 @@ export interface BatchYcashClientConfig {
   depositMultiplier?: number;
   /** Blocks added to tip + minLockBlocks, so the open survives a few blocks of delay (default 10). */
   lockSlackBlocks?: number;
+  /**
+   * Where vouchers, the close and the refund return the client's remainder (the open's
+   * `returnAddress`). Default: the funder's (its wallet or WIF address); never the channel key C,
+   * which no wallet watches.
+   */
+  returnAddress?: string;
+  /** The largest server `closeFee` this client opens with, zatoshis per asset (merged over DEFAULT_CLIENT_MAX_CLOSE_FEE). */
+  maxCloseFee?: Partial<Record<string, bigint>>;
+  /** The funding's nExpiryHeight is tip + 3 + this (default DEFAULT_FUNDING_EXPIRY_BLOCKS). */
+  fundingExpiryBlocks?: number;
   log?: (msg: string) => void;
 }
 
@@ -104,9 +127,16 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     const terms = parseTerms(req);
     const key = offerKeyOf(terms.network, terms.payTo, bytesToHex(terms.serverPubKey));
     let rec = await this.storage.findLive(key);
-    // An open not yet accepted (funding depth) is resent unchanged.
-    if (rec?.status === "opening" && rec.open) return { x402Version, payload: { ...rec.open } };
     const info = await this.cfg.chain.getBlockchainInfo();
+    if (rec?.status === "opening" && rec.open) {
+      // An open not yet accepted (funding depth) is resent unchanged, until its funding can no
+      // longer land: then the coins are free again and a new channel is opened.
+      if (!(await this.fundingExpired(rec, info.blocks))) return { x402Version, payload: { ...rec.open } };
+      rec.status = "expired";
+      delete rec.open;
+      await this.storage.put(rec);
+      rec = undefined;
+    }
     const branchId = parseInt(info.consensus.nextblock, 16) >>> 0;
     if (rec) {
       const next = BigInt(rec.charged) + terms.amount;
@@ -127,8 +157,22 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     return { x402Version, payload: { ...(await this.open(terms, key, info.blocks, branchId)) } };
   }
 
+  /** The funding can no longer relay (tip + 3 > its expiry) and is not on chain or in the mempool. */
+  private async fundingExpired(rec: ClientChannelRecord, tip: number): Promise<boolean> {
+    const expiry = rec.fundingExpiryHeight ?? 0;
+    if (expiry === 0 || tip + 1 + TX_EXPIRING_SOON_THRESHOLD <= expiry) return false;
+    return (await this.cfg.chain.getTxOut(rec.channelId.split(":")[0] as string, rec.vout, true)) === null;
+  }
+
   private async open(terms: BatchTerms, offerKey: string, tip: number, branchId: number) {
     const yed = terms.asset === ASSET_YED;
+    const maxCloseFee = this.cfg.maxCloseFee?.[terms.asset] ?? DEFAULT_CLIENT_MAX_CLOSE_FEE[terms.asset];
+    if (maxCloseFee === undefined || terms.closeFee > maxCloseFee) {
+      throw new Error(`closeFee ${terms.closeFee} is above this client's maxCloseFee ${maxCloseFee ?? "(none)"} for ${terms.asset}`);
+    }
+    const returnAddress = this.cfg.returnAddress ?? (await this.cfg.funder.returnAddress?.({ network: terms.network, asset: terms.asset }));
+    if (!returnAddress) throw new Error("no return address: set returnAddress, or use a funder that has one (the channel key's remainder would be stranded)");
+    const returnScript = returnScriptOf(returnAddress, terms.network, terms.asset, addressToScript(terms.payTo, terms.network));
     const priv = randomPrivKey();
     const clientPubKey = pubkeyFromPriv(priv);
     const refundHeight = tip + terms.minLockBlocks + (this.cfg.lockSlackBlocks ?? 10);
@@ -146,7 +190,8 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     this.layoutFor(terms.asset, deposit); // refuse an asset without a layout before funding anything
     // YED: V carries the two voucher outputs' TOKEN_VALUE and the close fee; D is assigned in cents.
     const value = yed ? yedChannelValue(terms.closeFee) : deposit + terms.closeFee;
-    const fundingTx = await this.cfg.funder.fund({ network: terms.network, redeemScript, value, branchId, asset: terms.asset, deposit });
+    const expiryHeight = tip + TX_EXPIRING_SOON_THRESHOLD + (this.cfg.fundingExpiryBlocks ?? DEFAULT_FUNDING_EXPIRY_BLOCKS);
+    const fundingTx = await this.cfg.funder.fund({ network: terms.network, redeemScript, value, branchId, asset: terms.asset, deposit, tip, expiryHeight });
     const vout = findChannelVout(parseTx(fundingTx), redeemScript);
     if (vout < 0) throw new Error("the funder's transaction does not pay the channel");
     const channelId = channelIdOf({ txid: txidOf(hexToBytes(fundingTx)), vout });
@@ -154,9 +199,13 @@ export class BatchYcashScheme implements SchemeNetworkClient {
       channelId, offerKey, network: terms.network, asset: terms.asset, payTo: terms.payTo, serverPubKey: bytesToHex(terms.serverPubKey),
       redeemScript: bytesToHex(redeemScript), fundingTx, vout, value: value.toString(), closeFee: terms.closeFee.toString(),
       deposit: deposit.toString(), refundHeight, closeMarginBlocks: terms.closeMarginBlocks, clientPrivKey: bytesToHex(priv),
-      clientScript: bytesToHex(p2pkhScript(hash160(clientPubKey))), charged: "0", signed: first.toString(), status: "opening",
+      clientScript: bytesToHex(returnScript), returnAddress, fundingExpiryHeight: parseTx(fundingTx).expiryHeight,
+      charged: "0", signed: first.toString(), status: "opening",
     };
-    const open = { type: "open" as const, fundingTx, vout, redeemScript: rec.redeemScript, voucher: { tx: this.sign(rec, first, branchId), cumulative: first.toString() } };
+    const open = {
+      type: "open" as const, fundingTx, vout, redeemScript: rec.redeemScript, returnAddress,
+      voucher: { tx: this.sign(rec, first, branchId), cumulative: first.toString() },
+    };
     rec.open = open;
     await this.storage.put(rec);
     this.cfg.log?.(`opened ${channelId} at ${channelAddress(terms.network, redeemScript)}: V=${value} D=${deposit} t=${refundHeight}`);

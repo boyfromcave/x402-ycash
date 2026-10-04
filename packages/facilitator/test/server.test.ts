@@ -151,7 +151,7 @@ describe("registerSchemes", () => {
     await expect(half.enhanceRequirements({} as never, {} as never, [])).rejects.toThrow(/merchant's server/);
   });
 
-  it("the facilitator half waits a bounded time for a note still crossing the network, and no longer", async () => {
+  it("the facilitator half delegates settle once: the bounded note wait is the mechanism's (noteWaitMs)", async () => {
     const handler = new SaplingProofHandler({ ...deps, receiptKey: "22".repeat(32), registry: new InMemoryIssuedAddressRegistry() });
     const answers = ["invalid_exact_ycash_not_received", "invalid_exact_ycash_not_received", "ok"];
     let calls = 0;
@@ -159,17 +159,7 @@ describe("registerSchemes", () => {
       const a = answers[Math.min(calls++, answers.length - 1)];
       return a === "ok" ? { success: true, transaction: "t", network: "ycash:regtest" } : { success: false, errorReason: a, transaction: "t", network: "ycash:regtest" };
     };
-    expect(await facilitatorHalf(handler, { noteWaitMs: 5_000, pollMs: 1 }).settle({} as never, {} as never)).toMatchObject({ success: true });
-    expect(calls).toBe(3);
-    calls = 0;
-    answers.splice(0, answers.length, "invalid_exact_ycash_not_received");
-    const t0 = Date.now();
-    expect(await facilitatorHalf(handler, { noteWaitMs: 50, pollMs: 10 }).settle({} as never, {} as never)).toMatchObject({ errorReason: "invalid_exact_ycash_not_received" });
-    expect(Date.now() - t0).toBeLessThan(1_000);
-    // any other answer returns at once
-    calls = 0;
-    answers.splice(0, answers.length, "invalid_exact_ycash_memo_mismatch");
-    await facilitatorHalf(handler, { noteWaitMs: 5_000, pollMs: 1 }).settle({} as never, {} as never);
+    expect(await facilitatorHalf(handler).settle({} as never, {} as never)).toMatchObject({ errorReason: "invalid_exact_ycash_not_received" });
     expect(calls).toBe(1);
   });
 

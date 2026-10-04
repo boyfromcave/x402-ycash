@@ -30,7 +30,9 @@ const depositCents = 2_000n;
 const closeFee = C.DEFAULT_CLOSE_FEE;
 const redeemScript = C.buildChannelScript({ clientPubKey: cPub, serverPubKey: sPub, refundHeight });
 const payTo = T.encodeAddress(NET, "yed", h("aa".repeat(20)));
-const clientScript = T.p2pkhScript(T.hash160(cPub));
+// The open's returnAddress: the funder's Yellowback address (a P2PKH, as YED needs), never C's.
+const returnAddress = T.encodeAddress(NET, "yed", T.hash160(T.pubkeyFromPriv(fPriv)));
+const clientScript = T.addressToScript(returnAddress, NET);
 
 // funding: a token coin of $25.00 and a YEC coin, both the funder's
 const token: Y.TokenCoin = { outpoint: { txid: "a1".repeat(32), vout: 1 }, cents: 2_500, value: 10_000n, scriptPubKey: fScript };
@@ -66,12 +68,12 @@ const refund = C.buildYedRefund({ channel, depositCents, clientPrivKey: cPriv, t
 
 const doc = {
   description:
-    "YED payment channel (batch-settlement, plan X3): the funding TRANSFER (D cents to the P2SH output of V = 2 × TOKEN_VALUE + closeFee), vouchers under the dollar floor with their TRANSFER at vout 2, completed closes, the refund with its TRANSFER of all of D to the client (vout 1). Offline, deterministic; the builders' spends are mined on both lines by test/devnet/yed.devnet.test.ts.",
+    "YED payment channel (batch-settlement, plan X3): the funding TRANSFER (D cents to the P2SH output of V = 2 × TOKEN_VALUE + closeFee), vouchers under the dollar floor with their TRANSFER at vout 2, completed closes, the refund with its TRANSFER of all of D to the client (vout 1). The client's YED (voucher vout 1, the refund) goes to the open's returnAddress (clientScript, a P2PKH). The funding keeps nExpiryHeight 0 (still accepted) so its bytes stay those of the earlier vector. Offline, deterministic; the builders' spends are mined on both lines by test/devnet/yed.devnet.test.ts.",
   branchId: BRANCH.toString(16),
   channel: {
     clientPriv: hex(cPriv), serverPriv: hex(sPriv), funderPriv: hex(fPriv), refundHeight, depositCents: depositCents.toString(),
     redeemScript: hex(redeemScript), scriptPubKey: hex(C.channelScriptPubKey(redeemScript)),
-    value: channel.value.toString(), closeFee: closeFee.toString(), payTo, clientScript: hex(clientScript),
+    value: channel.value.toString(), closeFee: closeFee.toString(), payTo, returnAddress, clientScript: hex(clientScript),
   },
   funding: {
     token: { outpoint: token.outpoint, cents: token.cents, value: token.value.toString() },

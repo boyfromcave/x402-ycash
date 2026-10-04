@@ -8,6 +8,7 @@
 //   refund   the CLTV branch, a TRANSFER assigning all of D to the client's output
 import { TOKEN_VALUE_ZAT } from "../constants.js";
 import { equalBytes } from "../tx/bytes.js";
+import { p2pkhHash } from "../tx/script.js";
 import type { Tx } from "../tx/tx.js";
 import { buildYedTransfer, type BuiltYedTransfer, type TokenCoin, type YecCoin } from "../yed/build.js";
 import { yedChannelSplit } from "../yed/floor.js";
@@ -43,7 +44,7 @@ export function yedVoucherAssignments(depositCents: bigint, cumulative: bigint):
 /**
  * The YED voucher layout of a channel holding D cents. Constant shape: three outputs whatever the
  * split, so the fee is always V − 2 × TOKEN_VALUE = closeFee. Throws when V is not
- * 2 × TOKEN_VALUE + closeFee, the client script is missing or is payTo's, or the cumulative breaks
+ * 2 × TOKEN_VALUE + closeFee, the client script is missing, not P2PKH or payTo's, or the cumulative breaks
  * the dollar floor.
  */
 export function yedVoucherLayout(depositCents: bigint): VoucherLayout {
@@ -52,6 +53,8 @@ export function yedVoucherLayout(depositCents: bigint): VoucherLayout {
       throw new RangeError(`a YED channel's value must be 2 × TOKEN_VALUE + closeFee = ${yedChannelValue(channel.closeFee)}, not ${channel.value}`);
     }
     if (!clientScript) throw new Error("a YED voucher always has a client output script");
+    // A YED holder is a key hash: there is no P2SH Yellowback address (plan Y-8).
+    if (!p2pkhHash(clientScript)) throw new Error("a YED voucher returns the client's YED to a P2PKH script");
     if (equalBytes(clientScript, channel.payToScript)) throw new Error("the client output must not pay payTo");
     return [
       { value: TOKEN_VALUE, scriptPubKey: channel.payToScript },

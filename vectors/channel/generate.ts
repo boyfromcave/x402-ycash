@@ -29,7 +29,9 @@ const channel = C.channelFromScript({
   outpoint: { txid: "7d3a" + "00".repeat(28) + "e91c", vout: 0 },
   redeemScript, value: 1_001_500n, closeFee: C.DEFAULT_CLOSE_FEE, payToScript: T.addressToScript(payTo, "ycash:regtest"),
 });
-const clientScript = T.p2pkhScript(T.hash160(cPub));
+// The open's returnAddress: the funder's wallet address (key 0x33…), never C's, which no wallet watches.
+const returnAddress = T.encodeAddress("ycash:regtest", "p2pkh", T.hash160(T.pubkeyFromPriv(h("33".repeat(32)))));
+const clientScript = T.addressToScript(returnAddress, "ycash:regtest");
 
 const vouchers = [2000n, 26_000n, 999_947n, 1_000_000n].map((cumulative) => {
   const v = C.buildVoucher({ channel, cumulative, clientScript, clientPrivKey: cPriv, branchId: BRANCH });
@@ -46,7 +48,7 @@ const vouchers = [2000n, 26_000n, 999_947n, 1_000_000n].map((cumulative) => {
 const refund = C.buildRefund({ channel, clientPrivKey: cPriv, toScript: clientScript, branchId: BRANCH });
 
 const doc = {
-  description: "YEC payment channel (batch-settlement): redeem scripts, vouchers, completed closes, refund. Offline, deterministic; the builders' spends are mined on both lines by test/devnet/channel_yec.devnet.test.ts.",
+  description: "YEC payment channel (batch-settlement): redeem scripts, vouchers, completed closes, refund. The client's remainder (voucher vout 1, the refund) goes to the open's returnAddress (clientScript). Offline, deterministic; the builders' spends are mined on both lines by test/devnet/channel_yec.devnet.test.ts.",
   branchId: BRANCH.toString(16),
   specExample: {
     clientPubKey: SPEC_C, serverPubKey: SPEC_S, refundHeight,
@@ -56,7 +58,7 @@ const doc = {
   channel: {
     clientPriv: hex(cPriv), serverPriv: hex(sPriv), clientPubKey: hex(cPub), serverPubKey: hex(sPub), refundHeight,
     redeemScript: hex(redeemScript), scriptPubKey: hex(C.channelScriptPubKey(redeemScript)),
-    outpoint: channel.outpoint, value: channel.value.toString(), closeFee: channel.closeFee.toString(), payTo, clientScript: hex(clientScript),
+    outpoint: channel.outpoint, value: channel.value.toString(), closeFee: channel.closeFee.toString(), payTo, returnAddress, clientScript: hex(clientScript),
   },
   vouchers,
   refund: { lockTime: refund.lockTime, sequence: refund.vin[0]!.sequence, tx: T.serializeTxHex(refund), txid: T.txid(refund) },

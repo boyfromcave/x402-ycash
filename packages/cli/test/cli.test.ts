@@ -25,6 +25,13 @@ describe("configuration", () => {
     expect(() => loadCliConfig(parseCli(["pay", "x", "--max-deposit", "0"]), devnetEnv)).toThrow(/--max-deposit/);
   });
 
+  it("takes the client's closeFee cap from --max-close-fee or X402_MAX_CLOSE_FEE_ZAT (plan X-F50)", () => {
+    expect(loadCliConfig(parseCli(["pay", "x", "--max-close-fee", "2500"]), devnetEnv).maxCloseFeeZat).toBe(2_500n);
+    expect(loadCliConfig(parseCli(["pay", "x"]), { ...devnetEnv, X402_MAX_CLOSE_FEE_ZAT: "4000" }).maxCloseFeeZat).toBe(4_000n);
+    expect(loadCliConfig(parseCli(["pay", "x"]), devnetEnv).maxCloseFeeZat).toBeUndefined();
+    expect(() => loadCliConfig(parseCli(["pay", "x", "--max-close-fee", "x"]), devnetEnv)).toThrow(/--max-close-fee/);
+  });
+
   it("refuses a missing node, a bad network, a mainnet WIF on regtest, and bad numbers", () => {
     expect(() => loadCliConfig(parseCli(["pay", "x"]), {})).toThrow(/no node/);
     expect(() => loadCliConfig(parseCli(["pay", "x", "--rpc-url", "http://n"]), {})).toThrow(/rpc-user/);
@@ -46,20 +53,26 @@ function fixture() {
   const payTo = T.encodeAddress(NET, "p2pkh", new Uint8Array(20).fill(9));
   const redeemScript = channel.buildChannelScript({ clientPubKey: cPub, serverPubKey: sPub, refundHeight: 500 });
   const channelId = "ab".repeat(32) + ":0";
+  const returnAddress = T.encodeAddress(NET, "p2pkh", new Uint8Array(20).fill(4));
+  const walletChange = T.encodeAddress(NET, "p2pkh", new Uint8Array(20).fill(5));
   const rec: B.client.ClientChannelRecord = {
     channelId, offerKey: B.client.offerKeyOf(NET, payTo, T.bytesToHex(sPub)), network: NET, asset: "YEC", payTo, serverPubKey: T.bytesToHex(sPub),
     redeemScript: T.bytesToHex(redeemScript), fundingTx: "00", vout: 0, value: "101500", closeFee: "1500", deposit: "100000", refundHeight: 500,
-    closeMarginBlocks: 5, clientPrivKey: T.bytesToHex(cPriv), clientScript: T.bytesToHex(T.p2pkhScript(T.hash160(cPub))), charged: "5000", signed: "6000", status: "open",
+    closeMarginBlocks: 5, clientPrivKey: T.bytesToHex(cPriv), clientScript: T.bytesToHex(T.addressToScript(returnAddress, NET)), returnAddress, charged: "5000", signed: "6000", status: "open",
   };
+  /** A record written before return addresses: its client script is C's. */
+  const legacy: B.client.ClientChannelRecord = { ...rec, clientScript: T.bytesToHex(T.p2pkhScript(T.hash160(cPub))) };
+  delete legacy.returnAddress;
   const sent: string[] = [];
   const node = {
     url: "fake",
     getBlockchainInfo: async () => ({ chain: "regtest", blocks: 120, consensus: { chaintip: "19bd2d2f", nextblock: "19bd2d2f" } }),
     getTxOut: async () => ({ confirmations: 3, value: 0.001015 }),
     sendRawTransaction: async (hex: string) => (sent.push(hex), T.txid(T.parseTx(hex))),
+    call: async (method: string) => (method === "getrawchangeaddress" ? walletChange : null),
   } as unknown as YcashRpc;
   const accept = { scheme: "batch-settlement", network: NET, asset: "YEC", amount: "1000", payTo, maxTimeoutSeconds: 300, extra: { serverPubKey: T.bytesToHex(sPub), minLockBlocks: 30, closeMarginBlocks: 5, maxDeposit: "100000000", closeFee: "1500" } };
-  return { store, rec, node, accept, sent };
+  return { store, rec, legacy, node, accept, sent, returnAddress, walletChange };
 }
 
 function capture() {
@@ -126,7 +139,17 @@ describe("x402-ycash channel", () => {
     expect(await run(["channel", "refund", f.rec.channelId, "--channels", f.store], devnetEnv, c.io, { node: late })).toBe(0);
     expect(f.sent).toHaveLength(1);
     expect(T.parseTx(f.sent[0]!).lockTime).toBe(500);
+    // to the open's returnAddress, never to C
+    expect(T.parseTx(f.sent[0]!).vout[0]!.scriptPubKey).toEqual(T.addressToScript(f.returnAddress, NET));
     expect((await new FileClientChannelStorage(f.store).get(f.rec.channelId))?.status).toBe("refunded");
+  });
+
+  it("refunds a channel recorded before return addresses to a new wallet address, not to C", async () => {
+    const f = fixture();
+    await new FileClientChannelStorage(f.store).put(f.legacy);
+    const late = { ...f.node, getBlockchainInfo: async () => ({ chain: "regtest", blocks: 500, consensus: { chaintip: "19bd2d2f", nextblock: "19bd2d2f" } }) } as unknown as YcashRpc;
+    expect(await run(["channel", "refund", f.rec.channelId, "--channels", f.store], devnetEnv, capture().io, { node: late })).toBe(0);
+    expect(T.parseTx(f.sent[0]!).vout[0]!.scriptPubKey).toEqual(T.addressToScript(f.walletChange, NET));
   });
 });
 

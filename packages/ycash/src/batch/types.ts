@@ -20,6 +20,12 @@ export interface BatchOpenPayload {
   fundingTx: string;
   vout: number;
   redeemScript: string;
+  /**
+   * Where every voucher (and so the close) returns the client's remainder: a transparent address
+   * of the client's wallet (P2PKH or P2SH for YEC; P2PKH, `s…` or `ye…`, for YED). Bound for the
+   * channel's life.
+   */
+  returnAddress: string;
   voucher: BatchVoucher;
 }
 
@@ -96,7 +102,7 @@ export function isBatchPayload(v: unknown): v is BatchPayload {
   switch (v.type) {
     case "open":
       return isHex(v.fundingTx) && Number.isInteger(v.vout) && (v.vout as number) >= 0 && isHex(v.redeemScript) &&
-        isRecord(v.voucher) && isVoucherFields(v.voucher);
+        typeof v.returnAddress === "string" && v.returnAddress.length > 0 && isRecord(v.voucher) && isVoucherFields(v.voucher);
     case "voucher":
     case "close":
     case "claim":

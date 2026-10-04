@@ -3,7 +3,7 @@ import { x402Facilitator } from "@x402/core/facilitator";
 import { x402ResourceServer } from "@x402/core/server";
 import { x402Client } from "@x402/core/client";
 import type { PaymentRequired, SupportedResponse } from "@x402/core/types";
-import { batch, channel, tx as T, BatchYcashFacilitatorScheme, InMemorySettlementStore } from "../../../src/index.js";
+import { batch, channel, tx as T, BatchYcashFacilitatorScheme, InMemoryChannelStore, InMemorySettlementStore } from "../../../src/index.js";
 import { NET, reasonOf, setup } from "./setup.js";
 
 const E = batch.BatchError;
@@ -100,7 +100,8 @@ describe("facilitator", () => {
   it("verifies a voucher against the live channel, broadcasts a server-completed claim once, refuses a client close", async () => {
     const s = await openedChannel();
     const store = new InMemorySettlementStore();
-    const f = new BatchYcashFacilitatorScheme({ rpc: s.chain, settlementStore: store });
+    const channelStore = new InMemoryChannelStore();
+    const f = new BatchYcashFacilitatorScheme({ rpc: s.chain, settlementStore: store, channelStore, closedRetentionMs: 1000 });
     const p = await s.pay();
     expect(await f.verify(p, s.req)).toMatchObject({ isValid: true, payer: s.channelId });
     expect(await f.settle(p, s.req)).toMatchObject({ success: true, transaction: "" });
@@ -113,6 +114,9 @@ describe("facilitator", () => {
     const claim = s.wrap({ ...p.payload, type: "claim", tx: T.serializeTxHex(done) });
     const r = await f.settle(claim, s.req);
     expect(r).toMatchObject({ success: true, transaction: T.txid(done), payer: s.channelId });
+    // the relayed close retires the channel's audit record (plan X-F51)
+    expect((await channelStore.get(s.channelId))?.retainUntilMs).toBeGreaterThan(Date.now());
+    expect(await channelStore.prune(Date.now() + 1001)).toBe(1);
     expect((await f.settle(claim, s.req)).success).toBe(false); // the channel is spent now
     const close = s.wrap((await s.client.closePayload(s.channelId)).payload);
     expect((await f.settle(close, s.req)).success).toBe(false);

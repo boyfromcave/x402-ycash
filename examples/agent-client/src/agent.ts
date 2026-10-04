@@ -44,6 +44,7 @@ export function createAgent(config: AgentConfig, register: RegisterClientSchemes
     ...(config.channelStorePath ? { channelStorePath: config.channelStorePath } : {}),
     ...(config.channelDepositZat !== undefined ? { channelDepositZat: config.channelDepositZat } : {}),
     ...(config.channelMaxDepositZat !== undefined ? { channelMaxDepositZat: config.channelMaxDepositZat } : {}),
+    ...(config.channelMaxCloseFeeZat !== undefined ? { channelMaxCloseFeeZat: config.channelMaxCloseFeeZat } : {}),
     ...(config.reservationsPath ? { reservationsPath: config.reservationsPath } : {}),
     ...(config.yedChannelDepositCents !== undefined ? { yedChannelDepositCents: config.yedChannelDepositCents } : {}),
     ...(config.yedChannelMaxDepositCents !== undefined ? { yedChannelMaxDepositCents: config.yedChannelMaxDepositCents } : {}),
