@@ -56,14 +56,32 @@ export interface LedgerChannel {
 
 export type StoreVoucherResult = "stored" | "stale";
 
+/**
+ * The server's per-channel records (terms, stored voucher, charged total, in-flight lock, state),
+ * built only on the ChannelStore's atomic create-if-absent and compare-and-set so several server
+ * processes can share one store.
+ */
 export class ChannelLedger {
+  /**
+   * Wraps a store.
+   *
+   * @param store - The shared channel store.
+   * @param inflightTtlMs - How long an in-flight lock lasts before another voucher may take it over.
+   * @param closedRetentionMs - How long a closed channel's records are kept before pruning.
+   */
   constructor(
     readonly store: ChannelStore,
     private readonly inflightTtlMs = 60_000,
     private readonly closedRetentionMs = DEFAULT_CLOSED_RETENTION_MS,
   ) {}
 
-  /** Records a new channel; false if it is already known. */
+  /**
+   * Records a new channel, writing the auxiliary records before the main one so a reader that finds
+   * the main record finds them too.
+   *
+   * @param terms - The channel's fixed terms.
+   * @returns False if the channel is already known.
+   */
   async open(terms: ChannelTerms): Promise<boolean> {
     const id = terms.channelId;
     // Auxiliary records first: a reader that finds the main record finds them too.
@@ -73,6 +91,12 @@ export class ChannelLedger {
     return this.store.open({ channelId: id, cumulative: 0n, data: { ...terms } });
   }
 
+  /**
+   * Reads a channel's records into one view.
+   *
+   * @param channelId - The channel id.
+   * @returns The channel, or undefined when it is unknown (or pruned).
+   */
   async get(channelId: string): Promise<LedgerChannel | undefined> {
     const main = await this.store.get(channelId);
     if (!main?.data) return undefined;
@@ -92,7 +116,11 @@ export class ChannelLedger {
     };
   }
 
-  /** The ids of every channel still open (main records only: ids carry no `#` or `@`). */
+  /**
+   * The ids of every channel still open (main records only: ids carry no `#` or `@`).
+   *
+   * @returns The open channel ids.
+   */
   async openChannelIds(): Promise<string[]> {
     const open: string[] = [];
     for (const id of await this.store.list()) {
@@ -102,7 +130,14 @@ export class ChannelLedger {
     return open;
   }
 
-  /** Takes the channel's in-flight lock; returns its token, or null when another voucher holds it. */
+  /**
+   * Takes the channel's in-flight lock, or takes over one whose holder let it expire. The token is
+   * the lock's expiry in ms, bumped by one if it would equal the stale value.
+   *
+   * @param channelId - The channel id.
+   * @param now - The current time, ms.
+   * @returns The lock token, or null when another voucher holds it or the channel is unknown.
+   */
   async acquire(channelId: string, now = Date.now()): Promise<bigint | null> {
     const key = `${channelId}#inflight`;
     const r = await this.store.get(key);
@@ -114,14 +149,25 @@ export class ChannelLedger {
     return (await this.store.compareAndSetCumulative(key, r.cumulative, token)) ? token : null;
   }
 
-  /** Gives the lock back; a no-op when it expired and someone else took it. */
+  /**
+   * Gives the lock back; a no-op when it expired and someone else took it.
+   *
+   * @param channelId - The channel id.
+   * @param token - The token `acquire` returned.
+   */
   async release(channelId: string, token: bigint): Promise<void> {
     await this.store.compareAndSetCumulative(`${channelId}#inflight`, token, 0n);
   }
 
   /**
    * Voucher rule 8: stores the voucher only if its cumulative is at least the stored one's
-   * (the same cumulative must be the same voucher).
+   * (the same cumulative must be the same voucher). An advance deletes the previous voucher record.
+   *
+   * @param channelId - The channel id.
+   * @param cumulative - The voucher's cumulative, in the asset's base units.
+   * @param txHex - The voucher transaction.
+   * @returns `stored`, or `stale` when it is below the stored cumulative or differs at the same one.
+   * @throws Error when the channel is unknown.
    */
   async storeVoucher(channelId: string, cumulative: bigint, txHex: string): Promise<StoreVoucherResult> {
     for (;;) {
@@ -141,7 +187,14 @@ export class ChannelLedger {
     }
   }
 
-  /** Adds a charge to the charged total; returns the new total. */
+  /**
+   * Adds a charge to the charged total, retrying the compare-and-set until it lands.
+   *
+   * @param channelId - The channel id.
+   * @param charge - The amount charged, in the asset's base units.
+   * @returns The new charged total.
+   * @throws Error when the channel is unknown.
+   */
   async addCharge(channelId: string, charge: bigint): Promise<bigint> {
     const key = `${channelId}#charged`;
     for (;;) {
@@ -151,12 +204,24 @@ export class ChannelLedger {
     }
   }
 
-  /** Moves the channel from open to closing; false if it was not open (one closer wins). */
+  /**
+   * Moves the channel from open to closing, so exactly one closer wins.
+   *
+   * @param channelId - The channel id.
+   * @returns False if it was not open.
+   */
   claimClose(channelId: string): Promise<boolean> {
     return this.store.compareAndSetCumulative(`${channelId}#state`, CHANNEL_OPEN, CHANNEL_CLOSING);
   }
 
-  /** Records the close transaction, marks the channel closed and retires its records. */
+  /**
+   * Records the close transaction, marks the channel closed and retires its records for
+   * `closedRetentionMs`.
+   *
+   * @param channelId - The channel id.
+   * @param txid - The close txid, if one was broadcast.
+   * @param now - The current time, ms.
+   */
   async markClosed(channelId: string, txid: string | undefined, now = Date.now()): Promise<void> {
     if (txid) await this.store.open({ channelId: `${channelId}#close`, cumulative: 0n, data: { txid } });
     const state = await this.store.get(`${channelId}#state`);
@@ -167,7 +232,12 @@ export class ChannelLedger {
     await this.store.retire(ids, now + this.closedRetentionMs);
   }
 
-  /** Back to open after a close that could not be broadcast (so a later trigger retries). */
+  /**
+   * Back to open after a close that could not be broadcast (so a later trigger retries).
+   *
+   * @param channelId - The channel id.
+   * @returns False if it was not closing.
+   */
   reopen(channelId: string): Promise<boolean> {
     return this.store.compareAndSetCumulative(`${channelId}#state`, CHANNEL_CLOSING, CHANNEL_OPEN);
   }

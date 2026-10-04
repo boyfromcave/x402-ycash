@@ -6,6 +6,9 @@ import { encodeAddress, hash160, p2pkhHash, p2shHash, parseScript, SIGHASH, type
  * Whether a push is a DER signature followed by a hash-type byte, by its shape alone: 0x30, a
  * length byte covering the rest but the hash type, then two INTEGERs (BIP66). Strictness is the
  * node's job (rule 9); this only finds which pushes are signatures.
+ *
+ * @param b - A scriptSig push.
+ * @returns True when the push has the shape of a DER signature plus hash type.
  */
 export function looksLikeSignature(b: Uint8Array): boolean {
   if (b.length < 9 || b.length > 73) return false;
@@ -16,7 +19,10 @@ export function looksLikeSignature(b: Uint8Array): boolean {
 
 /**
  * Rule 5: every signature in the scriptSig carries SIGHASH_ALL, and there is at least one (an
- * unsigned input would let anyone rewrite the outputs). Returns a reason, or null.
+ * unsigned input would let anyone rewrite the outputs).
+ *
+ * @param scriptSig - The input's raw scriptSig.
+ * @returns A rejection reason, or null when the scriptSig passes.
  */
 export function checkSighashAll(scriptSig: Uint8Array): string | null {
   let chunks: ScriptChunk[];
@@ -31,7 +37,13 @@ export function checkSighashAll(scriptSig: Uint8Array): string | null {
   return bad ? `signature hash type 0x${(bad[bad.length - 1] as number).toString(16)} is not SIGHASH_ALL` : null;
 }
 
-/** The address of a P2PKH or P2SH scriptPubKey, or "" for any other script. */
+/**
+ * Encodes the address a P2PKH or P2SH scriptPubKey pays to.
+ *
+ * @param spk - The scriptPubKey.
+ * @param network - The network whose address prefix to use.
+ * @returns The address, or "" for any other script type.
+ */
 export function addressOfScript(spk: Uint8Array, network: YcashNetwork): string {
   const pkh = p2pkhHash(spk);
   if (pkh) return encodeAddress(network, "p2pkh", pkh);
@@ -42,7 +54,11 @@ export function addressOfScript(spk: Uint8Array, network: YcashNetwork): string 
 /**
  * The address a verified scriptSig spends from, for a settle that resumes after the inputs are
  * spent (gettxout no longer shows them): `<sig> <pubkey>` is P2PKH, otherwise the last push is
- * a P2SH redeem script. "" when neither shape fits.
+ * a P2SH redeem script.
+ *
+ * @param scriptSig - The input's raw scriptSig.
+ * @param network - The network whose address prefix to use.
+ * @returns The spending address, or "" when the scriptSig does not parse or has no final push.
  */
 export function addressOfScriptSig(scriptSig: Uint8Array, network: YcashNetwork): string {
   let chunks: ScriptChunk[];

@@ -10,6 +10,13 @@
 // Anything JSON cannot represent (NaN, Infinity, bigint, functions, unpaired surrogates) is refused,
 // since a silent coercion would give a hash the counterparty cannot reproduce.
 
+/**
+ * A JSON string literal, refusing unpaired surrogates that JSON.stringify would pass through as escapes.
+ *
+ * @param value - The string.
+ * @returns The quoted, escaped string.
+ * @throws Error on an unpaired surrogate.
+ */
 function serializeString(value: string): string {
   for (let i = 0; i < value.length; i++) {
     const code = value.charCodeAt(i);
@@ -21,7 +28,14 @@ function serializeString(value: string): string {
   return JSON.stringify(value);
 }
 
-/** The canonical JSON text of a JSON value. A member whose value is undefined is absent. */
+/**
+ * The canonical JSON text of a JSON value. A member whose value is undefined is absent; an undefined
+ * array element becomes null.
+ *
+ * @param value - A JSON value.
+ * @returns The RFC 8785 canonical text.
+ * @throws Error for a non-finite number, a bigint, function or symbol, or an unpaired surrogate.
+ */
 export function jcs(value: unknown): string {
   if (value === null) return "null";
   switch (typeof value) {
@@ -46,7 +60,12 @@ export function jcs(value: unknown): string {
   return `{${members.join(",")}}`;
 }
 
-/** UTF-8 bytes of the canonical text. */
+/**
+ * UTF-8 bytes of the canonical text, as hashed and signed.
+ *
+ * @param value - A JSON value.
+ * @returns The UTF-8 encoding of {@link jcs}'s output.
+ */
 export function jcsBytes(value: unknown): Uint8Array {
   return new TextEncoder().encode(jcs(value));
 }

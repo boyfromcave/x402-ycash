@@ -1,10 +1,10 @@
 // Lint for every workspace, after the upstream mechanisms' config
 // (x402 typescript/packages/mechanisms/cardano/eslint.config.js): typescript-eslint's recommended
-// rules, the same complexity ceilings, import order and JSDoc hygiene. Two upstream rules are left
-// out on purpose: prettier (this repository wraps at ~160 columns, and a reformat of every file
-// would collide with every open branch) and jsdoc/require-jsdoc on every function (the code
-// documents its exports and its non-obvious rules, in prose), and @typescript-eslint/member-ordering
-// (76 moves across files other branches are editing; revisit once they have merged).
+// rules, the same complexity ceilings, import order and JSDoc hygiene. packages/ycash/src is staged
+// into x402 as @x402/ycash (tools/upstream/stage.sh), so it also carries upstream's full rule set:
+// JSDoc with @param/@returns on every function, method and class, member-ordering, and `_` as the
+// only unused-argument name. Keep that block equal to tools/upstream/overlay/package/eslint.config.js
+// minus prettier: this repository wraps at ~160 columns, and the stage step formats for upstream.
 import js from "@eslint/js";
 import ts from "@typescript-eslint/eslint-plugin";
 import tsParser from "@typescript-eslint/parser";
@@ -64,6 +64,39 @@ export default [
       "jsdoc/check-param-names": "error",
       "jsdoc/check-tag-names": "error",
       "jsdoc/tag-lines": ["error", "any", { startLines: 1 }],
+    },
+  },
+  {
+    // Upstream's mechanism rules (cardano/eslint.config.js), on the code that is staged upstream.
+    files: ["packages/ycash/src/**/*.ts"],
+    // TODO(coordinator): after rehearse merges, document these two and drop this ignore.
+    ignores: ["packages/ycash/src/shielded/server.ts", "packages/ycash/src/shielded/registry.ts"],
+    rules: {
+      "@typescript-eslint/member-ordering": "error",
+      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_$", varsIgnorePattern: "^_", caughtErrors: "none" }],
+      "jsdoc/no-undefined-types": "off",
+      "jsdoc/check-types": "error",
+      "jsdoc/implements-on-classes": "error",
+      "jsdoc/require-description": "error",
+      "jsdoc/require-jsdoc": [
+        "error",
+        {
+          require: {
+            FunctionDeclaration: true,
+            MethodDefinition: true,
+            ClassDeclaration: true,
+            ArrowFunctionExpression: false,
+            FunctionExpression: false,
+          },
+        },
+      ],
+      "jsdoc/require-param": "error",
+      "jsdoc/require-param-description": "error",
+      "jsdoc/require-param-type": "off",
+      "jsdoc/require-returns": "error",
+      "jsdoc/require-returns-description": "error",
+      "jsdoc/require-returns-type": "off",
+      "jsdoc/require-hyphen-before-param-description": ["error", "always"],
     },
   },
   {

@@ -4,7 +4,12 @@
 
 export const ZAT_PER_YEC = 100_000_000n;
 
-/** Zatoshis to the node's 8-decimal string: 250000n -> "0.00250000". */
+/**
+ * Formats zatoshis as the exact 8-decimal string the node parses, e.g. 250000n -> "0.00250000".
+ *
+ * @param zat - The amount in zatoshis; negative amounts keep their sign.
+ * @returns The amount in YEC as a fixed-point decimal string.
+ */
 export function zatToYecString(zat: bigint | number): string {
   const z = BigInt(zat);
   const neg = z < 0n;
@@ -17,6 +22,10 @@ export function zatToYecString(zat: bigint | number): string {
 /**
  * A YEC amount the node printed (ValueFromAmount: a JSON number with at most 8 decimals) to zatoshis.
  * Exact for every amount below 2^53 zatoshis (about 90 million YEC, under the 21 million supply).
+ *
+ * @param yec - The amount in YEC, as a JSON number or a decimal string.
+ * @returns The amount in zatoshis.
+ * @throws RangeError when the input is not a decimal with at most 8 fractional digits.
  */
 export function yecToZat(yec: number | string): bigint {
   const s = typeof yec === "number" ? yec.toFixed(8) : yec.trim();

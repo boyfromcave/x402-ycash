@@ -12,22 +12,53 @@ import type { SignedPayment, YcashClientSigner } from "./signer.js";
  * YED is a dollar (cents, 2 decimals), so core's USD spend cap applies to it as to any default
  * asset. YEC is not USD-pegged: reporting it here would make the "$1" cap mean 1 YEC, so YEC
  * needs an `allowedAssets` entry with an atomic cap (see `yecSpendControl`).
+ *
+ * @param asset - The requirement's asset.
+ * @param network - The requirement's network.
+ * @returns YED's default-asset entry on a Ycash network, otherwise undefined.
  */
 export function findYcashDefaultAsset(asset: string, network: string): DefaultAsset | undefined {
   return asset === ASSET_YED && isYcashNetwork(network) ? { asset: ASSET_YED, decimals: 2, symbol: ASSET_YED } : undefined;
 }
 
-/** The `spendControls.allowedAssets` entry an agent sets to pay YEC, capped at `maxZat` per payment. */
+/**
+ * The `spendControls.allowedAssets` entry an agent sets to pay YEC, capped at `maxZat` per payment.
+ *
+ * @param network - The Ycash network.
+ * @param maxZat - The per-payment cap in zatoshis.
+ * @returns The allowed-asset entry.
+ */
 export function yecSpendControl(network: YcashNetwork, maxZat: bigint): { network: YcashNetwork; asset: string; maxAmountPerPayment: string } {
   return { network, asset: ASSET_YEC, maxAmountPerPayment: maxZat.toString() };
 }
 
+/**
+ * The x402 client scheme for `transparent` exact payments in YEC or YED: has the signer build and
+ * sign the transaction, checks its shape, and returns it unbroadcast.
+ */
 export class ExactYcashScheme implements SchemeNetworkClient {
   readonly scheme = SCHEME_EXACT;
   readonly findDefaultAsset = findYcashDefaultAsset;
 
+  /**
+   * Builds the scheme over a signer backend.
+   *
+   * @param signer - A local-key or node-wallet signer.
+   */
   constructor(private readonly signer: YcashClientSigner) {}
 
+  /**
+   * Validates the requirements, checks the signer's node is on the named network, and has the
+   * signer build a payment expiring at tip + 3 + ⌈maxTimeoutSeconds / 75⌉. The signed tx is then
+   * checked for the shape the facilitator will demand, since signers are pluggable.
+   *
+   * @param x402Version - The protocol version of the 402.
+   * @param requirements - The selected payment requirements.
+   * @param context - Optional payload context (unused).
+   * @returns The payload carrying the signed transaction hex.
+   * @throws Error when the requirements are invalid, the node is on another chain, or the signed
+   * transaction does not match the requirements.
+   */
   async createPaymentPayload(
     x402Version: number,
     requirements: PaymentRequirements,
@@ -76,6 +107,11 @@ export class ExactYcashScheme implements SchemeNetworkClient {
 /**
  * Rule 4Y as the client can check it without a node: one TRANSFER, exactly one assignment to the
  * payTo vout of `amountCents`, every assignment encodable and in range, the payTo output above dust.
+ *
+ * @param tx - The signed transaction.
+ * @param payToVout - The index of the output paying payTo.
+ * @param amountCents - The required YED amount in cents.
+ * @returns What is wrong, phrased to follow "a YED transaction that", or null.
  */
 function yedShapeProblem(tx: Tx, payToVout: number, amountCents: number): string | null {
   if ((tx.vout[payToVout]?.value ?? 0n) < DUST_ZAT) return "puts dust on the payTo output";

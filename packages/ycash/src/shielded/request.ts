@@ -23,22 +23,45 @@ export interface RequestRecord {
   nonce: string;
 }
 
-/** Lowercase hex SHA-256 of the record's JCS serialisation. */
+/**
+ * Hashes the request record: lowercase hex SHA-256 of its JCS serialisation.
+ *
+ * @param record - The request record.
+ * @returns The 64-character hex hash.
+ */
 export function requestHash(record: RequestRecord): string {
   return bytesToHex(sha256(jcsBytes(record)));
 }
 
+/**
+ * Builds the memo committing to a request hash: `x402:` followed by the hash.
+ *
+ * @param hash - Lowercase hex request hash.
+ * @returns The memo text.
+ * @throws When the result does not match the memo format (the hash is not 64 lowercase hex).
+ */
 export function memoForHash(hash: string): string {
   const memo = MEMO_PREFIX + hash;
   if (!MEMO_REGEX.test(memo)) throw new Error(`not a request hash: ${hash}`);
   return memo;
 }
 
+/**
+ * Builds the memo committing to a request record.
+ *
+ * @param record - The request record.
+ * @returns The memo text.
+ */
 export function memoForRecord(record: RequestRecord): string {
   return memoForHash(requestHash(record));
 }
 
-/** The memo as `z_sendmany` takes it: hex of its UTF-8 bytes (both lines). */
+/**
+ * Encodes a memo as `z_sendmany` takes it on both node lines: hex of its UTF-8 bytes.
+ *
+ * @param memo - The memo text.
+ * @returns Lowercase hex.
+ */
 export function memoToHex(memo: string): string {
   return bytesToHex(new TextEncoder().encode(memo));
 }
@@ -48,6 +71,9 @@ export function memoToHex(memo: string): string {
  * memo as hex in `memo` (`ycash-dd/src/wallet/rpcwallet.cpp:3557`, `ycash6/src/wallet/rpcwallet.cpp:4218-4219`,
  * z_listreceivedbyaddress); 6.21.0 adds `memoStr`, the UTF-8 text when it decodes, used only when
  * `memo` is absent.
+ *
+ * @param note - A `z_listreceivedbyaddress` entry.
+ * @returns The memo bytes, empty when the note carries none.
  */
 export function noteMemoBytes(note: Pick<ZReceived, "memo"> & { memoStr?: unknown }): Uint8Array {
   let bytes: Uint8Array;
@@ -59,7 +85,13 @@ export function noteMemoBytes(note: Pick<ZReceived, "memo"> & { memoStr?: unknow
   return bytes.subarray(0, end);
 }
 
-/** True when the note's memo, trailing zeros removed, is exactly the UTF-8 bytes of `memo`. */
+/**
+ * Compares a received note's memo, trailing zeros removed, with the UTF-8 bytes of `memo`.
+ *
+ * @param note - A `z_listreceivedbyaddress` entry.
+ * @param memo - The expected memo text.
+ * @returns True on an exact byte match.
+ */
 export function noteMemoEquals(note: Pick<ZReceived, "memo"> & { memoStr?: unknown }, memo: string): boolean {
   const want = new TextEncoder().encode(memo);
   const got = noteMemoBytes(note);

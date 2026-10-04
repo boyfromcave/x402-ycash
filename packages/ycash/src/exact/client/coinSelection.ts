@@ -22,7 +22,14 @@ export interface Selection {
 /** A P2PKH scriptSig at its largest: push(72-byte DER + hash type) + push(33-byte key). */
 const MAX_P2PKH_SCRIPTSIG = 1 + 73 + 1 + 33;
 
-/** The fee floor of a draft with `n` P2PKH inputs and the given outputs, signatures at their largest. */
+/**
+ * The fee floor of a draft with `n` P2PKH inputs and the given outputs, signatures at their
+ * largest, so it bounds the floor of the eventual signed transaction.
+ *
+ * @param n - Number of P2PKH inputs.
+ * @param outputs - The draft's outputs.
+ * @returns The fee floor in zatoshis.
+ */
 export function draftFee(n: number, outputs: TxOut[]): bigint {
   const draft: Tx = newTx({
     vin: Array.from({ length: n }, (_, i) => ({ prevout: { txid: "00".repeat(32), vout: i }, scriptSig: new Uint8Array(MAX_P2PKH_SCRIPTSIG), sequence: SEQUENCE_FINAL })),
@@ -33,7 +40,15 @@ export function draftFee(n: number, outputs: TxOut[]): bigint {
 
 /**
  * Largest-first over confirmed coins until amount + fee is covered. The fee is the floor of the
- * draft with signatures at their largest, so the signed tx's own floor never exceeds it.
+ * draft with signatures at their largest, so the signed tx's own floor never exceeds it. A change
+ * remainder below dust is added to the fee rather than creating a dust output.
+ *
+ * @param candidates - Spendable coins; unconfirmed ones are skipped.
+ * @param amount - The payment in zatoshis.
+ * @param payToScript - The payee's scriptPubKey.
+ * @param changeScript - The payer's change scriptPubKey.
+ * @returns The chosen coins, the fee and the change (0n when none).
+ * @throws Error when the confirmed coins cannot cover amount plus fee.
  */
 export function selectCoins(candidates: readonly Coin[], amount: bigint, payToScript: Uint8Array, changeScript: Uint8Array): Selection {
   const coins = candidates.filter((c) => c.confirmations >= 1).sort((a, b) => (b.value > a.value ? 1 : b.value < a.value ? -1 : 0));

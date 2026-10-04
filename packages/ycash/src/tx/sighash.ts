@@ -14,30 +14,60 @@ export const SIGHASH = {
 
 const ZERO: Uint8Array = new Uint8Array(32);
 
+/**
+ * hashPrevouts: BLAKE2b over every input's outpoint.
+ *
+ * @param tx - The transaction.
+ * @returns The 32-byte digest.
+ */
 function prevoutsHash(tx: Tx): Uint8Array {
   const w = new ByteWriter();
   for (const i of tx.vin) writeOutPoint(w, i.prevout);
   return blake2b256("ZcashPrevoutHash", w.finish());
 }
 
+/**
+ * hashSequence: BLAKE2b over every input's nSequence.
+ *
+ * @param tx - The transaction.
+ * @returns The 32-byte digest.
+ */
 function sequenceHash(tx: Tx): Uint8Array {
   const w = new ByteWriter();
   for (const i of tx.vin) w.u32(i.sequence);
   return blake2b256("ZcashSequencHash", w.finish());
 }
 
+/**
+ * hashOutputs: BLAKE2b over the given outputs (all of them, or the one SIGHASH_SINGLE covers).
+ *
+ * @param outs - The outputs to commit to.
+ * @returns The 32-byte digest.
+ */
 function outputsHash(outs: Tx["vout"]): Uint8Array {
   const w = new ByteWriter();
   for (const o of outs) writeTxOut(w, o);
   return blake2b256("ZcashOutputsHash", w.finish());
 }
 
+/**
+ * hashJoinSplits: BLAKE2b over the JSDescriptions and joinSplitPubKey, or zeros if there are none.
+ *
+ * @param tx - The transaction.
+ * @returns The 32-byte digest.
+ */
 function joinSplitsHash(tx: Tx): Uint8Array {
   if (tx.joinSplits.length === 0) return ZERO;
   return blake2b256("ZcashJSplitsHash", concatBytes(...tx.joinSplits, tx.joinSplitPubKey ?? new Uint8Array(32)));
 }
 
-/** spendAuthSig is not committed (interpreter.cpp:1108-1118). */
+/**
+ * hashShieldedSpends, or zeros if there are none; spendAuthSig is not committed
+ * (interpreter.cpp:1108-1118).
+ *
+ * @param tx - The transaction.
+ * @returns The 32-byte digest.
+ */
 function shieldedSpendsHash(tx: Tx): Uint8Array {
   if (tx.shieldedSpends.length === 0) return ZERO;
   const w = new ByteWriter();
@@ -45,6 +75,12 @@ function shieldedSpendsHash(tx: Tx): Uint8Array {
   return blake2b256("ZcashSSpendsHash", w.finish());
 }
 
+/**
+ * hashShieldedOutputs: BLAKE2b over the full output descriptions, or zeros if there are none.
+ *
+ * @param tx - The transaction.
+ * @returns The 32-byte digest.
+ */
 function shieldedOutputsHash(tx: Tx): Uint8Array {
   if (tx.shieldedOutputs.length === 0) return ZERO;
   const w = new ByteWriter();
@@ -55,7 +91,16 @@ function shieldedOutputsHash(tx: Tx): Uint8Array {
 /**
  * The ZIP-243 sighash for a transparent input (or, with `inputIndex` null, the hash the
  * joinSplitSig and Sapling signatures cover). `scriptCode` is the spent scriptPubKey for P2PKH
- * and the redeem script for P2SH; `amount` is the spent output's value in zatoshi.
+ * and the redeem script for P2SH.
+ *
+ * @param tx - The transaction being signed.
+ * @param inputIndex - The input being signed, or null for the shielded-signature hash.
+ * @param scriptCode - The spent scriptPubKey (P2PKH) or redeem script (P2SH).
+ * @param amount - The spent output's value in zatoshi.
+ * @param hashType - The SIGHASH flags.
+ * @param consensusBranchId - The branch id of the network upgrade the tx is mined under.
+ * @returns The 32-byte sighash.
+ * @throws Error when `inputIndex` is out of range.
  */
 export function sighashV4(
   tx: Tx,

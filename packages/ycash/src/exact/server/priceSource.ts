@@ -18,6 +18,12 @@ export type YedPriceField = "pFast" | "pMid" | "pSlow" | "pMint" | "pClaim";
 export class YedGetPriceSource implements YecPriceSource {
   private readonly fields: readonly YedPriceField[];
 
+  /**
+   * Builds a source over a Yellowback node's `yed_getprice`.
+   *
+   * @param rpc - A client exposing `yed_getprice`.
+   * @param fields - Windows to try in order; defaults to pMid then pSlow.
+   */
   constructor(
     private readonly rpc: Pick<YcashRpc, "yedGetPrice">,
     fields: YedPriceField | readonly YedPriceField[] = ["pMid", "pSlow"],
@@ -25,6 +31,14 @@ export class YedGetPriceSource implements YecPriceSource {
     this.fields = typeof fields === "string" ? [fields] : fields;
   }
 
+  /**
+   * Returns the first window in `fields` that holds a positive integer price. The node answers for
+   * its own chain, so the network argument is not consulted.
+   *
+   * @param _network - The requirement's network (unused).
+   * @returns The price in micro-USD per YEC.
+   * @throws Error when none of the windows has a price yet.
+   */
   async microUsdPerYec(_network: string): Promise<bigint> {
     void _network;
     const p = await this.rpc.yedGetPrice();
@@ -38,15 +52,33 @@ export class YedGetPriceSource implements YecPriceSource {
 
 /** A fixed price, for tests and for merchants with their own feed. */
 export class FixedPriceSource implements YecPriceSource {
+  /**
+   * Fixes the rate.
+   *
+   * @param microUsd - The price in micro-USD per YEC.
+   * @throws Error when the price is not positive.
+   */
   constructor(private readonly microUsd: bigint) {
     if (microUsd <= 0n) throw new Error("price must be positive");
   }
+
+  /**
+   * Returns the fixed rate for every network.
+   *
+   * @returns The price in micro-USD per YEC.
+   */
   async microUsdPerYec(): Promise<bigint> {
     return this.microUsd;
   }
 }
 
-/** USD (micro-USD) to zatoshis, rounded up so the merchant never receives less than the price. */
+/**
+ * Converts micro-USD to zatoshis, rounded up so the merchant never receives less than the price.
+ *
+ * @param microUsd - The amount in micro-USD.
+ * @param microUsdPerYec - The rate in micro-USD per YEC.
+ * @returns The amount in zatoshis.
+ */
 export function microUsdToZat(microUsd: bigint, microUsdPerYec: bigint): bigint {
   return (microUsd * 100_000_000n + microUsdPerYec - 1n) / microUsdPerYec;
 }

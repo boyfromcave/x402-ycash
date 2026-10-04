@@ -2,6 +2,13 @@
 // encoding is done here: encodeDer emits the minimal form, and decodeDer accepts exactly what
 // IsValidSignatureEncoding accepts (src/script/interpreter.cpp, BIP66), without the hash-type byte.
 
+/**
+ * Minimal DER integer body: leading zeros stripped, one 0x00 prepended if the high bit is set so
+ * the value stays positive.
+ *
+ * @param x - A 32-byte big-endian scalar.
+ * @returns The DER integer contents, without tag and length.
+ */
 function derInt(x: Uint8Array): Uint8Array {
   let i = 0;
   while (i < x.length - 1 && x[i] === 0) i++;
@@ -9,7 +16,13 @@ function derInt(x: Uint8Array): Uint8Array {
   return (v[0] as number) & 0x80 ? Uint8Array.from([0, ...v]) : v;
 }
 
-/** Compact 64-byte r ‖ s → DER. */
+/**
+ * Converts a compact signature to minimal DER, the form the script interpreter accepts.
+ *
+ * @param compact - The 64-byte r ‖ s signature.
+ * @returns The DER-encoded signature, without the hash-type byte.
+ * @throws Error when `compact` is not 64 bytes.
+ */
 export function encodeDer(compact: Uint8Array): Uint8Array {
   if (compact.length !== 64) throw new Error("compact signature must be 64 bytes");
   const r = derInt(compact.slice(0, 32));
@@ -17,7 +30,13 @@ export function encodeDer(compact: Uint8Array): Uint8Array {
   return Uint8Array.from([0x30, 4 + r.length + s.length, 0x02, r.length, ...r, 0x02, s.length, ...s]);
 }
 
-/** DER → compact 64-byte r ‖ s; throws on anything BIP66 would reject. */
+/**
+ * Converts a strict DER signature back to compact form, rejecting anything BIP66 would reject.
+ *
+ * @param der - The DER-encoded signature, without the hash-type byte.
+ * @returns The 64-byte r ‖ s signature.
+ * @throws Error on a malformed, negative, non-minimal or oversized encoding.
+ */
 export function decodeDer(der: Uint8Array): Uint8Array {
   const at = (i: number): number => {
     const v = der[i];

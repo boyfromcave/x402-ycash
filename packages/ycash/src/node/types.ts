@@ -143,15 +143,16 @@ export interface YedValidation {
 }
 
 export interface YedPayload {
+  [field: string]: unknown;
   valid: boolean;
   version: number;
   type: string;
   reason?: string;
   opReturnIndex?: number;
-  [field: string]: unknown;
 }
 
 export interface YedPrice {
+  [field: string]: unknown;
   height: number;
   pFast: number | null;
   pMid: number | null;
@@ -160,7 +161,6 @@ export interface YedPrice {
   pClaim: number | null;
   armed: boolean;
   attestStatus: string;
-  [field: string]: unknown;
 }
 
 /** `yed_getinfo` is large and evolving; the SDK reads only a few fields and keeps the rest opaque. */
@@ -169,6 +169,7 @@ export interface YedInfo {
 }
 
 export interface ZReceived {
+  [field: string]: unknown;
   txid: string;
   amount: number;
   amountZat?: number;
@@ -178,7 +179,6 @@ export interface ZReceived {
   confirmations?: number;
   blockheight?: number;
   change?: boolean;
-  [field: string]: unknown;
 }
 
 export interface ZRecipient {
@@ -190,9 +190,9 @@ export interface ZRecipient {
 }
 
 export interface OperationResult {
+  [field: string]: unknown;
   id: string;
   status: "queued" | "executing" | "success" | "failed" | "cancelled";
   result?: { txid: string };
   error?: { code: number; message: string };
-  [field: string]: unknown;
 }

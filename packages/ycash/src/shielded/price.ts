@@ -15,14 +15,27 @@ export interface PriceQuote {
 /** The yed_getprice fields tried in order: the mid window first, a median with less noise than pFast. */
 export const YED_PRICE_FIELDS = ["pMid", "pFast", "pSlow"] as const;
 
-/** Parses a decimal USD string ("0.05", "12", "1.234567") to micro-USD, exactly. */
+/**
+ * Parses a decimal USD string ("0.05", "12", "1.234567") to micro-USD, exactly.
+ *
+ * @param usd - The dollar amount, at most 6 decimals, no sign or unit.
+ * @returns Micro-USD.
+ * @throws RangeError when it is not such an amount.
+ */
 export function usdToMicro(usd: string): bigint {
   const m = /^(\d+)(?:\.(\d{1,6}))?$/.exec(usd.trim());
   if (!m) throw new RangeError(`not a USD amount with at most 6 decimals: ${usd}`);
   return BigInt(m[1] ?? "0") * 1_000_000n + BigInt((m[2] ?? "").padEnd(6, "0"));
 }
 
-/** zatoshis for `usd` at `priceMicroUsd` per YEC, rounded up so the merchant is never short. */
+/**
+ * Zatoshis for `usd` at `priceMicroUsd` per YEC, rounded up so the merchant is never short.
+ *
+ * @param usd - The dollar price, as for {@link usdToMicro}.
+ * @param priceMicroUsd - The YEC price, micro-USD per YEC.
+ * @returns The amount in zatoshis.
+ * @throws RangeError for a non-positive or non-integer price, or a non-positive amount.
+ */
 export function quoteZat(usd: string, priceMicroUsd: number): bigint {
   if (!Number.isSafeInteger(priceMicroUsd) || priceMicroUsd <= 0) throw new RangeError(`bad price ${priceMicroUsd}`);
   const micro = usdToMicro(usd);
@@ -39,6 +52,11 @@ export interface PriceRpc {
  * The price from `yed_getprice` when the node has the overlay and a live price, else `fallback`.
  * A stock node answers -32601 (no such method); a Yellowback node before activation, or with too few
  * quote tags, returns null prices.
+ *
+ * @param rpc - The merchant node.
+ * @param fallbackMicroUsd - The configured price, micro-USD per YEC.
+ * @returns The first positive of pMid, pFast, pSlow, or the configured price.
+ * @throws Error when neither is available; any RPC error other than method-not-found is rethrown.
  */
 export async function currentPrice(rpc: PriceRpc, fallbackMicroUsd?: number): Promise<PriceQuote> {
   try {

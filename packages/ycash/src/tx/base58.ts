@@ -4,6 +4,12 @@ import { sha256d } from "./hash.js";
 
 const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
+/**
+ * Encodes bytes in Bitcoin's base58 alphabet, one leading `1` per leading zero byte.
+ *
+ * @param b - The bytes to encode.
+ * @returns The base58 string.
+ */
 export function base58Encode(b: Uint8Array): string {
   let n = 0n;
   for (const x of b) n = (n << 8n) | BigInt(x);
@@ -19,6 +25,13 @@ export function base58Encode(b: Uint8Array): string {
   return s;
 }
 
+/**
+ * Decodes a base58 string, restoring one zero byte per leading `1`.
+ *
+ * @param s - The base58 string.
+ * @returns The decoded bytes.
+ * @throws Error on a character outside the base58 alphabet.
+ */
 export function base58Decode(s: string): Uint8Array {
   let n = 0n;
   for (const c of s) {
@@ -36,10 +49,23 @@ export function base58Decode(s: string): Uint8Array {
   return Uint8Array.from([...new Array<number>(zeros).fill(0), ...body]);
 }
 
+/**
+ * Appends the 4-byte SHA256d checksum to a payload and base58-encodes the result.
+ *
+ * @param payload - Version bytes followed by the data.
+ * @returns The base58check string.
+ */
 export function base58CheckEncode(payload: Uint8Array): string {
   return base58Encode(concatBytes(payload, sha256d(payload).slice(0, 4)));
 }
 
+/**
+ * Decodes a base58check string and verifies its 4-byte SHA256d checksum.
+ *
+ * @param s - The base58check string.
+ * @returns The payload without the checksum.
+ * @throws Error when the string is too short or the checksum does not match.
+ */
 export function base58CheckDecode(s: string): Uint8Array {
   const b = base58Decode(s);
   if (b.length < 4) throw new Error("base58check too short");

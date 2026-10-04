@@ -54,6 +54,11 @@ export interface BatchYcashFacilitatorConfig {
   fundingPollMs?: number;
 }
 
+/**
+ * The `batch-settlement` facilitator for Ycash: it verifies opens, vouchers and claims against the
+ * live chain and relays funding and close transactions, but holds no channel state the server
+ * depends on and signs nothing.
+ */
 export class BatchYcashScheme implements SchemeNetworkFacilitator {
   readonly scheme = BATCH_SETTLEMENT_SCHEME;
   readonly caipFamily = "ycash:*";
@@ -62,22 +67,46 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
   private readonly channels: ChannelStore;
   private readonly limits: { minimum: number; maximum: number };
 
+  /**
+   * Creates the facilitator; the confirmation range defaults to −1..20 and the channel store to memory.
+   *
+   * @param cfg - The node, stores and funding-depth limits.
+   */
   constructor(private readonly cfg: BatchYcashFacilitatorConfig) {
     this.chain = cfg.rpc;
     this.channels = cfg.channelStore ?? new InMemoryChannelStore();
     this.limits = cfg.confirmations ?? { minimum: -1, maximum: 20 };
   }
 
-  /** The funding depths it settles, as the `exact` facilitator advertises its range. */
-  getExtra(_network: Network): Record<string, unknown> | undefined {
+  /**
+   * The funding depths it settles, as the `exact` facilitator advertises its range.
+   *
+   * @param _ - The network (unused).
+   * @returns `{ confirmations: { minimum, maximum } }`, the same for every network.
+   */
+  getExtra(_: Network): Record<string, unknown> | undefined {
     return { confirmations: { ...this.limits } };
   }
 
-  /** No sponsorship: the facilitator signs nothing. */
-  getSigners(_network: string): string[] {
+  /**
+   * No sponsorship: the facilitator signs nothing.
+   *
+   * @param _ - The network (unused).
+   * @returns An empty list.
+   */
+  getSigners(_: string): string[] {
     return [];
   }
 
+  /**
+   * Checks a payload against the chain: an open's funding rules, or a voucher's or claim's shape and
+   * client signature against the live channel output. The server's charged total is not known here,
+   * so a voucher is checked with nothing charged; a YED voucher must also burn nothing.
+   *
+   * @param payload - The client's payment payload.
+   * @param requirements - The requirements it answers.
+   * @returns `isValid` with the channel id as payer, or the failure reason; never throws.
+   */
   async verify(payload: PaymentPayload, requirements: PaymentRequirements): Promise<VerifyResponse> {
     try {
       const { p, terms } = this.envelope(payload, requirements);
@@ -112,6 +141,16 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
     }
   }
 
+  /**
+   * Re-verifies, then acts on the payload type: an open relays the funding transaction and waits up to
+   * `fundingWaitMs` for the policy depth (answering `settlement_pending` below it), a voucher needs no
+   * transaction, and a claim relays the server-completed close once per txid. A client `close` is
+   * refused, since completing it needs the server's signature.
+   *
+   * @param payload - The client's payment payload.
+   * @param requirements - The requirements it answers.
+   * @returns The settle response, carrying the voucher's commitment id in `extra`; never throws.
+   */
   async settle(payload: PaymentPayload, requirements: PaymentRequirements): Promise<SettleResponse> {
     const network = requirements.network;
     const fail = (e: unknown, transaction = ""): SettleResponse => ({ success: false, errorReason: reasonOf(e), errorMessage: (e as Error).message, transaction, network });
@@ -156,6 +195,15 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
     }
   }
 
+  /**
+   * Validates the envelope: x402 v2, `accepted` equal to the requirements, a batch payload, a
+   * confirmation depth inside this facilitator's range, and a Yellowback node for a YED channel.
+   *
+   * @param payload - The client's payment payload.
+   * @param requirements - The requirements it answers.
+   * @returns The typed payload and the parsed terms.
+   * @throws BatchSettlementError when any of those checks fails.
+   */
   private envelope(payload: PaymentPayload, requirements: PaymentRequirements): { p: BatchPayload; terms: BatchTerms } {
     if (payload.x402Version !== 2 || !sameOffer(payload.accepted, requirements)) {
       throw new BatchSettlementError(BatchError.REQUIREMENTS, "accepted does not match the requirements");
@@ -169,7 +217,15 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
     return { p: payload.payload, terms };
   }
 
-  /** The channel a voucher spends, rebuilt from its scriptSig's redeem script and the live output. */
+  /**
+   * The channel a voucher spends, rebuilt from its scriptSig's redeem script and the live output.
+   *
+   * @param txHex - The voucher (or close) transaction.
+   * @param channelId - The channel the payload names; the single input must spend it.
+   * @param terms - The offer, for the server key, close fee and payTo.
+   * @returns The channel and the decoded transaction.
+   * @throws BatchSettlementError when the shape, redeem script or server key is wrong, or the output is spent.
+   */
   private async liveChannel(txHex: string, channelId: string, terms: BatchTerms): Promise<{ channel: Channel; tx: Tx }> {
     const tx = decodeTx(txHex, BatchError.VOUCHER_SHAPE);
     const input = tx.vin[0];
@@ -191,7 +247,12 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
     return { channel, tx };
   }
 
-  /** Records the relayed close's cumulative, and retires the channel's record: it is spent now. */
+  /**
+   * Records the relayed close's cumulative, and retires the channel's record: it is spent now.
+   *
+   * @param channelId - The closed channel.
+   * @param cumulative - The close's cumulative, in the asset's base units.
+   */
   private async recordClaim(channelId: string, cumulative: bigint): Promise<void> {
     if (!(await this.channels.open({ channelId, cumulative }))) {
       const r = await this.channels.get(channelId);
@@ -200,6 +261,11 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
     await this.channels.retire([channelId], Date.now() + (this.cfg.closedRetentionMs ?? DEFAULT_CLOSED_RETENTION_MS));
   }
 
+  /**
+   * Broadcasts a transaction, treating "already in chain" as success so a retried settle is idempotent.
+   *
+   * @param hex - The raw transaction.
+   */
   private async relay(hex: string): Promise<void> {
     try {
       await this.chain.sendRawTransaction(hex);
@@ -209,6 +275,14 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
     }
   }
 
+  /**
+   * Polls the output until it reaches the depth or `fundingWaitMs` passes (one check when that is 0).
+   *
+   * @param txid - The funding txid, display-order hex.
+   * @param vout - The channel output index.
+   * @param want - The required confirmations.
+   * @returns Whether the output reached the depth before the deadline.
+   */
   private async waitForDepth(txid: string, vout: number, want: number): Promise<boolean> {
     const deadline = Date.now() + (this.cfg.fundingWaitMs ?? 0);
     for (;;) {

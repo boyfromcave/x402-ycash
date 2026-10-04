@@ -17,23 +17,45 @@ export interface Channel extends ChannelScript {
   payToScript: Uint8Array;
 }
 
-/** Builds a Channel from its redeem script; throws when the script is not the channel script. */
+/**
+ * Builds a Channel, taking C, S and t from the redeem script so they cannot disagree with it.
+ *
+ * @param fields - The channel's fields other than the ones parsed from the script.
+ * @returns The complete channel.
+ * @throws Error when `redeemScript` is not exactly the channel script.
+ */
 export function channelFromScript(fields: Omit<Channel, keyof ChannelScript>): Channel {
   const parsed = parseChannelScript(fields.redeemScript);
   if (!parsed) throw new Error("not the channel redeem script");
   return { ...parsed, ...fields };
 }
 
-/** D for a YEC channel: V − closeFee. */
+/**
+ * D for a YEC channel: V − closeFee, the most a voucher can pay the server.
+ *
+ * @param ch - The channel's value and close fee, zatoshis.
+ * @returns The deposit, zatoshis.
+ */
 export function yecDeposit(ch: Pick<Channel, "value" | "closeFee">): bigint {
   return ch.value - ch.closeFee;
 }
 
-/** `"<funding txid>:<vout>"`, txid in display order. */
+/**
+ * The channel id, `"<funding txid>:<vout>"` with the txid in display order.
+ *
+ * @param p - The funding outpoint.
+ * @returns The channel id.
+ */
 export function channelIdOf(p: OutPoint): string {
   return `${p.txid}:${p.vout}`;
 }
 
+/**
+ * Parses a channel id strictly: lowercase 64-hex txid, decimal vout within uint32.
+ *
+ * @param id - A channel id as produced by {@link channelIdOf}.
+ * @returns The funding outpoint, or null when `id` is malformed.
+ */
 export function parseChannelId(id: string): OutPoint | null {
   const m = /^([0-9a-f]{64}):(\d{1,10})$/.exec(id);
   if (!m) return null;
@@ -41,7 +63,13 @@ export function parseChannelId(id: string): OutPoint | null {
   return vout <= 0xffffffff ? { txid: m[1] as string, vout } : null;
 }
 
-/** The commitment id of a stored voucher: `"<channelId>@<cumulative>"`. */
+/**
+ * The commitment id of a stored voucher: `"<channelId>@<cumulative>"`.
+ *
+ * @param channelId - The channel id.
+ * @param cumulative - The voucher's cumulative, in the asset's unit.
+ * @returns The commitment id.
+ */
 export function commitmentIdOf(channelId: string, cumulative: bigint): string {
   return `${channelId}@${cumulative}`;
 }

@@ -78,6 +78,11 @@ const DEFAULT_CONFIRMATION_POLL_MS = 1_000;
 /** Evidence of the payTo output: −1 in the mempool, the depth when mined, null when not seen. */
 type Evidence = number | null;
 
+/**
+ * The exact-scheme facilitator for Ycash networks: verifies a client's signed transparent payment
+ * against the node, and settles it by claiming its txid, broadcasting once and waiting for the
+ * requirements' confirmation depth. It holds no keys and pays no fees.
+ */
 export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
   readonly scheme = SCHEME_EXACT;
   readonly caipFamily = "ycash:*";
@@ -91,7 +96,13 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
   private readonly logger: ExactLogger | undefined;
   private readonly yellowback: boolean;
 
-  /** `new ExactYcashFacilitatorScheme(rpc, config)`, or the service's `new ExactYcashFacilitatorScheme(deps)`. */
+  /**
+   * Accepts `new ExactYcashFacilitatorScheme(rpc, config)`, or the facilitator service's
+   * `new ExactYcashFacilitatorScheme(deps)`; explicit `config` fields override `deps`.
+   *
+   * @param rpcOrDeps - The node RPC, or the service's dependency bundle carrying it.
+   * @param config - Store, confirmation range, limits and optional shielded handler.
+   */
   constructor(rpcOrDeps: ExactFacilitatorRpc | ExactYcashFacilitatorDeps, config: ExactYcashFacilitatorConfig = {}) {
     if ("rpc" in rpcOrDeps) {
       this.rpc = rpcOrDeps.rpc;
@@ -116,7 +127,13 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
     this.yellowback = config.yellowback ?? false;
   }
 
-  /** The `/supported` capability block; YED only on a Yellowback node. */
+  /**
+   * The `/supported` capability block: assets (YED only on a Yellowback node), transfer methods,
+   * and the confirmation range this facilitator settles.
+   *
+   * @param _network - The network (the block is the same for every Ycash network).
+   * @returns The `extra` object advertised for this scheme.
+   */
   getExtra(_network: Network): Record<string, unknown> | undefined {
     void _network;
     return {
@@ -127,12 +144,26 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
     };
   }
 
-  /** No sponsorship: the facilitator holds no keys. */
+  /**
+   * No sponsorship: the facilitator holds no keys, so it has no signer addresses.
+   *
+   * @param _network - The network (unused).
+   * @returns An empty list.
+   */
   getSigners(_network: string): string[] {
     void _network;
     return [];
   }
 
+  /**
+   * Verifies a payment without broadcasting: `sapling-proof` goes to the shielded handler,
+   * everything else runs rules 1–10. A node lookup that throws becomes an invalid response.
+   *
+   * @param payload - The client's payment payload.
+   * @param requirements - The server's payment requirements.
+   * @param context - Optional facilitator context, passed to the shielded handler.
+   * @returns Whether the payment is valid, the reason if not, and the payer.
+   */
   async verify(payload: PaymentPayload, requirements: PaymentRequirements, context?: FacilitatorContext): Promise<VerifyResponse> {
     if (isShieldedMethod(requirements.extra)) {
       if (!this.shielded) return { isValid: false, invalidReason: ERR_ASSET_TRANSFER_METHOD, invalidMessage: "sapling-proof is not configured", payer: "" };
@@ -152,6 +183,11 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
    * Settlement (spec "Settlement"): re-run the rules, claim the txid atomically, broadcast once,
    * then observe the payTo outpoint with `gettxout(…, true)` until the policy depth or the wait
    * ends. A settle of an already-claimed txid never broadcasts: it resumes observing.
+   *
+   * @param payload - The client's payment payload.
+   * @param requirements - The server's payment requirements.
+   * @param context - Optional facilitator context, passed to the shielded handler.
+   * @returns Success with the txid and confirmation status, `settlement_pending`, or a failure.
    */
   async settle(payload: PaymentPayload, requirements: PaymentRequirements, context?: FacilitatorContext): Promise<SettleResponse> {
     if (isShieldedMethod(requirements.extra)) {
@@ -189,6 +225,9 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
   /**
    * `sendrawtransaction`. Returns a terminal rejection only when the node certainly did not take
    * the tx; −27 and transport failures continue to observation, keeping the claim (X-F6).
+   *
+   * @param s - The resolved payment to broadcast.
+   * @returns A terminal rejection reason and message, or null to proceed to observation.
    */
   private async submit(s: ResolvedPayment): Promise<{ reason: string; message: string } | null> {
     try {
@@ -208,7 +247,15 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
     }
   }
 
-  /** Waits (bounded) for the policy depth; success, `settlement_pending`, or expiry. */
+  /**
+   * Polls the payTo outpoint until the policy depth is reached or the wait (the configured timeout,
+   * capped by `maxTimeoutSeconds`) runs out; a tx unmined past its nExpiryHeight fails as expired.
+   *
+   * @param s - The resolved payment being settled.
+   * @param req - The payment requirements (network and timeout).
+   * @param payer - The payer address to report.
+   * @returns Success, `settlement_pending`, or an expiry failure.
+   */
   private async observe(s: ResolvedPayment, req: PaymentRequirements, payer: string): Promise<SettleResponse> {
     const deadline = Date.now() + Math.min(this.confirmationTimeoutMs, req.maxTimeoutSeconds * 1000);
     let seen: Evidence = null;
@@ -237,6 +284,13 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
     };
   }
 
+  /**
+   * Reads the payTo output from the node including the mempool; a transient RPC error counts as
+   * "not seen" rather than as absence.
+   *
+   * @param s - The resolved payment.
+   * @returns −1 if in the mempool, the confirmation count if mined, or null if not seen.
+   */
   private async evidence(s: ResolvedPayment): Promise<Evidence> {
     try {
       const out = await this.rpc.getTxOut(s.txid, s.payToVout, true);
@@ -247,6 +301,13 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
     }
   }
 
+  /**
+   * Recovers the payer from input 0's scriptSig when settle resumes a claimed txid without
+   * re-verifying; for a YED payment a P2PKH address is re-encoded in the `ye…` form.
+   *
+   * @param s - The resolved payment.
+   * @returns The payer address, or "" when the scriptSig reveals none.
+   */
   private resumedPayer(s: ResolvedPayment): string {
     const address = addressOfScriptSig(s.tx.vin[0]?.scriptSig ?? new Uint8Array(), s.network);
     if (!s.yed || !address) return address;
@@ -255,6 +316,16 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
   }
 }
 
+/**
+ * Builds a failed settle response, omitting `payer` when it is unknown.
+ *
+ * @param errorReason - The x402 error reason code.
+ * @param network - The requirements' network.
+ * @param transaction - The txid, or "" before one is known.
+ * @param errorMessage - Human-readable detail.
+ * @param payer - The payer address, if known.
+ * @returns The settle response.
+ */
 function failure(errorReason: string, network: Network, transaction: string, errorMessage: string, payer?: string): SettleResponse {
   return { success: false, errorReason, errorMessage, transaction, network, ...(payer ? { payer } : {}) };
 }

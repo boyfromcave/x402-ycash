@@ -93,14 +93,20 @@ export interface ClientChannelStatus {
   deposit: string;
 }
 
+/**
+ * The client side of `batch-settlement` on Ycash: one channel per offer, opened on first use and
+ * paid with a cumulative voucher per request, with a cooperative close or a unilateral refund.
+ */
 export class BatchYcashScheme implements SchemeNetworkClient {
   readonly scheme = "batch-settlement";
   readonly storage: ClientChannelStorage;
   readonly schemeHooks: SchemeClientHooks;
-  /** Makes YEC (8 decimals) and YED (cents) known to x402Client's spend controls, which refuse unknown assets. */
-  readonly findDefaultAsset: FindDefaultAsset = (asset) =>
-    asset === ASSET_YEC ? { asset: ASSET_YEC, decimals: 8, symbol: ASSET_YEC } : asset === ASSET_YED ? { asset: ASSET_YED, decimals: 2, symbol: ASSET_YED } : undefined;
-
+  /**
+   * Creates the scheme and its `onPaymentResponse` hook, which applies settle responses and
+   * resyncs from a corrective 402's `channelState`.
+   *
+   * @param cfg - The node, the funder, the channel store and the client's caps.
+   */
   constructor(private readonly cfg: BatchYcashClientConfig) {
     this.storage = cfg.storage ?? new InMemoryClientChannelStorage();
     this.schemeHooks = {
@@ -113,17 +119,27 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     };
   }
 
-  /** The voucher outputs of a channel of `asset` holding D (YEC, or YED with the dollar floor). */
-  protected layoutFor(asset: string, deposit: bigint): VoucherLayout {
-    return layoutFor(asset, deposit);
-  }
+  /**
+   * Makes YEC (8 decimals) and YED (cents) known to x402Client's spend controls, which refuse
+   * unknown assets.
+   *
+   * @param asset - The requirements' asset.
+   * @returns The asset's decimals and symbol, or undefined for any other asset.
+   */
+  readonly findDefaultAsset: FindDefaultAsset = (asset) =>
+    asset === ASSET_YEC ? { asset: ASSET_YEC, decimals: 8, symbol: ASSET_YEC } : asset === ASSET_YED ? { asset: ASSET_YED, decimals: 2, symbol: ASSET_YED } : undefined;
 
-  /** The least a voucher may carry: the dust threshold for YEC, $1.00 for YED (X-7). */
-  private floorOf(asset: string): bigint {
-    return asset === ASSET_YED ? cumulativeFloor(asset) : DUST_THRESHOLD;
-  }
-
-  async createPaymentPayload(x402Version: number, req: PaymentRequirements, _ctx?: PaymentPayloadContext): Promise<PaymentPayloadResult> {
+  /**
+   * Pays one request: resends a pending `open` until its funding expires, signs the next voucher
+   * on the live channel (charged total + `amount`, never below the floor), or, when there is none
+   * or it is exhausted or inside its close margin, opens a new channel.
+   *
+   * @param x402Version - The protocol version to echo.
+   * @param req - The `batch-settlement` requirements.
+   * @param _ - Unused payload context.
+   * @returns An `open` or `voucher` payload.
+   */
+  async createPaymentPayload(x402Version: number, req: PaymentRequirements, _?: PaymentPayloadContext): Promise<PaymentPayloadResult> {
     const terms = parseTerms(req);
     const key = offerKeyOf(terms.network, terms.payTo, bytesToHex(terms.serverPubKey));
     let rec = await this.storage.findLive(key);
@@ -157,13 +173,169 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     return { x402Version, payload: { ...(await this.open(terms, key, info.blocks, branchId)) } };
   }
 
-  /** The funding can no longer relay (tip + 3 > its expiry) and is not on chain or in the mempool. */
+  /**
+   * Applies a PAYMENT-RESPONSE: the server's charged total, and the open accepted. Failed
+   * responses and unknown channels are ignored.
+   *
+   * @param resp - The settle response, carrying `extra.channelState`.
+   */
+  async applySettleResponse(resp: SettleResponse): Promise<void> {
+    const state = resp.extra?.channelState as BatchChannelState | undefined;
+    if (!resp.success || !state) return;
+    const rec = await this.storage.get(state.channelId);
+    if (!rec) return;
+    if (rec.status === "opening") {
+      rec.status = "open";
+      delete rec.open;
+    }
+    rec.charged = state.chargedCumulative;
+    if (BigInt(state.signedCumulative) > BigInt(rec.signed)) rec.signed = state.signedCumulative;
+    await this.storage.put(rec);
+  }
+
+  /**
+   * Resynchronises from a corrective 402's channelState. A charged total above what this client
+   * ever signed is refused: an honest server cannot have charged it.
+   *
+   * @param state - The server's view of the channel.
+   * @returns True when the local record changed.
+   */
+  async resync(state: BatchChannelState): Promise<boolean> {
+    const rec = await this.storage.get(state.channelId);
+    if (!rec) return false;
+    const charged = BigInt(state.chargedCumulative);
+    if (charged > BigInt(rec.signed) || charged === BigInt(rec.charged)) return false;
+    rec.charged = charged.toString();
+    if (rec.status === "opening") {
+      rec.status = "open";
+      delete rec.open;
+    }
+    await this.storage.put(rec);
+    return true;
+  }
+
+  /**
+   * A cooperative close at the charged total (the `close` payload): the server broadcasts it.
+   *
+   * @param channelId - The channel to close.
+   * @returns The `close` payload.
+   */
+  async closePayload(channelId: string): Promise<PaymentPayloadResult> {
+    const rec = await this.mustGet(channelId);
+    const info = await this.cfg.chain.getBlockchainInfo();
+    const cumulative = closeCumulative(rec.asset, BigInt(rec.charged));
+    const tx = this.sign(rec, cumulative, parseInt(info.consensus.nextblock, 16) >>> 0);
+    const payload: BatchClientPayload = { type: "close", channelId, tx, cumulative: cumulative.toString() };
+    return { x402Version: 2, payload: { ...payload } };
+  }
+
+  /**
+   * Marks a channel closed after the server's close response.
+   *
+   * @param channelId - The closed channel.
+   * @param closeTxid - The txid of the close transaction.
+   */
+  async markClosed(channelId: string, closeTxid: string): Promise<void> {
+    const rec = await this.mustGet(channelId);
+    rec.status = "closed";
+    rec.closeTxid = closeTxid;
+    await this.storage.put(rec);
+  }
+
+  /**
+   * The refund, from height t: builds, broadcasts and records it. A YED refund carries a
+   * TRANSFER of all of D back to the client.
+   *
+   * @param channelId - The channel to refund.
+   * @param opts - Refund options.
+   * @param opts.toScript - Where the refund pays; defaults to the channel's return script.
+   * @param opts.fee - The refund fee in zatoshis; defaults to the builder's.
+   * @returns The refund txid.
+   * @throws Error before height t.
+   */
+  async refund(channelId: string, opts: { toScript?: Uint8Array; fee?: bigint } = {}): Promise<string> {
+    const rec = await this.mustGet(channelId);
+    const info = await this.cfg.chain.getBlockchainInfo();
+    if (info.blocks < rec.refundHeight) throw new Error(`the refund is valid from height ${rec.refundHeight}; tip is ${info.blocks}`);
+    const params = {
+      channel: channelOfRecord(rec),
+      clientPrivKey: hexToBytes(rec.clientPrivKey),
+      toScript: opts.toScript ?? hexToBytes(rec.clientScript),
+      branchId: parseInt(info.consensus.nextblock, 16) >>> 0,
+      ...(opts.fee !== undefined ? { fee: opts.fee } : {}),
+    };
+    // A YED refund carries a TRANSFER of all of D to the client: a bare spend would burn it (Y-4).
+    const tx = rec.asset === ASSET_YED ? buildYedRefund({ ...params, depositCents: BigInt(rec.deposit) }) : buildRefund(params);
+    const txid = await this.cfg.chain.sendRawTransaction(serializeTxHex(tx));
+    rec.status = "refunded";
+    rec.refundTxid = txid;
+    await this.storage.put(rec);
+    return txid;
+  }
+
+  /**
+   * Reports a channel's local record together with the tip and whether its output is still unspent.
+   *
+   * @param channelId - The channel.
+   * @returns The channel status.
+   */
+  async status(channelId: string): Promise<ClientChannelStatus> {
+    const rec = await this.mustGet(channelId);
+    const [info, out] = await Promise.all([this.cfg.chain.getBlockchainInfo(), this.cfg.chain.getTxOut(rec.channelId.split(":")[0] as string, rec.vout, true)]);
+    return {
+      channelId, status: rec.status, tip: info.blocks, refundHeight: rec.refundHeight,
+      blocksToRefund: Math.max(0, rec.refundHeight - info.blocks), unspent: out !== null,
+      charged: rec.charged, signed: rec.signed, deposit: rec.deposit,
+    };
+  }
+
+  /**
+   * The voucher outputs of a channel of `asset` holding D (YEC, or YED with the dollar floor).
+   * Protected so a subclass can test other layouts.
+   *
+   * @param asset - The channel's asset.
+   * @param deposit - D, in the asset's unit.
+   * @returns The layout.
+   */
+  protected layoutFor(asset: string, deposit: bigint): VoucherLayout {
+    return layoutFor(asset, deposit);
+  }
+
+  /**
+   * The least a voucher may carry: the dust threshold for YEC, $1.00 for YED.
+   *
+   * @param asset - The channel's asset.
+   * @returns The floor, in the asset's unit.
+   */
+  private floorOf(asset: string): bigint {
+    return asset === ASSET_YED ? cumulativeFloor(asset) : DUST_THRESHOLD;
+  }
+
+  /**
+   * Whether the funding can no longer relay (tip + 3 > its expiry) and is not on chain or in the mempool.
+   *
+   * @param rec - The channel record in `opening` state.
+   * @param tip - The current tip height.
+   * @returns True when the channel will never exist.
+   */
   private async fundingExpired(rec: ClientChannelRecord, tip: number): Promise<boolean> {
     const expiry = rec.fundingExpiryHeight ?? 0;
     if (expiry === 0 || tip + 1 + TX_EXPIRING_SOON_THRESHOLD <= expiry) return false;
     return (await this.cfg.chain.getTxOut(rec.channelId.split(":")[0] as string, rec.vout, true)) === null;
   }
 
+  /**
+   * Opens a channel: checks the server's closeFee against this client's cap, picks D (configured
+   * or amount × multiplier, capped by both sides' maxDeposit), draws a fresh key C, has the funder
+   * sign a funding with a bounded expiry, and stores the record before returning the `open`.
+   *
+   * @param terms - The parsed requirements.
+   * @param offerKey - The offer key the channel is stored under.
+   * @param tip - The current tip height.
+   * @param branchId - The branch id to sign under.
+   * @returns The `open` payload with its first voucher.
+   * @throws Error when a cap refuses the offer or there is no return address.
+   */
   private async open(terms: BatchTerms, offerKey: string, tip: number, branchId: number) {
     const yed = terms.asset === ASSET_YED;
     const maxCloseFee = this.cfg.maxCloseFee?.[terms.asset] ?? DEFAULT_CLIENT_MAX_CLOSE_FEE[terms.asset];
@@ -212,13 +384,27 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     return open;
   }
 
-  /** The client's cap on D for `asset` (refuses an asset with none). */
+  /**
+   * The client's cap on D for `asset`.
+   *
+   * @param asset - The channel's asset.
+   * @returns The cap, in the asset's unit.
+   * @throws Error for an asset with no cap.
+   */
   private maxDepositFor(asset: string): bigint {
     const cap = this.cfg.maxDeposit?.[asset] ?? DEFAULT_CLIENT_MAX_DEPOSIT[asset];
     if (cap === undefined) throw new Error(`no client maxDeposit for ${asset}`);
     return cap;
   }
 
+  /**
+   * Signs a voucher of the channel at `cumulative` with the channel key C.
+   *
+   * @param rec - The channel record.
+   * @param cumulative - The total paid to the server so far, in the asset's unit.
+   * @param branchId - The branch id to sign under.
+   * @returns The voucher transaction, hex.
+   */
   private sign(rec: ClientChannelRecord, cumulative: bigint, branchId: number): string {
     return serializeTxHex(buildVoucher({
       channel: channelOfRecord(rec),
@@ -230,88 +416,13 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     }));
   }
 
-  /** Applies a PAYMENT-RESPONSE: the server's charged total, and the open accepted. */
-  async applySettleResponse(resp: SettleResponse): Promise<void> {
-    const state = resp.extra?.channelState as BatchChannelState | undefined;
-    if (!resp.success || !state) return;
-    const rec = await this.storage.get(state.channelId);
-    if (!rec) return;
-    if (rec.status === "opening") {
-      rec.status = "open";
-      delete rec.open;
-    }
-    rec.charged = state.chargedCumulative;
-    if (BigInt(state.signedCumulative) > BigInt(rec.signed)) rec.signed = state.signedCumulative;
-    await this.storage.put(rec);
-  }
-
   /**
-   * Resynchronises from a corrective 402's channelState. A charged total above what this client
-   * ever signed is refused: an honest server cannot have charged it. Returns true when it changed.
+   * Looks up a stored channel.
+   *
+   * @param channelId - The channel.
+   * @returns The record.
+   * @throws Error with `UNKNOWN_CHANNEL` when it is not stored.
    */
-  async resync(state: BatchChannelState): Promise<boolean> {
-    const rec = await this.storage.get(state.channelId);
-    if (!rec) return false;
-    const charged = BigInt(state.chargedCumulative);
-    if (charged > BigInt(rec.signed) || charged === BigInt(rec.charged)) return false;
-    rec.charged = charged.toString();
-    if (rec.status === "opening") {
-      rec.status = "open";
-      delete rec.open;
-    }
-    await this.storage.put(rec);
-    return true;
-  }
-
-  /** A cooperative close at the charged total (the `close` payload): the server broadcasts it. */
-  async closePayload(channelId: string): Promise<PaymentPayloadResult> {
-    const rec = await this.mustGet(channelId);
-    const info = await this.cfg.chain.getBlockchainInfo();
-    const cumulative = closeCumulative(rec.asset, BigInt(rec.charged));
-    const tx = this.sign(rec, cumulative, parseInt(info.consensus.nextblock, 16) >>> 0);
-    const payload: BatchClientPayload = { type: "close", channelId, tx, cumulative: cumulative.toString() };
-    return { x402Version: 2, payload: { ...payload } };
-  }
-
-  /** Marks a channel closed after the server's close response. */
-  async markClosed(channelId: string, closeTxid: string): Promise<void> {
-    const rec = await this.mustGet(channelId);
-    rec.status = "closed";
-    rec.closeTxid = closeTxid;
-    await this.storage.put(rec);
-  }
-
-  /** The refund, from height t: builds, broadcasts and records it; returns its txid. */
-  async refund(channelId: string, opts: { toScript?: Uint8Array; fee?: bigint } = {}): Promise<string> {
-    const rec = await this.mustGet(channelId);
-    const info = await this.cfg.chain.getBlockchainInfo();
-    if (info.blocks < rec.refundHeight) throw new Error(`the refund is valid from height ${rec.refundHeight}; tip is ${info.blocks}`);
-    const params = {
-      channel: channelOfRecord(rec),
-      clientPrivKey: hexToBytes(rec.clientPrivKey),
-      toScript: opts.toScript ?? hexToBytes(rec.clientScript),
-      branchId: parseInt(info.consensus.nextblock, 16) >>> 0,
-      ...(opts.fee !== undefined ? { fee: opts.fee } : {}),
-    };
-    // A YED refund carries a TRANSFER of all of D to the client: a bare spend would burn it (Y-4).
-    const tx = rec.asset === ASSET_YED ? buildYedRefund({ ...params, depositCents: BigInt(rec.deposit) }) : buildRefund(params);
-    const txid = await this.cfg.chain.sendRawTransaction(serializeTxHex(tx));
-    rec.status = "refunded";
-    rec.refundTxid = txid;
-    await this.storage.put(rec);
-    return txid;
-  }
-
-  async status(channelId: string): Promise<ClientChannelStatus> {
-    const rec = await this.mustGet(channelId);
-    const [info, out] = await Promise.all([this.cfg.chain.getBlockchainInfo(), this.cfg.chain.getTxOut(rec.channelId.split(":")[0] as string, rec.vout, true)]);
-    return {
-      channelId, status: rec.status, tip: info.blocks, refundHeight: rec.refundHeight,
-      blocksToRefund: Math.max(0, rec.refundHeight - info.blocks), unspent: out !== null,
-      charged: rec.charged, signed: rec.signed, deposit: rec.deposit,
-    };
-  }
-
   private async mustGet(channelId: string): Promise<ClientChannelRecord> {
     const rec = await this.storage.get(channelId);
     if (!rec) throw new Error(`${BatchError.UNKNOWN_CHANNEL}: ${channelId}`);

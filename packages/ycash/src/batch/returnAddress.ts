@@ -11,6 +11,13 @@ import { BatchError, BatchSettlementError } from "./errors.js";
  * transparent P2PKH or P2SH address; YED a P2PKH one (`s…` or `ye…`), since a YED holder is a key
  * hash (plan Y-8; ycash-dd/src/yellowback/address.cpp:11-27). Never payTo's own script: the
  * voucher would then have two server outputs.
+ *
+ * @param returnAddress - The client's return address, as sent in `open`.
+ * @param network - The channel's network; the address must belong to it.
+ * @param asset - `YEC` or `YED`, the channel's asset.
+ * @param payToScript - The server's payTo output script.
+ * @returns The return output script.
+ * @throws BatchSettlementError with `RETURN_ADDRESS` when the address fails any of these rules.
  */
 export function returnScriptOf(returnAddress: string, network: YcashNetwork, asset: string, payToScript: Uint8Array): Uint8Array {
   let kind;

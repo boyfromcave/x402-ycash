@@ -52,7 +52,16 @@ export interface YcashClientSigner {
   signYedPayment?(order: YedPaymentOrder): Promise<SignedPayment>;
 }
 
-/** `getblockchaininfo` → ChainState. */
+/**
+ * Reads the chain, tip height and next-block branch id from a `getblockchaininfo` result.
+ *
+ * @param info - The `getblockchaininfo` result.
+ * @param info.chain - "main", "test" or "regtest".
+ * @param info.blocks - The tip height.
+ * @param info.consensus - The consensus section.
+ * @param info.consensus.nextblock - The next block's branch id, hex.
+ * @returns The chain state.
+ */
 export function chainStateOf(info: { chain: string; blocks: number; consensus: { nextblock: string } }): ChainState {
   return { chain: info.chain, height: info.blocks, branchId: parseInt(info.consensus.nextblock, 16) >>> 0 };
 }

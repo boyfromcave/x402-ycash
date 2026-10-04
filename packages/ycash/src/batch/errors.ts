@@ -32,6 +32,12 @@ export type BatchErrorCode = (typeof BatchError)[keyof typeof BatchError] | (str
 /** A refusal with its wire reason; `message` is for logs. */
 export class BatchSettlementError extends Error {
   readonly reason: BatchErrorCode;
+  /**
+   * Builds the error; the thrown message is `reason` alone, or `reason: message`.
+   *
+   * @param reason - The wire reason returned to the peer.
+   * @param message - Optional detail for logs.
+   */
   constructor(reason: BatchErrorCode, message?: string) {
     super(message ? `${reason}: ${message}` : reason);
     this.name = "BatchSettlementError";
@@ -39,7 +45,13 @@ export class BatchSettlementError extends Error {
   }
 }
 
-/** The wire reason of any thrown value. */
+/**
+ * The wire reason of any thrown value: a {@link BatchSettlementError}'s own reason, else
+ * `unexpected_error`, so internal failures never leak their message onto the wire.
+ *
+ * @param e - The caught value.
+ * @returns The reason to put in the response.
+ */
 export function reasonOf(e: unknown): string {
   return e instanceof BatchSettlementError ? e.reason : "unexpected_error";
 }

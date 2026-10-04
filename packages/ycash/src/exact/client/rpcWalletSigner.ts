@@ -49,6 +49,12 @@ export class RpcWalletSigner implements YcashClientSigner {
    */
   private readonly reservedTokens: CoinReservationStore;
 
+  /**
+   * Builds the signer over a node wallet.
+   *
+   * @param rpc - RPC client of the node holding the keys.
+   * @param options - Retries, change address and the YED reservation store.
+   */
   constructor(
     private readonly rpc: RpcWalletSignerRpc,
     private readonly options: RpcWalletSignerOptions = {},
@@ -57,10 +63,24 @@ export class RpcWalletSigner implements YcashClientSigner {
     this.reservedTokens = options.reservations ?? new InMemoryCoinReservationStore();
   }
 
+  /**
+   * Reads the tip and next-block branch id from the wallet's node.
+   *
+   * @returns The node's chain state.
+   */
   async chainState(): Promise<ChainState> {
     return chainStateOf(await this.rpc.getBlockchainInfo());
   }
 
+  /**
+   * Selects and locks coins, has the wallet create and sign the transaction, and on an incomplete
+   * signature or an RPC error unlocks, drops the coins that failed or are already spent, and
+   * retries up to `retries` more times.
+   *
+   * @param order - The YEC payment to build.
+   * @returns The signed, unbroadcast transaction and the outpoints it spends (left locked).
+   * @throws The last error once the retries are exhausted.
+   */
   async signPayment(order: PaymentOrder): Promise<SignedPayment> {
     const payToScript = addressToScript(order.payTo, order.network);
     const change = this.options.changeAddress ?? (await this.rpc.call<string>("getrawchangeaddress"));
@@ -93,7 +113,13 @@ export class RpcWalletSigner implements YcashClientSigner {
   /**
    * A YED payment from the wallet's confirmed YED outputs (`yed_listunspent`), YEC fee coins from
    * its plain transparent coins. The SDK serialises the TRANSFER (createrawtransaction cannot write
-   * an OP_RETURN, plan R-7) and the wallet signs it (`signrawtransaction hex`).
+   * an OP_RETURN, plan R-7) and the wallet signs it (`signrawtransaction hex`). The YED inputs are
+   * also recorded in the reservation store, since the wallet locks every YED output anyway.
+   *
+   * @param order - The YED payment to build.
+   * @returns The signed, unbroadcast transaction and the outpoints it spends.
+   * @throws Error when the node is not a Yellowback node, or the last error once the retries are
+   * exhausted.
    */
   async signYedPayment(order: YedPaymentOrder): Promise<SignedPayment> {
     if (!(await this.rpc.capabilities()).yellowback) throw new Error("paying YED needs a Yellowback node wallet (-experimentalfeatures -yellowback)");
@@ -139,11 +165,21 @@ export class RpcWalletSigner implements YcashClientSigner {
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
-  /** Gives back the coins of a payment that will never be settled (the wallet unlocks on restart too). */
+  /**
+   * Gives back the coins of a payment that will never be settled (the wallet unlocks on restart too).
+   *
+   * @param inputs - The outpoints the payment spent.
+   */
   async release(inputs: readonly OutPoint[]): Promise<void> {
     await this.unlock(inputs);
   }
 
+  /**
+   * The wallet's spendable plain YEC coins: confirmed, unlocked, not coinbase, not YED-bearing, and
+   * still unspent per `gettxout(…, true)`.
+   *
+   * @returns The candidate coins.
+   */
   private async candidates(): Promise<Coin[]> {
     // listunspent omits locked coins, so a coin held by a pending payment is not offered again.
     // Coinbase outputs are left out: outside regtest, consensus makes them go to the shielded pool first.
@@ -167,6 +203,8 @@ export class RpcWalletSigner implements YcashClientSigner {
   /**
    * The wallet's spendable YED outputs: confirmed and not spent in the mempool. `locked` is not a
    * filter: the Yellowback wallet locks every YED output it holds.
+   *
+   * @returns The candidate YED outputs.
    */
   private async tokenCandidates(): Promise<TokenCoin[]> {
     const rows = await this.rpc.call<YedCoinRow[]>("yed_listunspent");
@@ -179,6 +217,12 @@ export class RpcWalletSigner implements YcashClientSigner {
     return tokens;
   }
 
+  /**
+   * The outpoints of the wallet's YED outputs, which a plain YEC spend must avoid. Empty on a node
+   * without the Yellowback overlay or wallet.
+   *
+   * @returns `txid:vout` keys.
+   */
   private async yedOutpoints(): Promise<Set<string>> {
     if (!(await this.rpc.capabilities()).yellowback) return new Set();
     try {
@@ -189,10 +233,20 @@ export class RpcWalletSigner implements YcashClientSigner {
     }
   }
 
+  /**
+   * Locks coins in the wallet (`lockunspent false`) so nothing else spends them.
+   *
+   * @param inputs - The outpoints to lock.
+   */
   private async lock(inputs: readonly OutPoint[]): Promise<void> {
     if (inputs.length > 0) await this.rpc.call("lockunspent", [false, inputs]);
   }
 
+  /**
+   * Unlocks coins in the wallet; failures are ignored.
+   *
+   * @param inputs - The outpoints to unlock.
+   */
   private async unlock(inputs: readonly OutPoint[]): Promise<void> {
     if (inputs.length > 0) await this.rpc.call("lockunspent", [true, inputs]).catch(() => undefined);
   }

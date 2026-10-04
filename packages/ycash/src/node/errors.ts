@@ -16,6 +16,17 @@ export class RpcError extends Error {
   /** Set when the call never got a JSON-RPC answer (refused, timed out, unauthorised, not JSON). */
   readonly transport: boolean;
 
+  /**
+   * Builds an error from a JSON-RPC error object or a transport failure.
+   *
+   * @param code - The node's JSON-RPC error code, or 0 for a transport failure.
+   * @param message - The node's error message.
+   * @param method - The RPC method that failed.
+   * @param opts - HTTP status, transport flag and underlying cause.
+   * @param opts.httpStatus - The HTTP status, when a response arrived.
+   * @param opts.transport - True when no JSON-RPC answer was received.
+   * @param opts.cause - The underlying error.
+   */
   constructor(code: number, message: string, method: string, opts: { httpStatus?: number; transport?: boolean; cause?: unknown } = {}) {
     super(message, opts.cause === undefined ? undefined : { cause: opts.cause });
     this.name = "RpcError";
@@ -41,12 +52,18 @@ export type SendRawTransactionErrorKind =
   /** Anything else (-25 with another reason, wallet guard, decode failure). */
   | "failed";
 
+/** A `sendrawtransaction` refusal, with the reject code and reason parsed and classified into a {@link SendRawTransactionErrorKind}. */
 export class SendRawTransactionError extends RpcError {
   readonly kind: SendRawTransactionErrorKind;
   /** The node's reject code (REJECT_*), when the message carries one ("18: txn-mempool-conflict"). */
   readonly rejectCode: number | undefined;
   readonly rejectReason: string;
 
+  /**
+   * Parses `"<code>: <reason>"` out of the node's message and classifies the failure.
+   *
+   * @param cause - The node's error from `sendrawtransaction`.
+   */
   constructor(cause: RpcError) {
     super(cause.code, cause.message, cause.method, { httpStatus: cause.httpStatus, cause });
     this.name = "SendRawTransactionError";
@@ -62,6 +79,11 @@ export class SendRawTransactionError extends RpcError {
  * `-26 "18: txn-mempool-conflict"` (`ycash6/src/main.cpp:1839-1842`), while v4.5.0's
  * AcceptToMemoryPool returns false without setting a reason (`ycash-dd/src/main.cpp:1579-1583`),
  * which sendrawtransaction reports as `-25` with an empty message (`rawtransaction.cpp:1161-1166`).
+ * This maps both forms (and the other refusals) to one kind.
+ *
+ * @param code - The node's JSON-RPC error code.
+ * @param reason - The reject reason, without its `"<code>: "` prefix.
+ * @returns How a facilitator should read the failure.
  */
 export function classifySendError(code: number, reason: string): SendRawTransactionErrorKind {
   if (code === RPC_VERIFY_ALREADY_IN_CHAIN) return "already-in-chain";
