@@ -1,0 +1,717 @@
+//! The wallet: a `zcash_client_sqlite` store under a data directory, one Sapling account, a
+//! lightwalletd connection and (when configured) the Sapling prover.
+//!
+//! Layout of `--data`:
+//!   wallet.sqlite        the WalletDb (notes, nullifiers, commitment tree, created transactions)
+//!   cache/               the FsBlockDb: blockmeta.sqlite + blocks/ (compact blocks, deleted once scanned)
+//! The spending key is injected (`Options::spending_key`, `register_key`); where it is kept is the
+//! embedding application's business (the x402-light binary stores it as `spending.key`, mode 0600).
+
+use std::fs;
+use std::num::NonZeroU32;
+use std::path::PathBuf;
+
+use nonempty::NonEmpty;
+use rand::rngs::OsRng;
+use serde::Serialize;
+use zcash_client_backend::data_api::chain::ChainState;
+use zcash_client_backend::data_api::wallet::input_selection::GreedyInputSelector;
+use zcash_client_backend::data_api::wallet::{
+    create_proposed_transactions, propose_standard_transfer_to_address, propose_transfer,
+    ConfirmationsPolicy, SpendingKeys, TargetHeight,
+};
+use zcash_client_backend::data_api::{
+    AccountBirthday, AccountPurpose, InputSource, NullifierQuery, TargetValue, WalletRead,
+    WalletWrite,
+};
+use zcash_client_backend::fees::StandardFeeRule;
+use zcash_client_backend::proto::compact_formats::CompactTx;
+use zcash_client_backend::wallet::OvkPolicy;
+use zcash_client_sqlite::chain::init::init_blockmeta_db;
+use zcash_client_sqlite::util::SystemClock;
+use zcash_client_sqlite::wallet::init::init_wallet_db;
+use zcash_client_sqlite::{AccountUuid, FsBlockDb, WalletDb};
+use zcash_keys::address::Address;
+use zcash_keys::keys::UnifiedSpendingKey;
+use zcash_primitives::transaction::components::sapling::zip212_enforcement;
+use zcash_primitives::transaction::fees::fixed::FeeRule as FixedFeeRule;
+use zcash_primitives::transaction::TxId;
+use zcash_proofs::prover::LocalTxProver;
+use zcash_protocol::consensus::{BlockHeight, Parameters};
+use zcash_protocol::memo::MemoBytes;
+use zcash_protocol::value::Zatoshis;
+use zcash_protocol::ShieldedProtocol;
+
+use sapling::keys::PreparedIncomingViewingKey;
+use sapling::note_encryption::{try_sapling_compact_note_decryption, CompactOutputDescription};
+use sapling::zip32::ExtendedSpendingKey;
+use zip32::Scope;
+
+use crate::keys;
+use crate::lwd::{self, Client};
+use crate::net::YcashNetwork;
+
+pub type Db = WalletDb<rusqlite::Connection, YcashNetwork, SystemClock, OsRng>;
+
+pub struct Wallet {
+    pub params: YcashNetwork,
+    pub(crate) db: Db,
+    pub(crate) cache: FsBlockDb,
+    pub(crate) blocks_dir: PathBuf,
+    pub data_dir: PathBuf,
+    extsk: Option<ExtendedSpendingKey>,
+    params_dir: Option<PathBuf>,
+    prover: Option<LocalTxProver>,
+    pub(crate) client: Client,
+    channel: tonic::transport::Channel,
+    pub(crate) lwd_addr: String,
+}
+
+pub struct Options {
+    pub data_dir: PathBuf,
+    pub lwd: String,
+    pub params: YcashNetwork,
+    pub proving_params_dir: Option<PathBuf>,
+    /// The Sapling extended spending key whose account this wallet holds, if already known.
+    pub spending_key: Option<ExtendedSpendingKey>,
+}
+
+/// One confirmation, the ycashd default for `z_sendmany` on both lines.
+pub fn default_policy() -> ConfirmationsPolicy {
+    ConfirmationsPolicy::new_symmetrical(NonZeroU32::new(1).expect("nonzero"))
+}
+
+impl Wallet {
+    pub async fn open(opts: Options) -> Result<Self, Error> {
+        fs::create_dir_all(&opts.data_dir)?;
+        let cache_root = opts.data_dir.join("cache");
+        let blocks_dir = cache_root.join("blocks");
+        fs::create_dir_all(&blocks_dir)?;
+        let mut cache =
+            FsBlockDb::for_path(&cache_root).map_err(|e| Error::Cache(e.to_string()))?;
+        init_blockmeta_db(&mut cache).map_err(|e| Error::Cache(e.to_string()))?;
+
+        let mut db = WalletDb::for_path(
+            opts.data_dir.join("wallet.sqlite"),
+            opts.params,
+            SystemClock,
+            OsRng,
+        )?;
+        init_wallet_db(&mut db, None).map_err(|e| Error::Init(e.to_string()))?;
+
+        let extsk = opts.spending_key;
+
+        let (client, channel) = lwd::connect(&opts.lwd).await?;
+        Ok(Wallet {
+            params: opts.params,
+            db,
+            cache,
+            blocks_dir,
+            data_dir: opts.data_dir,
+            extsk,
+            params_dir: opts.proving_params_dir,
+            prover: None,
+            client,
+            channel,
+            lwd_addr: opts.lwd,
+        })
+    }
+
+    // ------------------------------------------------------------------ keys and account
+
+    pub fn has_key(&self) -> bool {
+        self.extsk.is_some()
+    }
+
+    fn extsk(&self) -> Result<&ExtendedSpendingKey, Error> {
+        self.extsk.as_ref().ok_or(Error::NoKey)
+    }
+
+    fn usk(&self) -> Result<UnifiedSpendingKey, Error> {
+        Ok(keys::usk_from_extsk(self.extsk()?))
+    }
+
+    pub fn account(&self) -> Result<AccountUuid, Error> {
+        self.db
+            .get_account_ids()?
+            .into_iter()
+            .next()
+            .ok_or(Error::NoKey)
+    }
+
+    /// Registers a spending key with a birthday: the account is created with the tree state just
+    /// before the birthday so scanning starts there. One key per wallet; the key is not persisted
+    /// here (see the module docs).
+    pub async fn register_key(
+        &mut self,
+        extsk: ExtendedSpendingKey,
+        birthday: Option<u32>,
+    ) -> Result<KeyInfo, Error> {
+        if let Some(existing) = &self.extsk {
+            if existing.to_bytes() != extsk.to_bytes() {
+                return Err(Error::KeyExists);
+            }
+            return self.key_info();
+        }
+        let tip = lwd::latest_height(&mut self.client).await?;
+        let sapling_activation = self
+            .params
+            .activation_height(zcash_protocol::consensus::NetworkUpgrade::Sapling)
+            .unwrap_or(BlockHeight::from_u32(1));
+        let birthday_height = match birthday {
+            Some(h) => BlockHeight::from_u32(h).max(sapling_activation),
+            None => tip,
+        };
+        if birthday_height > tip + 1 {
+            return Err(Error::Birthday(format!(
+                "{birthday_height} is above the tip {tip}"
+            )));
+        }
+        let prior = self.chain_state_at(birthday_height - 1).await?;
+        let birthday_state = AccountBirthday::from_parts(prior, None);
+
+        let usk = keys::usk_from_extsk(&extsk);
+        self.db.import_account_ufvk(
+            "x402-light",
+            &keys::ufvk(&usk),
+            &birthday_state,
+            AccountPurpose::Spending { derivation: None },
+            Some("imported Sapling extended spending key"),
+        )?;
+
+        self.extsk = Some(extsk);
+        self.key_info()
+    }
+
+    pub fn key_info(&self) -> Result<KeyInfo, Error> {
+        let extsk = self.extsk()?;
+        let birthday = self.db.get_account_birthday(self.account()?)?;
+        Ok(KeyInfo {
+            address: keys::default_address(&self.params, extsk),
+            fvk: keys::encode_extfvk(&self.params, extsk),
+            birthday: u32::from(birthday),
+            network: self.params.name().to_owned(),
+        })
+    }
+
+    /// The chain state (block hash + Sapling frontier) as of the end of `height`, from
+    /// `GetTreeState`. The 0.4.6 lineage answers height 0 on regtest from `z_gettreestate 0`;
+    /// should a server refuse it, the genesis block's hash with an empty tree is equivalent.
+    pub(crate) async fn chain_state_at(
+        &mut self,
+        height: BlockHeight,
+    ) -> Result<ChainState, Error> {
+        match lwd::tree_state(&mut self.client, height).await {
+            Ok(ts) => ts
+                .to_chain_state()
+                .map_err(|e| Error::Server(format!("bad tree state at {height}: {e}"))),
+            Err(e) if u32::from(height) == 0 => {
+                let blocks = lwd::block_range(&mut self.client, height, height).await?;
+                let genesis = blocks.first().ok_or(e)?;
+                Ok(ChainState::empty(height, genesis.hash()))
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    // ------------------------------------------------------------------ status
+
+    fn policy(min_confirmations: u32) -> ConfirmationsPolicy {
+        ConfirmationsPolicy::new_symmetrical(
+            NonZeroU32::new(min_confirmations.max(1)).expect("nonzero"),
+        )
+    }
+
+    pub async fn status(&mut self, min_confirmations: u32) -> Result<Status, Error> {
+        let info = lwd::info(&mut self.client).await?;
+        let lwd_height = u32::try_from(info.block_height).unwrap_or(u32::MAX);
+        // GetLightdInfo.blockHeight is the node's height; the compact-block cache (what sync
+        // reads) can lag it by the ingestor's poll interval. GetLatestBlock is the cache's tip.
+        let lwd_latest = u32::from(lwd::latest_height(&mut self.client).await?);
+        let chain_height = self.db.chain_height()?.map(u32::from);
+        let (mut balance, scanned, synced) = (Balance::default(), None, false);
+        let mut out = Status {
+            network: self.params.name().to_owned(),
+            lwd: self.lwd_addr.clone(),
+            lwdHeight: lwd_height,
+            lwdLatestHeight: lwd_latest,
+            lwdChainName: info.chain_name.clone(),
+            lwdBranchId: info.consensus_branch_id.clone(),
+            branchIdNextBlock: format!(
+                "{:08x}",
+                u32::from(
+                    self.params
+                        .branch_id_at(BlockHeight::from_u32(lwd_height.saturating_add(1)))
+                )
+            ),
+            height: chain_height,
+            scannedHeight: scanned,
+            synced,
+            hasKey: self.has_key(),
+            address: None,
+            minConfirmations: min_confirmations.max(1),
+            balance: Balance::default(),
+            mempool: Mempool::default(),
+        };
+        if !self.has_key() {
+            return Ok(out);
+        }
+        out.address = Some(keys::default_address(&self.params, self.extsk()?));
+        let account = self.account()?;
+        if let Some(summary) = self
+            .db
+            .get_wallet_summary(Self::policy(min_confirmations))?
+        {
+            out.scannedHeight = Some(u32::from(summary.fully_scanned_height()));
+            out.synced =
+                summary.is_synced() && chain_height == Some(lwd_latest) && lwd_latest == lwd_height;
+            if let Some(b) = summary.account_balances().get(&account) {
+                let s = b.sapling_balance();
+                balance = Balance {
+                    spendableZat: s.spendable_value().into_u64(),
+                    pendingChangeZat: s.change_pending_confirmation().into_u64(),
+                    pendingIncomingZat: s.value_pending_spendability().into_u64(),
+                    totalZat: b.total().into_u64(),
+                };
+            }
+        }
+        out.balance = balance;
+        out.mempool = self.mempool_view(lwd_height).await?;
+        Ok(out)
+    }
+
+    /// Trial-decrypts the server's mempool with our incoming viewing keys and matches its spends
+    /// against our unspent nullifiers: what is coming in and what of ours is going out, 0-conf.
+    async fn mempool_view(&mut self, tip: u32) -> Result<Mempool, Error> {
+        let txs: Vec<CompactTx> = lwd::mempool(&mut self.client).await?;
+        let extsk = self.extsk()?;
+        let dfvk = extsk.to_diversifiable_full_viewing_key();
+        let ivks: Vec<PreparedIncomingViewingKey> = [Scope::External, Scope::Internal]
+            .iter()
+            .map(|s| PreparedIncomingViewingKey::new(&dfvk.to_ivk(*s)))
+            .collect();
+        let zip212 = zip212_enforcement(&self.params, BlockHeight::from_u32(tip + 1));
+        let ours: Vec<[u8; 32]> = self
+            .db
+            .get_sapling_nullifiers(NullifierQuery::Unspent)?
+            .into_iter()
+            .map(|(_, nf)| nf.0)
+            .collect();
+        let mut view = Mempool {
+            txCount: txs.len() as u32,
+            ..Default::default()
+        };
+        for tx in &txs {
+            let txid = TxId::from_bytes(
+                tx.txid
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| Error::Server("bad mempool txid".into()))?,
+            );
+            let mut incoming = 0u64;
+            for out in &tx.outputs {
+                let Ok(desc) = CompactOutputDescription::try_from(out) else {
+                    continue;
+                };
+                for ivk in &ivks {
+                    if let Some((note, _)) = try_sapling_compact_note_decryption(ivk, &desc, zip212)
+                    {
+                        incoming += note.value().inner();
+                        break;
+                    }
+                }
+            }
+            if incoming > 0 {
+                view.incomingZat += incoming;
+                view.incomingTxids.push(txid.to_string());
+            }
+            if tx
+                .spends
+                .iter()
+                .any(|s| ours.iter().any(|nf| nf[..] == s.nf[..]))
+            {
+                view.spendingTxids.push(txid.to_string());
+            }
+        }
+        Ok(view)
+    }
+
+    pub fn list_notes(&self, min_confirmations: u32) -> Result<Vec<NoteInfo>, Error> {
+        let account = self.account()?;
+        let Some(tip) = self.db.chain_height()? else {
+            return Ok(vec![]);
+        };
+        let target = TargetHeight::from(tip + 1);
+        let notes = self.db.select_spendable_notes(
+            account,
+            TargetValue::AtLeast(Zatoshis::const_from_u64(zcash_protocol::value::MAX_MONEY)),
+            &[ShieldedProtocol::Sapling],
+            target,
+            Self::policy(min_confirmations),
+            &[],
+        )?;
+        Ok(notes
+            .sapling()
+            .iter()
+            .map(|n| NoteInfo {
+                txid: n.txid().to_string(),
+                outputIndex: n.output_index() as u32,
+                valueZat: n.note_value().map(|z| z.into_u64()).unwrap_or(0),
+                minedHeight: n.mined_height().map(u32::from),
+            })
+            .collect())
+    }
+
+    // ------------------------------------------------------------------ spending
+
+    /// Takes the prover out of `self` (loading it on first use) so it can be used while the
+    /// wallet db is borrowed mutably; `build` puts it back.
+    fn take_prover(&mut self) -> Result<LocalTxProver, Error> {
+        if let Some(p) = self.prover.take() {
+            return Ok(p);
+        }
+        let dir = self.params_dir.clone().ok_or(Error::NoProvingParams)?;
+        let spend = dir.join("sapling-spend.params");
+        let output = dir.join("sapling-output.params");
+        if !spend.is_file() || !output.is_file() {
+            return Err(Error::ProvingParamsMissing(dir));
+        }
+        tracing::info!("loading Sapling proving parameters from {}", dir.display());
+        Ok(LocalTxProver::new(&spend, &output))
+    }
+
+    /// Builds, proves and signs a shielded spend to `to` with `memo`, records it in the wallet
+    /// (its inputs are marked spent until the transaction expires) and returns the raw hex
+    /// WITHOUT broadcasting it. A `fee` of `None` is the ZIP-317 conventional fee.
+    pub async fn build(&mut self, req: &BuildRequest) -> Result<Built, Error> {
+        let account = self.account()?;
+        let server = lwd::branch_info(&mut self.client, &self.channel).await?;
+        let usk = self.usk()?;
+        let to =
+            Address::decode(&self.params, &req.to).ok_or_else(|| Error::Address(req.to.clone()))?;
+        if !matches!(to, Address::Sapling(_)) {
+            return Err(Error::Address(format!("{}: not a Sapling address", req.to)));
+        }
+        let amount =
+            Zatoshis::from_u64(req.amount_zat).map_err(|_| Error::Amount(req.amount_zat))?;
+        let memo = match &req.memo_hex {
+            Some(h) if !h.is_empty() => {
+                let bytes = hex::decode(h).map_err(|e| Error::Memo(e.to_string()))?;
+                Some(MemoBytes::from_bytes(&bytes).map_err(|e| Error::Memo(format!("{e:?}")))?)
+            }
+            _ => match &req.memo {
+                Some(text) if !text.is_empty() => Some(
+                    MemoBytes::from_bytes(text.as_bytes())
+                        .map_err(|e| Error::Memo(format!("{e:?}")))?,
+                ),
+                _ => None,
+            },
+        };
+        let policy = Self::policy(req.min_confirmations.unwrap_or(1));
+        let tip = self.db.chain_height()?.ok_or(Error::NotSynced)?;
+        let target_height = tip + 1;
+        let branch_id = self.params.branch_id_at(target_height);
+        // Sign with what the server says the next block wants (GetChainInfo.nextBlockBranchId), by
+        // refusing to build when our parameters disagree with it: the builder derives the branch id
+        // from the parameters, so agreement here is what makes the signature valid.
+        let server_branch = crate::net::parse_branch_id(&server.branch_id_hex)
+            .ok_or_else(|| Error::Server(format!("unknown branch id {}", server.branch_id_hex)))?;
+        let compare_at = if server.next_block {
+            BlockHeight::from_u32(server.height) + 1
+        } else {
+            BlockHeight::from_u32(server.height)
+        };
+        if self.params.branch_id_at(compare_at) != server_branch {
+            return Err(Error::Server(format!(
+                "branch id mismatch: lightwalletd wants {:?} ({}) for height {compare_at}, our parameters give {:?}; check --network/--upgrades",
+                server_branch, server.branch_id_hex, self.params.branch_id_at(compare_at)
+            )));
+        }
+        if u32::from(tip) != server.height {
+            tracing::info!(
+                "wallet tip {tip}, server tip {}: run sync before build for a current anchor",
+                server.height
+            );
+        }
+
+        let params = self.params;
+        let prover = self.take_prover()?;
+        let created: Result<NonEmpty<TxId>, Error> = match req.fee_zat {
+            None => {
+                let proposal = propose_standard_transfer_to_address::<_, _, Error>(
+                    &mut self.db,
+                    &params,
+                    StandardFeeRule::Zip317,
+                    account,
+                    policy,
+                    &to,
+                    amount,
+                    memo,
+                    None,
+                    ShieldedProtocol::Sapling,
+                    None,
+                )
+                .map_err(|e| Error::Propose(format!("{e}")))?;
+                let created = create_proposed_transactions::<_, _, Error, _, Error, _>(
+                    &mut self.db,
+                    &params,
+                    &prover,
+                    &prover,
+                    &SpendingKeys::from_unified_spending_key(usk),
+                    OvkPolicy::Sender,
+                    &proposal,
+                    None,
+                );
+                created.map_err(|e| Error::Create(format!("{e}")))
+            }
+            Some(fee) => {
+                let fee = Zatoshis::from_u64(fee).map_err(|_| Error::Amount(fee))?;
+                let change_strategy =
+                    zcash_client_backend::fees::fixed::SingleOutputChangeStrategy::new(
+                        FixedFeeRule::non_standard(fee),
+                        None,
+                        ShieldedProtocol::Sapling,
+                        zcash_client_backend::fees::DustOutputPolicy::default(),
+                    );
+                let selector = GreedyInputSelector::<Db>::new();
+                let request = zip321::TransactionRequest::new(vec![zip321::Payment::new(
+                    to.to_zcash_address(&params),
+                    Some(amount),
+                    memo,
+                    None,
+                    None,
+                    vec![],
+                )
+                .map_err(|e| Error::Propose(format!("{e:?}")))?])
+                .map_err(|e| Error::Propose(format!("{e:?}")))?;
+                let proposal = propose_transfer::<_, _, _, _, Error>(
+                    &mut self.db,
+                    &params,
+                    account,
+                    &selector,
+                    &change_strategy,
+                    request,
+                    policy,
+                    None,
+                )
+                .map_err(|e| Error::Propose(format!("{e}")))?;
+                let created = create_proposed_transactions::<_, _, Error, _, Error, _>(
+                    &mut self.db,
+                    &params,
+                    &prover,
+                    &prover,
+                    &SpendingKeys::from_unified_spending_key(usk),
+                    OvkPolicy::Sender,
+                    &proposal,
+                    None,
+                );
+                created.map_err(|e| Error::Create(format!("{e}")))
+            }
+        };
+        self.prover = Some(prover);
+        let txids = created?;
+        if txids.len() != 1 {
+            return Err(Error::Create(format!(
+                "expected one transaction, built {}",
+                txids.len()
+            )));
+        }
+        let txid = txids.head;
+        let tx = self
+            .db
+            .get_transaction(txid)?
+            .ok_or_else(|| Error::Create("built tx not stored".into()))?;
+        let mut raw = Vec::new();
+        tx.write(&mut raw)
+            .map_err(|e| Error::Create(e.to_string()))?;
+        let fee = tx
+            .fee_paid(|_| Ok::<_, zcash_protocol::value::BalanceError>(None))
+            .ok()
+            .flatten()
+            .map(|z| z.into_u64());
+        Ok(Built {
+            txid: txid.to_string(),
+            txHex: hex::encode(&raw),
+            feeZat: fee,
+            targetHeight: u32::from(target_height),
+            expiryHeight: u32::from(tx.expiry_height()),
+            branchId: format!("{:08x}", u32::from(branch_id)),
+            branchIdSource: if server.next_block {
+                "GetChainInfo.nextBlockBranchId"
+            } else {
+                "GetLightdInfo.consensusBranchId (chaintip, X-F71)"
+            }
+            .to_owned(),
+            version: format!("{:?}", tx.version()),
+        })
+    }
+
+    pub async fn broadcast(&mut self, tx_hex: &str) -> Result<Sent, Error> {
+        let raw = hex::decode(tx_hex.trim()).map_err(|e| Error::Hex(e.to_string()))?;
+        let resp = lwd::send(&mut self.client, raw).await?;
+        if resp.error_code != 0 {
+            return Err(Error::Rejected(resp.error_code, resp.error_message));
+        }
+        // lightwalletd's success reply carries the node's txid in errorMessage.
+        Ok(Sent {
+            // lightwalletd returns the node's raw JSON result, the quoted txid.
+            txid: resp.error_message.trim().trim_matches('"').to_owned(),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------- wire types
+
+#[derive(Debug, Serialize)]
+pub struct KeyInfo {
+    pub address: String,
+    pub fvk: String,
+    pub birthday: u32,
+    pub network: String,
+}
+
+#[allow(non_snake_case)]
+#[derive(Debug, Default, Serialize)]
+pub struct Balance {
+    pub spendableZat: u64,
+    pub pendingChangeZat: u64,
+    pub pendingIncomingZat: u64,
+    pub totalZat: u64,
+}
+
+#[allow(non_snake_case)]
+#[derive(Debug, Default, Serialize)]
+pub struct Mempool {
+    pub txCount: u32,
+    pub incomingZat: u64,
+    pub incomingTxids: Vec<String>,
+    pub spendingTxids: Vec<String>,
+}
+
+#[allow(non_snake_case)]
+#[derive(Debug, Serialize)]
+pub struct Status {
+    pub network: String,
+    pub lwd: String,
+    pub lwdHeight: u32,
+    pub lwdLatestHeight: u32,
+    pub lwdChainName: String,
+    pub lwdBranchId: String,
+    pub branchIdNextBlock: String,
+    pub height: Option<u32>,
+    pub scannedHeight: Option<u32>,
+    pub synced: bool,
+    pub hasKey: bool,
+    pub address: Option<String>,
+    pub minConfirmations: u32,
+    pub balance: Balance,
+    pub mempool: Mempool,
+}
+
+#[allow(non_snake_case)]
+#[derive(Debug, Serialize)]
+pub struct NoteInfo {
+    pub txid: String,
+    pub outputIndex: u32,
+    pub valueZat: u64,
+    pub minedHeight: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildRequest {
+    pub to: String,
+    pub amount_zat: u64,
+    #[serde(default)]
+    pub memo_hex: Option<String>,
+    #[serde(default)]
+    pub memo: Option<String>,
+    #[serde(default, rename = "fee")]
+    pub fee_zat: Option<u64>,
+    #[serde(default)]
+    pub min_confirmations: Option<u32>,
+}
+
+#[allow(non_snake_case)]
+#[derive(Debug, Serialize)]
+pub struct Built {
+    pub txid: String,
+    pub txHex: String,
+    pub feeZat: Option<u64>,
+    pub targetHeight: u32,
+    pub expiryHeight: u32,
+    pub branchId: String,
+    pub branchIdSource: String,
+    pub version: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Sent {
+    pub txid: String,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("wallet db: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+    #[error("wallet db: {0}")]
+    Wallet(#[from] zcash_client_sqlite::error::SqliteClientError),
+    #[error("wallet init: {0}")]
+    Init(String),
+    #[error("block cache: {0}")]
+    Cache(String),
+    #[error(transparent)]
+    Lwd(#[from] lwd::Error),
+    #[error(transparent)]
+    Key(#[from] keys::KeyError),
+    #[error("no spending key registered (import_key first)")]
+    NoKey,
+    #[error("this wallet already holds a different key; use another --data directory")]
+    KeyExists,
+    #[error("bad birthday: {0}")]
+    Birthday(String),
+    #[error("lightwalletd misbehaved: {0}")]
+    Server(String),
+    #[error("no --params directory configured for the Sapling proving parameters")]
+    NoProvingParams,
+    #[error("sapling-spend.params / sapling-output.params not found in {0}")]
+    ProvingParamsMissing(PathBuf),
+    #[error("bad address {0}")]
+    Address(String),
+    #[error("bad amount {0}")]
+    Amount(u64),
+    #[error("bad memo: {0}")]
+    Memo(String),
+    #[error("bad hex: {0}")]
+    Hex(String),
+    #[error("wallet has not synced yet")]
+    NotSynced,
+    #[error("cannot propose: {0}")]
+    Propose(String),
+    #[error("cannot create: {0}")]
+    Create(String),
+    #[error("lightwalletd rejected the transaction ({0}): {1}")]
+    Rejected(i32, String),
+    #[error("scan: {0}")]
+    Scan(String),
+}
+
+impl
+    From<
+        zcash_client_backend::data_api::chain::error::Error<
+            zcash_client_sqlite::error::SqliteClientError,
+            zcash_client_sqlite::FsBlockDbError,
+        >,
+    > for Error
+{
+    fn from(
+        e: zcash_client_backend::data_api::chain::error::Error<
+            zcash_client_sqlite::error::SqliteClientError,
+            zcash_client_sqlite::FsBlockDbError,
+        >,
+    ) -> Self {
+        Error::Scan(e.to_string())
+    }
+}

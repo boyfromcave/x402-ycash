@@ -1,0 +1,74 @@
+[package]
+name = "x402-ycash-light"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+description = "A Sapling light client for x402 agents on Ycash: sync from lightwalletd, build and sign shielded payments offline"
+license = "MIT"
+
+[[bin]]
+name = "x402-light"
+path = "src/main.rs"
+
+[dependencies]
+# librustzcash, Ycash-aware fork (boyfromcave/librustzcash6 = miodragpop/librustzcash @ ec525fae,
+# the revision ycashd 6.21.0 pins). Path dependencies for now; see README "Pinning".
+zcash_client_backend = { version = "0.22", path = "../../../librustzcash6/zcash_client_backend", features = ["lightwalletd-tonic", "unstable", "non-standard-fees"] }
+zcash_client_sqlite = { version = "0.20", path = "../../../librustzcash6/zcash_client_sqlite", features = ["unstable"] }
+zcash_keys = { version = "0.14", path = "../../../librustzcash6/zcash_keys", features = ["sapling", "unstable"] }
+zcash_primitives = { version = "0.28", path = "../../../librustzcash6/zcash_primitives", features = ["non-standard-fees"] }
+zcash_proofs = { version = "0.28", path = "../../../librustzcash6/zcash_proofs", features = ["local-prover", "multicore"] }
+zcash_protocol = { version = "0.9", path = "../../../librustzcash6/components/zcash_protocol", features = ["local-consensus"] }
+zcash_address = { version = "0.12", path = "../../../librustzcash6/components/zcash_address" }
+zip321 = { version = "0.8", path = "../../../librustzcash6/components/zip321" }
+sapling = { package = "sapling-crypto", version = "0.7", default-features = false, features = ["std"] }
+zip32 = "0.2"
+bip0039 = "0.12"
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
+tonic = { version = "0.14", default-features = false, features = ["transport", "codegen", "tls-ring", "tls-native-roots"] }
+tonic-prost = "0.14"
+prost = "0.14"
+futures-util = "0.3"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+rusqlite = { version = "0.37", features = ["bundled"] }
+rand = "0.8"
+secrecy = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+clap = { version = "4", features = ["derive", "env"] }
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+nonempty = "0.11"
+
+# Mirror of ref/ycash6/Cargo.toml:122-133 so every transitive zcash_* crate resolves to the same
+# Ycash-aware source as ycashd 6.21.0 (one revision, one set of branch ids and HRPs).
+[build-dependencies]
+tonic-prost-build = "0.14"
+
+[patch.crates-io]
+zcash_protocol = { path = "../../../librustzcash6/components/zcash_protocol" }
+zcash_primitives = { path = "../../../librustzcash6/zcash_primitives" }
+f4jumble = { path = "../../../librustzcash6/components/f4jumble" }
+zcash_address = { path = "../../../librustzcash6/components/zcash_address" }
+zcash_encoding = { path = "../../../librustzcash6/components/zcash_encoding" }
+zcash_transparent = { path = "../../../librustzcash6/zcash_transparent" }
+# Not in ycashd's list (it does not use them) but needed here so the path crates above see one copy:
+zcash_client_backend = { path = "../../../librustzcash6/zcash_client_backend" }
+zcash_keys = { path = "../../../librustzcash6/zcash_keys" }
+zip321 = { path = "../../../librustzcash6/components/zip321" }
+zcash_proofs = { path = "../../../librustzcash6/zcash_proofs" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# Proving in an unoptimised build takes minutes; keep dependencies optimised even for `cargo test`.
+[profile.dev.package."*"]
+opt-level = 3
