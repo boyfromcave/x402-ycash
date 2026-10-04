@@ -153,7 +153,7 @@ sequenceDiagram
     Note over Client: 3. Send amount to payTo with the memo<br/>(z_sendmany, YecWallet, any Sapling wallet)
     Client->>Server: 4. GET /api, PAYMENT-SIGNATURE {txid}
     Server->>Wallet: 5. z_listreceivedbyaddress(payTo, minconf)
-    Note over Server: amount, memo, depth; claim ycash:<net>:<txid> atomically
+    Note over Server: amount, memo, depth; claim ycash:<net>:<txid>@<payTo> atomically
     Server->>Client: 6. 200 + resource, PAYMENT-RESPONSE (+ signed receipt)
 ```
 
@@ -563,14 +563,14 @@ It then presents the txid. It MAY pay from a transparent source (tier P0) or a s
    bytes of `extra.memo` (`invalid_exact_ycash_memo_mismatch`).
 6. **Amount.** The sum of the kept notes' `amountZat` is ≥ `amount`
    (`invalid_exact_ycash_underpaid`).
-7. **Depth.** Every kept note's `confirmations` meets the policy (−1 and 0 accept mempool notes,
-   which `minconf` 0 includes). Below it: return `settlement_pending` with the txid, holding no
+7. **Depth.** Every kept note's `confirmations` meets the policy (−1 accepts mempool notes, which
+   `minconf` 0 includes; 0 and above need the note in a block). Below it: return `settlement_pending` with the txid, holding no
    claim.
 8. **Window.** The server still holds the request record. It holds every record at least until
    `expiresAt` plus the time the policy depth takes (about 75 seconds per confirmation), so a
    payment sent within the window can always settle; a payment presented after its record is gone
    is an unclaimed payment (see the failure disposition below).
-9. **Claim** the consumption key `ycash:<net>:<txid>` (for example `ycash:mainnet:5be1…a9b1`)
+9. **Claim** the consumption key `ycash:<net>:<txid>@<payTo>` (for example `ycash:mainnet:5be1…a9b1@ys1…`). Because `payTo` is issued for exactly one request, one transaction that pays several requests (several outputs) settles each of them once, and a proof never binds to more than one request
    atomically in a restart-durable store. If it exists, return `duplicate_settlement`. The
    resource runs only after the claim succeeds.
 
@@ -584,7 +584,7 @@ and the response carries a signed receipt (below).
 |---|---|
 | **Instrument and proof** | The instrument is the per-request Sapling address in `payTo`, with its validity window in `maxTimeoutSeconds` and `extra.expiresAt`, and the memo in `extra.memo`. The proof is the txid in `payload.txid`. The proof is **not self-verifying**: the merchant's wallet decrypts the note (no one else can), which is inherent to a shielded payment. |
 | **Request binding** | Two bindings: an **instrument unique to the request** (the address is issued once), and a **payee commitment** (the memo commits to the requirements and a server nonce). A txid that paid another address or carries another memo settles nothing here. |
-| **Single-use claim** | Atomic insert of `ycash:<network-suffix>:<txid>` (that is, the CAIP-2 id joined to the txid) into a durable store before the resource runs; of two concurrent presentations exactly one succeeds. |
+| **Single-use claim** | Atomic insert of `ycash:<network-suffix>:<txid>@<payTo>` (the CAIP-2 id joined to the txid and the request's issued address) into a durable store before the resource runs; of two concurrent presentations exactly one succeeds. |
 | **Retention bound** | The key is kept as long as the address is held by the merchant's wallet, which is forever: an address is never reissued and the wallet keeps its notes. A merchant that prunes request records keeps the consumption key regardless. |
 | **Amount acceptance** | **Underpayment** is rejected and the funds stay at the merchant's address; any return is manual and out of band. **Overpayment** is accepted and kept; nothing is returned. Both are declared here so a client sends exactly `amount`. |
 | **Finality** | The event is the note's depth in the merchant's node, per `confirmationPolicy`, owned by the server. Below it, settle returns `settlement_pending` naming the depth and holds no claim; an attempt that ends abnormally holds no claim either, since the claim is the last step. |
@@ -656,8 +656,9 @@ XRPL rule), not recommended.
    (a rejection by `sendrawtransaction`). A timeout, a transport failure or an unknown result
    keeps it; the facilitator then reconciles by txid.
 
-`sapling-proof` uses the same key form as its consumption key, in a restart-durable store, kept
-for the retention bound above.
+`sapling-proof` extends the key with the issued address, `ycash:<network-suffix>:<txid>@<payTo>`,
+in a restart-durable store kept for the retention bound above, so one transaction paying several
+requests settles each once.
 
 ## Error Codes
 

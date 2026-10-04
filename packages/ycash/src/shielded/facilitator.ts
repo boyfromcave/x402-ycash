@@ -6,6 +6,14 @@ import type { PaymentPayload, PaymentRequirements, SettleResponse, VerifyRespons
 import { ASSET_YEC, YCASH_NETWORKS, type YcashNetwork } from "../constants.js";
 import { yecToZat, type BlockchainInfo, type ZReceived } from "../node/index.js";
 import { RETAIN_FOREVER, consumptionKey, type SettlementStore } from "../store/index.js";
+
+/**
+ * The consumption key is per (txid, payTo): payTo is a diversified address issued for exactly one
+ * request, so one transaction paying two requests buys both, and a proof still binds to one request.
+ */
+export function paymentKey(network: Parameters<typeof consumptionKey>[0], txid: string, payTo: string): string {
+  return consumptionKey(network, `${txid}@${payTo}`);
+}
 import {
   ASSET_TRANSFER_METHOD_SAPLING_PROOF,
   CHAIN_OF,
@@ -78,7 +86,7 @@ export class ShieldedExactFacilitator {
   async verify(payload: PaymentPayload, requirements: PaymentRequirements): Promise<VerifyResponse> {
     const r = await this.check(payload, requirements);
     if (!r.ok) return { isValid: false, invalidReason: r.reason, invalidMessage: r.message };
-    if (await this.config.store.isClaimed(consumptionKey(r.value.network, r.value.txid))) {
+    if (await this.config.store.isClaimed(paymentKey(r.value.network, r.value.txid, requirements.payTo))) {
       return { isValid: false, invalidReason: ERR.duplicateSettlement, invalidMessage: `${r.value.txid} was already settled` };
     }
     return { isValid: true, extra: statusExtra(r.value.observed, r.value.receivedZat) };
@@ -93,7 +101,7 @@ export class ShieldedExactFacilitator {
       return res;
     }
     // Step 9: the claim, atomically, last. Of two concurrent presentations exactly one gets here.
-    const key = consumptionKey(r.value.network, r.value.txid);
+    const key = paymentKey(r.value.network, r.value.txid, requirements.payTo);
     if (!(await this.config.store.claim(key, RETAIN_FOREVER))) {
       return { success: false, errorReason: ERR.duplicateSettlement, errorMessage: `${r.value.txid} was already settled`, transaction: r.value.txid, network };
     }

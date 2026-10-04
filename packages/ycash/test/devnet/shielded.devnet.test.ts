@@ -173,7 +173,7 @@ describeDevnet("sapling-proof (X4a) on the devnet", () => {
     expect(elsewhere).toMatchObject({ success: false, errorReason: ERR.notReceived });
   });
 
-  it("one txid paying two requests settles one of them (the consumption key is the txid)", async () => {
+  it("one txid paying two requests settles both (the consumption key is txid@payTo)", async () => {
     const a = await issue(1);
     const b = await issue(1);
     const tx = await rawPay([
@@ -185,6 +185,7 @@ describeDevnet("sapling-proof (X4a) on the devnet", () => {
     const rb = await settleSeen(b, tx);
     record(d.line, "X4a-two-requests-one-tx", { ra: ra.success, rb });
     expect(ra.success).toBe(true);
-    expect(rb).toMatchObject({ success: false, errorReason: ERR.duplicateSettlement });
+    expect(rb.success).toBe(true);
+    expect(await settleSeen(a, tx)).toMatchObject({ success: false, errorReason: ERR.duplicateSettlement });
   });
 });
