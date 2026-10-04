@@ -447,12 +447,25 @@ The split, the floor and their vectors are in the SDK's `yed` module
 transaction, every voucher (and so the close), the client's `close` and the refund each carry a
 TRANSFER payload. The refund assigns all of D to its client output.
 
-**Verification adds,** for every voucher, after completing it with sigS:
+**Verification adds,** for every voucher:
 
 - `yed_decodepayload(tx)` returns a `transfer` whose assignments are exactly the split above, at
   `opReturnIndex` 2;
-- `yed_validaterawtransaction(tx)` reports `valid` true, `type` `"transfer"`, `verdict` `"OK"`,
-  `burned` 0, `yedIn` = D, `yedOut` = D and `unconfirmedInputs` empty.
+- `yed_validaterawtransaction(tx)` reports `type` `"transfer"`, `verdict` `"ok"` (the node's
+  verdicts are lowercase: `"ok"`, `"burned"`, …), `burned` 0, `yedIn` = D, `yedOut` = D and
+  `unconfirmedInputs` empty;
+- `valid` is the node's script result (`VerifyAllInputs`), so it is `true` only for a completed
+  voucher: the server, which holds sigS, checks it on the completed voucher, and a stateless
+  facilitator checks everything except `valid` on a client-signed `voucher` and everything on a
+  `claim`.
+
+Because the TRANSFER is part of the fixed layout and the split is deterministic, a voucher that
+passes the shape check cannot burn; the overlay check catches a channel whose `yedIn` ≠ D (a
+funding that burned or was never recorded).
+
+**Client `close` for YED:** its cumulative is max($1.00, charged), not the charged total, because
+of the dollar floor. The server closes when the next voucher would leave the client a remainder
+strictly between $0 and $1.00; a remainder of exactly 0 is allowed.
 
 `amount` and `cumulative` are in cents; `closeFee` and V are in zatoshis.
 
