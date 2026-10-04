@@ -12,18 +12,22 @@ import {
   SAPLING_HRP,
   SCHEME_EXACT,
 } from "./constants.js";
-import { currentPrice, quoteZat, type PriceRpc } from "./price.js";
+import { NodeWalletIssuer, type AddressIssuer, type NodeWalletIssuerRpc } from "./issuer.js";
+import { currentPrice, quoteZat, type PriceRpc, type PriceQuote } from "./price.js";
 import { InMemoryIssuedAddressRegistry, recordRetainUntil, type IssuedAddressRegistry, type IssuedRequest } from "./registry.js";
 import { memoForRecord, type RequestRecord } from "./request.js";
 
 /** The merchant wallet calls the server makes. `YcashRpc` satisfies it. */
-export interface ShieldedServerRpc extends PriceRpc {
-  zGetNewAddress(): Promise<string>;
-  zGetNewDiversifiedAddress(base: string): Promise<string>;
-}
+export interface ShieldedServerRpc extends PriceRpc, NodeWalletIssuerRpc {}
 
 export interface ShieldedExactServerConfig {
-  rpc: ShieldedServerRpc;
+  /**
+   * The merchant's node: the default issuer's wallet, and the `yed_getprice` source of `priceUsd`
+   * quotes. Optional with an `issuer` that needs no node (an OfflineAddressIssuer).
+   */
+  rpc?: ShieldedServerRpc;
+  /** Where addresses come from. Default: a NodeWalletIssuer on `rpc` and `baseAddress`. */
+  issuer?: AddressIssuer;
   /** Shared with the facilitator. Default: in memory (a restart forgets open requests). */
   registry?: IssuedAddressRegistry;
   /**
@@ -54,27 +58,27 @@ export const EXTRA_PRICE_USD = "priceUsd";
 
 export class ShieldedExactServer {
   readonly registry: IssuedAddressRegistry;
-  private readonly rpc: ShieldedServerRpc;
+  readonly issuer: AddressIssuer;
   private readonly config: ShieldedExactServerConfig;
-  private basePromise: Promise<string> | undefined;
 
   constructor(config: ShieldedExactServerConfig) {
     this.config = config;
-    this.rpc = config.rpc;
     this.registry = config.registry ?? new InMemoryIssuedAddressRegistry();
-    if (config.baseAddress) this.basePromise = Promise.resolve(config.baseAddress);
+    if (config.issuer) this.issuer = config.issuer;
+    else if (config.rpc) this.issuer = new NodeWalletIssuer(config.rpc, config.baseAddress);
+    else throw new Error("a sapling-proof server needs an address issuer, or the merchant wallet's rpc");
   }
 
   private now(): number {
     return this.config.now ? this.config.now() : Math.floor(Date.now() / 1000);
   }
 
-  private baseAddress(): Promise<string> {
-    this.basePromise ??= this.rpc.zGetNewAddress().catch((e: unknown) => {
-      this.basePromise = undefined;
-      throw e;
-    });
-    return this.basePromise;
+  /** The quote from the node's `yed_getprice`, or the configured fallback when there is no node. */
+  private quote(): Promise<PriceQuote> {
+    const fallback = this.config.fallbackPriceMicroUsd;
+    if (this.config.rpc) return currentPrice(this.config.rpc, fallback);
+    if (fallback !== undefined) return Promise.resolve({ priceMicroUsd: fallback, source: "configured" });
+    return Promise.reject(new Error("no YEC price: no merchant node and no fallback price is configured"));
   }
 
   /**
@@ -107,7 +111,7 @@ export class ShieldedExactServer {
     let amount = requirements.amount;
     if (typeof extra[EXTRA_PRICE_USD] === "string") {
       const usd = extra[EXTRA_PRICE_USD] as string;
-      const quote = await currentPrice(this.rpc, this.config.fallbackPriceMicroUsd);
+      const quote = await this.quote();
       amount = quoteZat(usd, quote.priceMicroUsd).toString();
       delete extra[EXTRA_PRICE_USD];
       extra.quote = { usd, priceMicroUsd: quote.priceMicroUsd, source: quote.source, ...(quote.height === undefined ? {} : { height: quote.height }) };
@@ -159,19 +163,17 @@ export class ShieldedExactServer {
 
   /**
    * A diversified address never issued before, of the network's Sapling HRP (which also catches a
-   * merchant node on another chain). `z_getnewdiversifiedaddress` advances the diversifier index, so a
-   * repeat would be a wallet fault; it is refused, not reused.
+   * merchant node on another chain). Both issuers advance the diversifier index, so a repeat would
+   * be an issuer fault; it is refused, not reused.
    */
   private async freshAddress(network: YcashNetwork): Promise<string> {
-    const base = await this.baseAddress();
     const hrp = SAPLING_HRP[network] + "1";
-    if (!base.startsWith(hrp)) throw new Error(`base address ${base} is not a ${network} Sapling address`);
     for (let i = 0; i < 3; i++) {
-      const addr = await this.rpc.zGetNewDiversifiedAddress(base);
+      const addr = await this.issuer.issue(network);
       if (!addr.startsWith(hrp)) throw new Error(`diversified address ${addr} is not a ${network} Sapling address`);
       if (!(await this.registry.wasIssued(addr))) return addr;
     }
-    throw new Error("the wallet keeps returning addresses already issued");
+    throw new Error(`the ${this.issuer.kind} issuer keeps returning addresses already issued`);
   }
 }
 
