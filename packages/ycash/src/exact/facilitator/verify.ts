@@ -49,8 +49,9 @@ export interface VerifyLimits {
   maxInputs: number;
   /** Rule 7's sanity cap, zatoshis (RECOMMENDED 100,000). */
   feeCapZat: bigint;
-  /** −1 needs the operator's opt-in (Confirmation policy). */
-  acceptMempool: boolean;
+  /** The settled confirmation range; −1 needs the operator's opt-in (Confirmation policy). */
+  minConfirmations: number;
+  maxConfirmations: number;
   /** Policy assumed when the requirements carry none: the server normally sets it explicitly. */
   defaultConfirmations: number;
 }
@@ -101,7 +102,9 @@ export function resolvePayment(payload: PaymentPayload, req: PaymentRequirements
   const network = req.network as YcashNetwork;
   const policy = resolveConfirmationPolicy(req.extra, limits.defaultConfirmations);
   if (!policy) return fail(ERR_REQUIREMENTS_MISMATCH, "confirmationPolicy must be {confirmations} with an integer in [-1, 20]");
-  if (policy.confirmations < 0 && !limits.acceptMempool) return fail(ERR_REQUIREMENTS_MISMATCH, "this facilitator does not settle on mempool acceptance (-1)");
+  if (policy.confirmations < limits.minConfirmations || policy.confirmations > limits.maxConfirmations) {
+    return fail(ERR_REQUIREMENTS_MISMATCH, `this facilitator settles confirmations ${limits.minConfirmations}..${limits.maxConfirmations}, not ${policy.confirmations}`);
+  }
 
   // Rule 3: decoding.
   const hex = (payload.payload as Partial<ExactYcashTransparentPayload>).transaction;

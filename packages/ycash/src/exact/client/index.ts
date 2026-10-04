@@ -1,4 +1,4 @@
-export { ExactYcashScheme } from "./scheme.js";
+export { ExactYcashScheme, findYcashDefaultAsset, yecSpendControl } from "./scheme.js";
 export { LocalKeySigner } from "./localKeySigner.js";
 export { RpcWalletSigner, type RpcWalletSignerOptions, type RpcWalletSignerRpc } from "./rpcWalletSigner.js";
 export { RpcUtxoSource, type RpcUtxoSourceOptions, type UtxoSource, type UtxoSourceRpc } from "./utxoSource.js";

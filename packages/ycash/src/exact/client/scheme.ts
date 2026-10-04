@@ -1,14 +1,29 @@
 // The exact client for Ycash: builds the `transparent` YEC payment (specs/scheme_exact_ycash.md,
 // "Transaction Construction"), signed but never broadcast, as Cardano's client does.
-import type { PaymentPayloadContext, PaymentPayloadResult, PaymentRequirements, SchemeNetworkClient } from "@x402/core/types";
-import type { YcashNetwork } from "../../constants.js";
+import type { DefaultAsset, PaymentPayloadContext, PaymentPayloadResult, PaymentRequirements, SchemeNetworkClient } from "@x402/core/types";
+import { ASSET_YEC, ASSET_YED, type YcashNetwork } from "../../constants.js";
 import { addressToScript, equalBytes, parseTx } from "../../tx/index.js";
-import { chainOfNetwork, checkTransparentMethod, checkTransparentYecRequirements, clientExpiryHeight, resolveConfirmationPolicy } from "../policy.js";
+import { chainOfNetwork, isYcashNetwork, checkTransparentMethod, checkTransparentYecRequirements, clientExpiryHeight, resolveConfirmationPolicy } from "../policy.js";
 import { SCHEME_EXACT, type ExactYcashTransparentPayload } from "../types.js";
 import type { YcashClientSigner } from "./signer.js";
 
+/**
+ * YED is a dollar (cents, 2 decimals), so core's USD spend cap applies to it as to any default
+ * asset. YEC is not USD-pegged: reporting it here would make the "$1" cap mean 1 YEC, so YEC
+ * needs an `allowedAssets` entry with an atomic cap (see `yecSpendControl`).
+ */
+export function findYcashDefaultAsset(asset: string, network: string): DefaultAsset | undefined {
+  return asset === ASSET_YED && isYcashNetwork(network) ? { asset: ASSET_YED, decimals: 2, symbol: ASSET_YED } : undefined;
+}
+
+/** The `spendControls.allowedAssets` entry an agent sets to pay YEC, capped at `maxZat` per payment. */
+export function yecSpendControl(network: YcashNetwork, maxZat: bigint): { network: YcashNetwork; asset: string; maxAmountPerPayment: string } {
+  return { network, asset: ASSET_YEC, maxAmountPerPayment: maxZat.toString() };
+}
+
 export class ExactYcashScheme implements SchemeNetworkClient {
   readonly scheme = SCHEME_EXACT;
+  readonly findDefaultAsset = findYcashDefaultAsset;
 
   constructor(private readonly signer: YcashClientSigner) {}
 

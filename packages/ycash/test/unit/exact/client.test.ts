@@ -234,3 +234,11 @@ describe("RpcUtxoSource", () => {
     expect(await new exact.RpcUtxoSource(rpc).listCoins(payer.address)).toHaveLength(1);
   });
 });
+
+describe("spend controls", () => {
+  it("YED is a USD default asset; YEC needs an allowedAssets entry", () => {
+    expect(exact.findYcashDefaultAsset("YED", NETWORK)).toEqual({ asset: "YED", decimals: 2, symbol: "YED" });
+    expect(exact.findYcashDefaultAsset("YEC", NETWORK)).toBeUndefined();
+    expect(exact.yecSpendControl(NETWORK, 500_000n)).toEqual({ network: NETWORK, asset: "YEC", maxAmountPerPayment: "500000" });
+  });
+});

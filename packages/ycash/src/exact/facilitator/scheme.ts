@@ -30,8 +30,14 @@ import { resolvePayment, verifyTransparent, type ExactFacilitatorRpc, type Resol
 export interface ExactYcashFacilitatorConfig {
   /** Shared by every process serving /settle (Duplicate Settlement Mitigation). Default: in-process. */
   settlementStore?: SettlementStore;
-  /** Settle on mempool acceptance when the policy is −1 (the spec lets an operator refuse). Default true. */
+  /**
+   * The confirmation range this facilitator settles, advertised in `/supported`; a policy outside
+   * it is refused. Default −1..20. A minimum of 0 is the operator refusing mempool settlement.
+   */
+  confirmations?: { minimum: number; maximum: number };
+  /** Shorthand for `confirmations.minimum` −1 (true) or 0 (false). */
   acceptMempool?: boolean;
+  logger?: ExactLogger;
   /** How long one settle waits for the policy depth before `settlement_pending`. Default 75 s, never more than maxTimeoutSeconds. */
   confirmationTimeoutMs?: number;
   confirmationPollMs?: number;
@@ -43,6 +49,20 @@ export interface ExactYcashFacilitatorConfig {
   defaultConfirmations?: number;
   /** The `sapling-proof` method (plan X4a), implemented in src/shielded. */
   shielded?: ShieldedExactHandler;
+}
+
+/** The facilitator service's logger shape (packages/facilitator/src/logger.ts). */
+export interface ExactLogger {
+  info(msg: string, fields?: Record<string, unknown>): void;
+  warn(msg: string, fields?: Record<string, unknown>): void;
+}
+
+/** What the facilitator service hands each mechanism (packages/facilitator/src/schemes.ts SchemeDeps). */
+export interface ExactYcashFacilitatorDeps extends Omit<ExactYcashFacilitatorConfig, "acceptMempool"> {
+  rpc: ExactFacilitatorRpc;
+  network?: string;
+  /** Unused by YEC-only exact; YED (plan X3) will need `yellowback`. */
+  capabilities?: { yellowback: boolean };
 }
 
 /** One settle call must finish inside core's 90 s facilitator timeout; core retries once on pending. */
@@ -61,19 +81,28 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
   private readonly confirmationTimeoutMs: number;
   private readonly confirmationPollMs: number;
   private readonly shielded: ShieldedExactHandler | undefined;
+  private readonly rpc: ExactFacilitatorRpc;
+  private readonly logger: ExactLogger | undefined;
 
-  constructor(
-    private readonly rpc: ExactFacilitatorRpc,
-    config: ExactYcashFacilitatorConfig = {},
-  ) {
+  /** `new ExactYcashFacilitatorScheme(rpc, config)`, or the service's `new ExactYcashFacilitatorScheme(deps)`. */
+  constructor(rpcOrDeps: ExactFacilitatorRpc | ExactYcashFacilitatorDeps, config: ExactYcashFacilitatorConfig = {}) {
+    if ("rpc" in rpcOrDeps) {
+      this.rpc = rpcOrDeps.rpc;
+      config = { ...rpcOrDeps, ...config };
+    } else {
+      this.rpc = rpcOrDeps;
+    }
     this.store = config.settlementStore ?? new InMemorySettlementStore();
+    const range = config.confirmations ?? { minimum: config.acceptMempool === false ? 0 : MIN_CONFIRMATIONS, maximum: MAX_CONFIRMATIONS };
     this.limits = {
       maxTransactionBytes: config.maxTransactionBytes ?? 100_000,
       maxInputs: config.maxInputs ?? 50,
       feeCapZat: config.feeCapZat ?? 100_000n,
-      acceptMempool: config.acceptMempool ?? true,
+      minConfirmations: Math.max(MIN_CONFIRMATIONS, range.minimum),
+      maxConfirmations: Math.min(MAX_CONFIRMATIONS, range.maximum),
       defaultConfirmations: config.defaultConfirmations ?? 1,
     };
+    this.logger = config.logger;
     this.confirmationTimeoutMs = config.confirmationTimeoutMs ?? DEFAULT_CONFIRMATION_TIMEOUT_MS;
     this.confirmationPollMs = config.confirmationPollMs ?? DEFAULT_CONFIRMATION_POLL_MS;
     this.shielded = config.shielded;
@@ -86,7 +115,7 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
       assets: ["YEC"],
       assetTransferMethods: this.shielded ? [ATM_TRANSPARENT, ATM_SAPLING_PROOF] : [ATM_TRANSPARENT],
       areFeesSponsored: false,
-      confirmations: { minimum: this.limits.acceptMempool ? MIN_CONFIRMATIONS : 0, maximum: MAX_CONFIRMATIONS },
+      confirmations: { minimum: this.limits.minConfirmations, maximum: this.limits.maxConfirmations },
     };
   }
 
@@ -137,12 +166,14 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
       await this.store.prune(await this.rpc.getBlockCount()); // drops claims past expiry + 10 blocks
 
       const rejected = await this.submit(s);
+      this.logger?.info("exact settle broadcast", { txid: s.txid, rejected: rejected?.reason });
       if (rejected) {
         await this.store.release(s.key); // the node answered and did not accept it
         return failure(rejected.reason, network, s.txid, rejected.message, v.state.payer);
       }
       return this.observe(s, requirements, v.state.payer);
     } catch (e) {
+      this.logger?.warn("exact settle failed", { txid: s.txid, error: (e as Error).message });
       return failure(ERR_SETTLEMENT_FAILED, network, s.txid, (e as Error).message);
     }
   }

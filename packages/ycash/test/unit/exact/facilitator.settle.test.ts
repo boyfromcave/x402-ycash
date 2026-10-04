@@ -195,3 +195,20 @@ describe("sapling-proof dispatch (plan X4a hook)", () => {
     expect((await facilitator.verify({ x402Version: 2, accepted: req, payload: {} }, req)).invalidReason).toBe(exact.ERR_PAYMENT_FLOW);
   });
 });
+
+describe("the facilitator service's deps (packages/facilitator SchemeDeps)", () => {
+  it("takes {rpc, settlementStore, confirmations, capabilities, logger} and honours the range", async () => {
+    const logs: string[] = [];
+    const f = new exact.ExactYcashFacilitatorScheme({
+      network: NETWORK, rpc: node, settlementStore: store, confirmations: { minimum: 0, maximum: 6 }, capabilities: { yellowback: false },
+      logger: { info: (m) => logs.push(m), warn: (m) => logs.push(m) }, confirmationTimeoutMs: 30, confirmationPollMs: 10,
+    });
+    expect(f.getExtra(NETWORK)?.confirmations).toEqual({ minimum: 0, maximum: 6 });
+    const { hex } = standardPayment(node, payer, merchant.address);
+    expect((await f.verify(paymentPayload(policy(-1), hex), policy(-1))).invalidReason).toBe(exact.ERR_REQUIREMENTS_MISMATCH);
+    expect((await f.verify(paymentPayload(policy(7), hex), policy(7))).invalidReason).toBe(exact.ERR_REQUIREMENTS_MISMATCH);
+    expect((await f.settle(paymentPayload(policy(0), hex), policy(0))).errorReason).toBe(exact.ERR_SETTLEMENT_PENDING);
+    expect(await store.isClaimed(txidKey(NETWORK, txid(hex)))).toBe(true);
+    expect(logs).toContain("exact settle broadcast");
+  });
+});
