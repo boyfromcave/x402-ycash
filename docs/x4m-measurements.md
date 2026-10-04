@@ -372,7 +372,7 @@ The public server streamed at about 14 MB/s.
 137 MB. Filling the unmeasured 1.70 M blocks at 90–170 B each, plus 535,314 outputs × 122 B, gives
 **0.36–0.49 GB in total**. That is about 30 s of download at the observed rate.
 
-**Trial decryption and tree upkeep** (quiet machine, best of 5, real mainnet compact outputs):
+**Trial decryption and tree upkeep** (best of 5, on real mainnet compact outputs, with none of this run's devnets up; another chunk's idle devnet was running on the same machine):
 
 | Dump | Outputs | 1 core, per output | batched API, 1 core | 10 threads, per output | `CommitmentTree` append, per output |
 |---|---|---|---|---|---|
