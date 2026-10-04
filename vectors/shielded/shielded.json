@@ -1,0 +1,85 @@
+{
+  "description": "sapling-proof (plan X4a): the request record's JCS and SHA-256 request hash, the memo and its z_sendmany hex; JCS edge cases (UTF-16 member order, escapes); ES256K offer-and-receipt JWS (did:jwk kid, JCS payloads, r||s low-S, RFC 6979) for a fixed key. Offline, deterministic.",
+  "request": {
+    "record": {
+      "v": 1,
+      "network": "ycash:regtest",
+      "asset": "YEC",
+      "amount": "1500000",
+      "payTo": "yregtestsapling1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+      "resource": "https://merchant.example/x402/report?q=café",
+      "expiresAt": 1791000000,
+      "nonce": "abababababababababababababababababababababababababababababababab"
+    },
+    "jcs": "{\"amount\":\"1500000\",\"asset\":\"YEC\",\"expiresAt\":1791000000,\"network\":\"ycash:regtest\",\"nonce\":\"abababababababababababababababababababababababababababababababab\",\"payTo\":\"yregtestsapling1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq\",\"resource\":\"https://merchant.example/x402/report?q=café\",\"v\":1}",
+    "requestHash": "8a5bec4c6484d2a3ce03b2dc8cb3b5fd0d42a3c16d8468f17f78d870a74112d9",
+    "memo": "x402:8a5bec4c6484d2a3ce03b2dc8cb3b5fd0d42a3c16d8468f17f78d870a74112d9",
+    "memoHex": "783430323a38613562656334633634383464326133636530336232646338636233623566643064343261336331366438343638663137663738643837306137343131326439"
+  },
+  "jcs": [
+    {
+      "value": {
+        "b": 1,
+        "a": [
+          true,
+          false,
+          null
+        ],
+        "é": "x",
+        "😀": 2,
+        "€": 3
+      },
+      "jcs": "{\"a\":[true,false,null],\"b\":1,\"é\":\"x\",\"€\":3,\"😀\":2}"
+    },
+    {
+      "value": {
+        "s": "quote\" back\\ ctl\u0001\u001f tab\t nl\n cr\r ff\f bs\b del   é 😀"
+      },
+      "jcs": "{\"s\":\"quote\\\" back\\\\ ctl\\u0001\\u001f tab\\t nl\\n cr\\r ff\\f bs\\b del   é 😀\"}"
+    },
+    {
+      "value": [
+        0,
+        -1,
+        9007199254740991,
+        "",
+        {}
+      ],
+      "jcs": "[0,-1,9007199254740991,\"\",{}]"
+    }
+  ],
+  "receiptKey": {
+    "priv": "4444444444444444444444444444444444444444444444444444444444444444",
+    "pubCompressed": "032c0b7cf95324a07d05398b240174dc0c2be444d96b159aa6c7f7b1e668680991",
+    "kid": "did:jwk:eyJjcnYiOiJzZWNwMjU2azEiLCJrdHkiOiJFQyIsIngiOiJMQXQ4LVZNa29IMEZPWXNrQVhUY0RDdmtSTmxyRlpxbXhfZXg1bWhvQ1pFIiwieSI6InJqR3B4bkdqWlVQMGJPcVB6bW1FWUlxakZxb0VjcWZ1MEloSFJBSVl5eTgifQ"
+  },
+  "receipt": {
+    "input": {
+      "network": "ycash:regtest",
+      "resourceUrl": "https://merchant.example/x402/report?q=café",
+      "transaction": "5be1000000000000000000000000000000000000000000000000000000000000",
+      "issuedAt": 1791000123
+    },
+    "artifact": {
+      "format": "jws",
+      "signature": "eyJhbGciOiJFUzI1NksiLCJraWQiOiJkaWQ6andrOmV5SmpjbllpT2lKelpXTndNalUyYXpFaUxDSnJkSGtpT2lKRlF5SXNJbmdpT2lKTVFYUTRMVlpOYTI5SU1FWlBXWE5yUVZoVVkwUkRkbXRTVG14eVJscHhiWGhmWlhnMWJXaHZRMXBGSWl3aWVTSTZJbkpxUjNCNGJrZHFXbFZRTUdKUGNWQjZiVzFGV1VseGFrWnhiMFZqY1daMU1FbG9TRkpCU1ZsNWVUZ2lmUSJ9.eyJpc3N1ZWRBdCI6MTc5MTAwMDEyMywibmV0d29yayI6InljYXNoOnJlZ3Rlc3QiLCJwYXllciI6ImFub255bW91cyIsInJlc291cmNlVXJsIjoiaHR0cHM6Ly9tZXJjaGFudC5leGFtcGxlL3g0MDIvcmVwb3J0P3E9Y2Fmw6kiLCJ0cmFuc2FjdGlvbiI6IjViZTEwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAiLCJ2ZXJzaW9uIjoxfQ.1tRtk4Dyy9A6DMZOxtmhHc-P6LSB9lff6bB_7wGxaN1Ad4Cdm6hC91ak8wfOV35HvRiFcCSVdiBKg_VaXk4uEg"
+    }
+  },
+  "offer": {
+    "artifact": {
+      "format": "jws",
+      "signature": "eyJhbGciOiJFUzI1NksiLCJraWQiOiJkaWQ6andrOmV5SmpjbllpT2lKelpXTndNalUyYXpFaUxDSnJkSGtpT2lKRlF5SXNJbmdpT2lKTVFYUTRMVlpOYTI5SU1FWlBXWE5yUVZoVVkwUkRkbXRTVG14eVJscHhiWGhmWlhnMWJXaHZRMXBGSWl3aWVTSTZJbkpxUjNCNGJrZHFXbFZRTUdKUGNWQjZiVzFGV1VseGFrWnhiMFZqY1daMU1FbG9TRkpCU1ZsNWVUZ2lmUSJ9.eyJhbW91bnQiOiIxNTAwMDAwIiwiYXNzZXQiOiJZRUMiLCJuZXR3b3JrIjoieWNhc2g6cmVndGVzdCIsInBheVRvIjoieXJlZ3Rlc3RzYXBsaW5nMXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcSIsInJlc291cmNlVXJsIjoiaHR0cHM6Ly9tZXJjaGFudC5leGFtcGxlL3g0MDIvcmVwb3J0P3E9Y2Fmw6kiLCJzY2hlbWUiOiJleGFjdCIsInZhbGlkVW50aWwiOjE3OTEwMDAwMDAsInZlcnNpb24iOjF9.f2zZcPxmmSesHMeFTXzfmuNFl9Lh0Ye2rKxzhlPiTTBkvn3ci3GadSlrThPHgIZwL6s0nMtD20OTYLU65m1B8A"
+    }
+  },
+  "jws": {
+    "payload": {
+      "b": "β",
+      "a": 1
+    },
+    "compact": "eyJhbGciOiJFUzI1NksiLCJraWQiOiJkaWQ6andrOmV5SmpjbllpT2lKelpXTndNalUyYXpFaUxDSnJkSGtpT2lKRlF5SXNJbmdpT2lKTVFYUTRMVlpOYTI5SU1FWlBXWE5yUVZoVVkwUkRkbXRTVG14eVJscHhiWGhmWlhnMWJXaHZRMXBGSWl3aWVTSTZJbkpxUjNCNGJrZHFXbFZRTUdKUGNWQjZiVzFGV1VseGFrWnhiMFZqY1daMU1FbG9TRkpCU1ZsNWVUZ2lmUSJ9.eyJhIjoxLCJiIjoizrIifQ.zyjzPepasE6n7qKnIEoH5kDp_2lVXrj6JMfnKP6-wGptn14tn2muX-bg92Nw4laKsCjpOvS0aknRlAy4sFl2qQ"
+  },
+  "highS": {
+    "compact": "eyJhbGciOiJFUzI1NksiLCJraWQiOiJkaWQ6andrOmV5SmpjbllpT2lKelpXTndNalUyYXpFaUxDSnJkSGtpT2lKRlF5SXNJbmdpT2lKTVFYUTRMVlpOYTI5SU1FWlBXWE5yUVZoVVkwUkRkbXRTVG14eVJscHhiWGhmWlhnMWJXaHZRMXBGSWl3aWVTSTZJbkpxUjNCNGJrZHFXbFZRTUdKUGNWQjZiVzFGV1VseGFrWnhiMFZqY1daMU1FbG9TRkpCU1ZsNWVUZ2lmUSJ9.eyJpc3N1ZWRBdCI6MTc5MTAwMDEyMywibmV0d29yayI6InljYXNoOnJlZ3Rlc3QiLCJwYXllciI6ImFub255bW91cyIsInJlc291cmNlVXJsIjoiaHR0cHM6Ly9tZXJjaGFudC5leGFtcGxlL3g0MDIvcmVwb3J0P3E9Y2Fmw6kiLCJ0cmFuc2FjdGlvbiI6IjViZTEwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAiLCJ2ZXJzaW9uIjoxfQ.1tRtk4Dyy9A6DMZOxtmhHc-P6LSB9lff6bB_7wGxaN2_iH9iZFe9CKlbDPgxqIG2_ZZXdoqzKht1TmkycegTLw",
+    "valid": true
+  }
+}

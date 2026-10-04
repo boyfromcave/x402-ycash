@@ -48,11 +48,13 @@ def register_exact_ycash_server(
     networks: str | list[str] | None = None,
     price_source: YecPriceSource | None = None,
     zero_conf_cap_zat: int | None = None,
+    **config: Any,
 ) -> ServerT:
-    """Registers the exact server scheme for ``networks`` (default: the ``ycash:*`` wildcard)."""
+    """Registers the exact server scheme for ``networks`` (default: the ``ycash:*`` wildcard).
+    ``config`` (``usd_asset``, ``shielded``) goes to ExactYcashServerScheme."""
     from .server import ExactYcashServerScheme
 
-    scheme = ExactYcashServerScheme(price_source, zero_conf_cap_zat)
+    scheme = ExactYcashServerScheme(price_source, zero_conf_cap_zat, **config)
     for network in _as_list(networks) if networks else [YCASH_CAIP_FAMILY]:
         server.register(network, scheme)
     return server

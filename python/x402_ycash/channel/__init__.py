@@ -1,5 +1,5 @@
-"""x402_ycash.channel: the YEC payment channel's pure builders (redeem script, funding, vouchers,
-server completion, refund) of specs/scheme_batch_settlement_ycash.md."""
+"""x402_ycash.channel: the payment channel's pure builders (redeem script, funding, vouchers, server
+completion, refund) of specs/scheme_batch_settlement_ycash.md, for YEC and YED channels."""
 
 from .builders import (
     FUNDING_VOUT,
@@ -38,6 +38,16 @@ from .script import (
     is_valid_compressed_pubkey,
     parse_channel_script,
 )
+from .yed import (
+    YED_CLIENT_VOUT,
+    YED_SERVER_VOUT,
+    YED_TRANSFER_VOUT,
+    build_yed_funding_tx,
+    build_yed_refund,
+    yed_channel_value,
+    yed_voucher_assignments,
+    yed_voucher_layout,
+)
 
 __all__ = [
     "DEFAULT_CLOSE_FEE",
@@ -47,6 +57,9 @@ __all__ = [
     "FUNDING_VOUT",
     "LOCKTIME_THRESHOLD",
     "REFUND_SEQUENCE",
+    "YED_CLIENT_VOUT",
+    "YED_SERVER_VOUT",
+    "YED_TRANSFER_VOUT",
     "Channel",
     "ChannelScript",
     "CloseScriptSig",
@@ -56,6 +69,8 @@ __all__ = [
     "build_funding_tx",
     "build_refund",
     "build_voucher",
+    "build_yed_funding_tx",
+    "build_yed_refund",
     "channel_address",
     "channel_id_of",
     "channel_script_pubkey",
@@ -73,4 +88,7 @@ __all__ = [
     "verify_voucher_signature",
     "voucher_sighash",
     "yec_voucher_outputs",
+    "yed_channel_value",
+    "yed_voucher_assignments",
+    "yed_voucher_layout",
 ]

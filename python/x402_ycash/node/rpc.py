@@ -235,6 +235,22 @@ class YcashRpc:
     async def yed_get_info(self) -> dict[str, Any]:
         return await self.call("yed_getinfo")
 
+    # ------------------------------------------------------------------ Sapling (sapling-proof)
+
+    async def z_get_new_address(self) -> str:
+        """A new Sapling address of the wallet (the base of the diversified ones)."""
+        return await self.call("z_getnewaddress", ["sapling"])
+
+    async def z_get_new_diversified_address(self, base: str) -> str:
+        """A new diversified address of a wallet Sapling address: same viewing key, unlinkable
+        address, one per request (plan Z-3). Both lines require the base address
+        (ycash-dd/src/wallet/rpcdump.cpp:835-860, ycash6/src/wallet/rpcdump.cpp:1391-1421; X-F11)."""
+        return await self.call("z_getnewdiversifiedaddress", [base])
+
+    async def z_list_received_by_address(self, address: str, minconf: int = 1) -> list[dict[str, Any]]:
+        """minconf 0 includes the mempool (plan Z-3). ``amount`` is a Decimal; both lines add ``amountZat``."""
+        return await self.call("z_listreceivedbyaddress", [address, minconf])
+
     # ------------------------------------------------------------------ wallet and regtest helpers
 
     async def list_unspent(self, minconf: int = 1, maxconf: int = 9_999_999,

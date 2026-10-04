@@ -5,12 +5,15 @@ one returns True (across processes for SqliteSettlementStore)."""
 
 from __future__ import annotations
 
+import copy
+import json
 import math
 import re
 import sqlite3
 import threading
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 SETTLEMENT_RETENTION_BLOCKS = 10
 """Blocks a claim outlives nExpiryHeight: after expiry the node refuses the tx (plan §5.6)."""
@@ -120,3 +123,116 @@ class SqliteSettlementStore:
         with self._lock, self._connect() as db:
             return db.execute("DELETE FROM claims WHERE retain_until IS NOT NULL AND retain_until < ?",
                               (current_height,)).rowcount
+
+
+# --- channel stores ---------------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ChannelRecord:
+    """A payment channel's state for X2/X3 (plan §5.7): the highest cumulative amount the payee holds a
+    signature for. ``cumulative`` only moves through compare-and-set, so two workers redeeming vouchers
+    on one channel cannot both advance it from the same value. Mirrors packages/ycash/src/store/channelStore.ts."""
+
+    channel_id: str
+    cumulative: int
+    """zatoshis (YEC) or cents (YED), cumulative over the channel's life."""
+    data: dict[str, Any] | None = None
+    """Opaque binding-specific fields, JSON-serialisable."""
+
+
+@runtime_checkable
+class ChannelStore(Protocol):
+    async def get(self, channel_id: str) -> ChannelRecord | None: ...
+
+    async def open(self, record: ChannelRecord) -> bool:
+        """Records a new channel; False if the id is already known."""
+        ...
+
+    async def compare_and_set_cumulative(self, channel_id: str, expected: int, next_value: int) -> bool:
+        """Sets ``cumulative`` to ``next_value`` only if it is currently ``expected``; False otherwise (or unknown)."""
+        ...
+
+    async def delete(self, channel_id: str) -> None: ...
+
+    async def list(self) -> list[str]:
+        """Every record id, in no particular order (a restarted server re-tracks its channels from it)."""
+        ...
+
+
+class InMemoryChannelStore:
+    """Process-local, thread-safe (the sync bridge runs schemes on its own loop thread)."""
+
+    def __init__(self) -> None:
+        self._records: dict[str, ChannelRecord] = {}
+        self._lock = threading.Lock()
+
+    async def get(self, channel_id: str) -> ChannelRecord | None:
+        with self._lock:
+            r = self._records.get(channel_id)
+        return None if r is None else ChannelRecord(r.channel_id, r.cumulative, copy.deepcopy(r.data))
+
+    async def open(self, record: ChannelRecord) -> bool:
+        with self._lock:
+            if record.channel_id in self._records:
+                return False
+            self._records[record.channel_id] = ChannelRecord(record.channel_id, record.cumulative, copy.deepcopy(record.data))
+            return True
+
+    async def compare_and_set_cumulative(self, channel_id: str, expected: int, next_value: int) -> bool:
+        with self._lock:
+            r = self._records.get(channel_id)
+            if r is None or r.cumulative != expected:
+                return False
+            self._records[channel_id] = ChannelRecord(channel_id, next_value, r.data)
+            return True
+
+    async def delete(self, channel_id: str) -> None:
+        with self._lock:
+            self._records.pop(channel_id, None)
+
+    async def list(self) -> list[str]:
+        with self._lock:
+            return list(self._records)
+
+
+class SqliteChannelStore:
+    """Restart-durable and shared by every process on one host. ``cumulative`` is stored as decimal
+    text (a cumulative or a lock expiry can exceed SQLite's comparisons of mixed types); the
+    compare-and-set is one ``UPDATE … WHERE cumulative = ?``."""
+
+    def __init__(self, path: str | Path) -> None:
+        self._path = str(path)
+        self._lock = threading.Lock()
+        with self._connect() as db:
+            db.execute("CREATE TABLE IF NOT EXISTS channels (id TEXT PRIMARY KEY, cumulative TEXT NOT NULL, data TEXT)")
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self._path, timeout=30, isolation_level=None)
+
+    async def get(self, channel_id: str) -> ChannelRecord | None:
+        with self._lock, self._connect() as db:
+            row = db.execute("SELECT cumulative, data FROM channels WHERE id = ?", (channel_id,)).fetchone()
+        if row is None:
+            return None
+        return ChannelRecord(channel_id, int(row[0]), json.loads(row[1]) if row[1] is not None else None)
+
+    async def open(self, record: ChannelRecord) -> bool:
+        data = json.dumps(record.data) if record.data is not None else None
+        with self._lock, self._connect() as db:
+            cur = db.execute("INSERT OR IGNORE INTO channels (id, cumulative, data) VALUES (?, ?, ?)",
+                             (record.channel_id, str(record.cumulative), data))
+            return cur.rowcount == 1
+
+    async def compare_and_set_cumulative(self, channel_id: str, expected: int, next_value: int) -> bool:
+        with self._lock, self._connect() as db:
+            cur = db.execute("UPDATE channels SET cumulative = ? WHERE id = ? AND cumulative = ?",
+                             (str(next_value), channel_id, str(expected)))
+            return cur.rowcount == 1
+
+    async def delete(self, channel_id: str) -> None:
+        with self._lock, self._connect() as db:
+            db.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
+
+    async def list(self) -> list[str]:
+        with self._lock, self._connect() as db:
+            return [r[0] for r in db.execute("SELECT id FROM channels").fetchall()]
