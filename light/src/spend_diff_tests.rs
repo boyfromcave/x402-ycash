@@ -224,7 +224,15 @@ async fn assemble_matches_create_proposed_transactions() {
         memo: Some(memo.clone()),
     };
     assert!(matches!(
-        assemble(&mut w.db, &net, &extsk, &prover, &proposal, &short, None),
+        assemble(
+            &mut w.db,
+            &net,
+            &extsk,
+            &prover,
+            &proposal,
+            &short,
+            ExpiryRequest::new(None, u32::MAX)
+        ),
         Err(Error::Create(_))
     ));
 
@@ -242,7 +250,7 @@ async fn assemble_matches_create_proposed_transactions() {
         &prover,
         &proposal,
         &payment,
-        Some(expiry),
+        ExpiryRequest::new(Some(expiry), DEFAULT_MAX_EXPIRY_WINDOW),
     )
     .unwrap();
     let txids = create_proposed_transactions::<

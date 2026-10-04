@@ -2,7 +2,7 @@
 name = "x402-ycash-light"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.89"
 publish = false
 description = "A Sapling light client for x402 agents on Ycash: sync from lightwalletd, build and sign shielded payments offline"
 license = "MIT"

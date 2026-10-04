@@ -309,6 +309,52 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[tokio::test]
+    async fn a_second_wallet_on_the_same_data_dir_is_refused() {
+        let (_fake, channel, _) = start(true).await;
+        let dir = data_dir("lock");
+        let opts = || Options {
+            channel: Some(channel.clone()),
+            ..Options::new(&dir, UNDIALED, YcashNetwork::devnet_regtest())
+        };
+        let first = Wallet::open(opts()).await.expect("first open");
+        match Wallet::open(opts()).await {
+            Err(crate::wallet::Error::Locked(d)) => assert_eq!(d, dir),
+            Err(e) => panic!("expected Locked, got {e}"),
+            Ok(_) => panic!("a second wallet opened the same data directory"),
+        }
+        drop(first);
+        Wallet::open(opts())
+            .await
+            .expect("reopens once the first is dropped");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_needs_the_wallet_at_the_server_tip() {
+        use crate::wallet::{check_tip, Error};
+        let server = lwd::BranchInfo {
+            height: 120,
+            branch_id_hex: NEXT_BRANCH.into(),
+            next_block: true,
+        };
+        let at = |h: u32| check_tip(Some(BlockHeight::from_u32(h)), &server);
+        assert_eq!(at(120).expect("at tip"), BlockHeight::from_u32(120));
+        for (wallet, h) in [
+            (Some(119), at(119)),
+            (Some(121), at(121)),
+            (None, check_tip(None, &server)),
+        ] {
+            match h {
+                Err(Error::NotAtServerTip {
+                    wallet: w,
+                    server: 120,
+                }) => assert_eq!(w, wallet),
+                other => panic!("expected NotAtServerTip, got {other:?}"),
+            }
+        }
+    }
+
     #[test]
     fn tls_roots_parse_and_default_per_target() {
         assert_eq!("native".parse::<TlsRoots>(), Ok(TlsRoots::Native));

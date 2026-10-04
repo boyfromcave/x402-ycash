@@ -53,22 +53,73 @@ pub fn fee_floor(spends: usize, outputs: usize) -> u64 {
     (FLOOR_MARGINAL_ZAT * actions).max(FLOOR_MIN_ZAT)
 }
 
-/// The `nExpiryHeight` to use: the caller's, which must leave the relay floor, or the
-/// librustzcash default of target + 40. Either must stay below the next network upgrade: the
-/// signature commits to the target's branch id, so a transaction still unmined at the upgrade can
-/// never be mined, yet the wallet would hold its notes until `nExpiryHeight`. ycashd caps its own
-/// default the same way (`ycash-dd/src/main.cpp:7386-7388`, `ycash6/src/main.cpp:9441-9443`); a
-/// requested expiry is the x402 contract, so it is refused rather than moved.
+/// Seconds per block, for the x402 window (`packages/ycash/src/constants.ts` `BLOCK_SECONDS`).
+pub const BLOCK_SECONDS: u64 = 75;
+
+/// The widest default window above the relay floor: 1152 blocks, about a day. A transaction that
+/// expires later locks its notes that long if it is never mined (`wallet::Options::max_expiry_window`).
+pub const DEFAULT_MAX_EXPIRY_WINDOW: u32 = 1152;
+
+/// What the caller asks of `nExpiryHeight`: a height, or `None` for the default, and the most it
+/// may sit above the relay floor (target + 3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExpiryRequest {
+    pub height: Option<u32>,
+    pub max_above_floor: u32,
+}
+
+impl ExpiryRequest {
+    /// A requested height (or the default) within `max_window` blocks of the floor.
+    pub fn new(height: Option<u32>, max_window: u32) -> Self {
+        ExpiryRequest {
+            height,
+            max_above_floor: max_window,
+        }
+    }
+
+    /// The x402 window for `maxTimeoutSeconds` (`specs/scheme_exact_ycash.md` rule 8, with
+    /// tip = target − 1): tip + 4 ≤ expiry ≤ tip + 4 + ⌈t/75⌉ + 1. Without a height, the client's
+    /// tip + 3 + ⌈t/75⌉ (Transaction Construction), raised to the floor when ⌈t/75⌉ is 0.
+    /// `max_window` still caps it.
+    pub fn for_timeout(
+        target: BlockHeight,
+        max_timeout_seconds: u64,
+        height: Option<u32>,
+        max_window: u32,
+    ) -> Self {
+        let blocks = u32::try_from(max_timeout_seconds.div_ceil(BLOCK_SECONDS)).unwrap_or(u32::MAX);
+        let floor = u32::from(target).saturating_add(EXPIRING_SOON_THRESHOLD);
+        let client = (u32::from(target) - 1)
+            .saturating_add(EXPIRING_SOON_THRESHOLD)
+            .saturating_add(blocks);
+        ExpiryRequest {
+            height: Some(height.unwrap_or(client.max(floor))),
+            max_above_floor: blocks.saturating_add(1).min(max_window),
+        }
+    }
+}
+
+/// The `nExpiryHeight` to use: the caller's, which must lie in [target + 3, target + 3 +
+/// `max_above_floor`], or the librustzcash default of target + 40 (lowered to that bound). Either
+/// must stay below the next network upgrade: the signature commits to the target's branch id, so
+/// a transaction still unmined at the upgrade can never be mined, yet the wallet would hold its
+/// notes until `nExpiryHeight`. ycashd caps its own default the same way
+/// (`ycash-dd/src/main.cpp:7386-7388`, `ycash6/src/main.cpp:9441-9443`); a requested expiry is the
+/// x402 contract, so it is refused rather than moved.
 pub fn choose_expiry(
     params: &YcashNetwork,
     target: BlockHeight,
-    requested: Option<u32>,
+    requested: ExpiryRequest,
 ) -> Result<BlockHeight, Error> {
     let branch = BranchId::for_height(params, target);
     let min = u32::from(target) + EXPIRING_SOON_THRESHOLD;
-    let Some(e) = requested else {
+    // 499_999_999 is the largest nExpiryHeight consensus allows (ZIP-203).
+    let max = min
+        .saturating_add(requested.max_above_floor)
+        .min(499_999_999);
+    let Some(e) = requested.height else {
         // At most 40 steps down to the last height of the target's branch.
-        let mut e = target + 40;
+        let mut e = BlockHeight::from_u32((u32::from(target) + 40).min(max));
         while BranchId::for_height(params, e) != branch && u32::from(e) > min {
             e = e - 1;
         }
@@ -79,10 +130,9 @@ pub fn choose_expiry(
         }
         return Ok(e);
     };
-    // 499_999_999 is the largest nExpiryHeight consensus allows (ZIP-203).
-    if e < min || e > 499_999_999 {
+    if e < min || e > max {
         return Err(Error::Expiry(format!(
-            "expiryHeight {e} must be in [{min}, 499999999] for target height {target}"
+            "expiryHeight {e} must be in [{min}, {max}] for target height {target}"
         )));
     }
     let e = BlockHeight::from_u32(e);
@@ -137,7 +187,7 @@ pub fn assemble<FR>(
     prover: &LocalTxProver,
     proposal: &Proposal<FR, ReceivedNoteId>,
     payment: &Payment<'_>,
-    expiry: Option<u32>,
+    expiry: ExpiryRequest,
 ) -> Result<Transaction, Error> {
     if proposal.steps().len() != 1 {
         return Err(Error::Create(format!(
@@ -309,25 +359,94 @@ mod tests {
         }
     }
 
+    /// The pre-window behaviour: no upper bound short of consensus's.
+    fn any(height: Option<u32>) -> ExpiryRequest {
+        ExpiryRequest::new(height, u32::MAX)
+    }
+
+    #[test]
+    fn expiry_window_caps_a_requested_height() {
+        let net = YcashNetwork::devnet_regtest();
+        let t = BlockHeight::from_u32(100);
+        let day = ExpiryRequest::new(Some(103 + 1152), DEFAULT_MAX_EXPIRY_WINDOW);
+        assert_eq!(
+            choose_expiry(&net, t, day).unwrap(),
+            BlockHeight::from_u32(1255)
+        );
+        let over = ExpiryRequest::new(Some(103 + 1153), DEFAULT_MAX_EXPIRY_WINDOW);
+        assert!(matches!(
+            choose_expiry(&net, t, over),
+            Err(Error::Expiry(_))
+        ));
+        // The default comes down to a narrow window rather than failing.
+        let narrow = ExpiryRequest::new(None, 10);
+        assert_eq!(
+            choose_expiry(&net, t, narrow).unwrap(),
+            BlockHeight::from_u32(113)
+        );
+    }
+
+    #[test]
+    fn max_timeout_seconds_enforces_the_spec_window() {
+        let net = YcashNetwork::devnet_regtest();
+        // tip 99, target 100, maxTimeoutSeconds 900 → ⌈900/75⌉ = 12: rule 8 is [103, 116].
+        let t = BlockHeight::from_u32(100);
+        let w = |h| ExpiryRequest::for_timeout(t, 900, h, DEFAULT_MAX_EXPIRY_WINDOW);
+        assert_eq!(w(None), ExpiryRequest::new(Some(114), 13));
+        assert_eq!(
+            choose_expiry(&net, t, w(None)).unwrap(),
+            BlockHeight::from_u32(114)
+        );
+        assert_eq!(
+            choose_expiry(&net, t, w(Some(103))).unwrap(),
+            BlockHeight::from_u32(103)
+        );
+        assert_eq!(
+            choose_expiry(&net, t, w(Some(116))).unwrap(),
+            BlockHeight::from_u32(116)
+        );
+        assert!(matches!(
+            choose_expiry(&net, t, w(Some(117))),
+            Err(Error::Expiry(_))
+        ));
+        assert!(matches!(
+            choose_expiry(&net, t, w(Some(140))),
+            Err(Error::Expiry(_))
+        ));
+        // ⌈0/75⌉ = 0: the client's tip + 3 is below the relay floor, so the floor it is.
+        let zero = ExpiryRequest::for_timeout(t, 0, None, DEFAULT_MAX_EXPIRY_WINDOW);
+        assert_eq!(
+            choose_expiry(&net, t, zero).unwrap(),
+            BlockHeight::from_u32(103)
+        );
+        // The wallet's own cap still applies to a long timeout.
+        let long = ExpiryRequest::for_timeout(t, 7 * 86_400, None, DEFAULT_MAX_EXPIRY_WINDOW);
+        assert_eq!(long.max_above_floor, DEFAULT_MAX_EXPIRY_WINDOW);
+        assert!(matches!(
+            choose_expiry(&net, t, long),
+            Err(Error::Expiry(_))
+        ));
+    }
+
     #[test]
     fn expiry_defaults_to_target_plus_40_and_keeps_the_relay_floor() {
         let net = YcashNetwork::devnet_regtest();
         let t = BlockHeight::from_u32(100);
         assert_eq!(
-            choose_expiry(&net, t, None).unwrap(),
+            choose_expiry(&net, t, any(None)).unwrap(),
             BlockHeight::from_u32(140)
         );
         // tip 99 → target 100; the spec's tip + 3 + ⌈60/75⌉ = 103 is exactly the floor.
         assert_eq!(
-            choose_expiry(&net, t, Some(103)).unwrap(),
+            choose_expiry(&net, t, any(Some(103))).unwrap(),
             BlockHeight::from_u32(103)
         );
         assert!(matches!(
-            choose_expiry(&net, t, Some(102)),
+            choose_expiry(&net, t, any(Some(102))),
             Err(Error::Expiry(_))
         ));
         assert!(matches!(
-            choose_expiry(&net, t, Some(500_000_000)),
+            choose_expiry(&net, t, any(Some(500_000_000))),
             Err(Error::Expiry(_))
         ));
     }
@@ -340,15 +459,15 @@ mod tests {
             .unwrap();
         let t = BlockHeight::from_u32(100);
         assert_eq!(
-            choose_expiry(&net, t, None).unwrap(),
+            choose_expiry(&net, t, any(None)).unwrap(),
             BlockHeight::from_u32(119)
         );
         assert_eq!(
-            choose_expiry(&net, t, Some(119)).unwrap(),
+            choose_expiry(&net, t, any(Some(119))).unwrap(),
             BlockHeight::from_u32(119)
         );
         assert!(matches!(
-            choose_expiry(&net, t, Some(120)),
+            choose_expiry(&net, t, any(Some(120))),
             Err(Error::Expiry(_))
         ));
         // An upgrade inside the relay floor leaves no valid default.
@@ -356,13 +475,13 @@ mod tests {
             .with_upgrades("nu5=102")
             .unwrap();
         assert!(matches!(
-            choose_expiry(&net, t, None),
+            choose_expiry(&net, t, any(None)),
             Err(Error::Expiry(_))
         ));
         // Mainnet schedules nothing after Canopy: the default is untouched.
         let t = BlockHeight::from_u32(3_100_000);
         assert_eq!(
-            choose_expiry(&YcashNetwork::Main, t, None).unwrap(),
+            choose_expiry(&YcashNetwork::Main, t, any(None)).unwrap(),
             BlockHeight::from_u32(3_100_040)
         );
     }

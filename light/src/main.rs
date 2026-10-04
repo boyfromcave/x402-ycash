@@ -45,6 +45,9 @@ struct Common {
     /// (the Mozilla bundle; the default on iOS and Android)
     #[arg(long, env = "X402_LIGHT_TLS_ROOTS")]
     tls_roots: Option<lwd::TlsRoots>,
+    /// Most blocks a built transaction's nExpiryHeight may sit above target + 3 (~1 day)
+    #[arg(long, env = "X402_LIGHT_MAX_EXPIRY_WINDOW", default_value_t = x402_ycash_light::spend::DEFAULT_MAX_EXPIRY_WINDOW)]
+    max_expiry_window: u32,
     /// Regtest activation heights, e.g. "canopy=1,nu5=none" (default: every upgrade through Canopy at 1)
     #[arg(long, env = "X402_LIGHT_UPGRADES")]
     upgrades: Option<String>,
@@ -102,13 +105,11 @@ async fn open(common: &Common) -> Result<Wallet, String> {
         Err(e) => return Err(e.to_string()),
     };
     Wallet::open(Options {
-        data_dir: common.data.clone(),
-        lwd: common.lwd.clone(),
-        params: network,
         proving_params_dir: common.params.clone(),
         spending_key,
-        channel: None,
         tls_roots: common.tls_roots.unwrap_or_default(),
+        max_expiry_window: common.max_expiry_window,
+        ..Options::new(common.data.clone(), common.lwd.clone(), network)
     })
     .await
     .map_err(|e| e.to_string())
