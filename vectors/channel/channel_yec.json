@@ -2,11 +2,11 @@
   "description": "YEC payment channel (batch-settlement): redeem scripts, vouchers, completed closes, refund. Offline, deterministic; the builders' spends are mined on both lines by test/devnet/channel_yec.devnet.test.ts.",
   "branchId": "19bd2d2f",
   "specExample": {
-    "clientPubKey": "02c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
-    "serverPubKey": "035e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+    "clientPubKey": "03efe7ffc36c3fed9fcd4f1b8de29a5a5a44faa7bf8418334518cf3a765df54ba6",
+    "serverPubKey": "0289bb2b0ac2056bbc117fcee21dc12b8147066cea2d6ff9a1a650b8e444378435",
     "refundHeight": 3101234,
-    "redeemScript": "63522102c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c121035e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e52ae670332522fb1752102c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1ac68",
-    "hash160": "2a658b51612cf2df64fe5375e8253bdec61f3c64"
+    "redeemScript": "63522103efe7ffc36c3fed9fcd4f1b8de29a5a5a44faa7bf8418334518cf3a765df54ba6210289bb2b0ac2056bbc117fcee21dc12b8147066cea2d6ff9a1a650b8e44437843552ae670332522fb1752103efe7ffc36c3fed9fcd4f1b8de29a5a5a44faa7bf8418334518cf3a765df54ba6ac68",
+    "hash160": "f702ca5dbbc301abd62ca7a92a563789b9721b86"
   },
   "channel": {
     "clientPriv": "1111111111111111111111111111111111111111111111111111111111111111",

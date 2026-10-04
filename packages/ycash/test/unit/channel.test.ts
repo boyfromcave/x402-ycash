@@ -4,11 +4,12 @@ import { channel as C, tx as T } from "../../src/index.js";
 const h = T.hexToBytes;
 const hex = T.bytesToHex;
 
-// specs/scheme_batch_settlement_ycash.md, "Redeem script" example (illustrative keys, not curve points).
-const SPEC_C = h("02" + "c1".repeat(32));
-const SPEC_S = h("03" + "5e".repeat(32));
+// specs/scheme_batch_settlement_ycash.md, "Redeem script" example: valid compressed keys, the public
+// keys of SHA-256("x402-ycash spec example client key C") and SHA-256("x402-ycash spec example server key S").
+const SPEC_C = h("03efe7ffc36c3fed9fcd4f1b8de29a5a5a44faa7bf8418334518cf3a765df54ba6");
+const SPEC_S = h("0289bb2b0ac2056bbc117fcee21dc12b8147066cea2d6ff9a1a650b8e444378435");
 const SPEC_RS =
-  "63522102c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c121035e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e52ae670332522fb1752102c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1ac68";
+  "63522103efe7ffc36c3fed9fcd4f1b8de29a5a5a44faa7bf8418334518cf3a765df54ba6210289bb2b0ac2056bbc117fcee21dc12b8147066cea2d6ff9a1a650b8e44437843552ae670332522fb1752103efe7ffc36c3fed9fcd4f1b8de29a5a5a44faa7bf8418334518cf3a765df54ba6ac68";
 
 const cPriv = h("11".repeat(32));
 const sPriv = h("22".repeat(32));
@@ -28,8 +29,8 @@ describe("redeem script", () => {
     const rs = C.buildChannelScript({ clientPubKey: SPEC_C, serverPubKey: SPEC_S, refundHeight: 3_101_234 });
     expect(hex(rs)).toBe(SPEC_RS);
     expect(rs.length).toBe(115);
-    expect(hex(T.hash160(rs))).toBe("2a658b51612cf2df64fe5375e8253bdec61f3c64");
-    expect(hex(C.channelScriptPubKey(rs))).toBe("a9142a658b51612cf2df64fe5375e8253bdec61f3c6487");
+    expect(hex(T.hash160(rs))).toBe("f702ca5dbbc301abd62ca7a92a563789b9721b86");
+    expect(hex(C.channelScriptPubKey(rs))).toBe("a914f702ca5dbbc301abd62ca7a92a563789b9721b8687");
   });
 
   it("parses back exactly", () => {
@@ -45,7 +46,7 @@ describe("redeem script", () => {
     const rs = h(SPEC_RS);
     const withTrailing = T.concatBytes(rs, Uint8Array.of(0x61));
     const nonMinimalT = h(SPEC_RS.replace("670332522fb175", "67043252 2f00b175".replace(" ", "")));
-    const sameKeys = h(SPEC_RS.replace("035e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e", "02" + "c1".repeat(32)));
+    const sameKeys = h(SPEC_RS.replace(hex(SPEC_S), hex(SPEC_C)));
     const wrongOp = h(SPEC_RS.replace(/ac68$/, "ad68"));
     const uncompressed = T.buildScript([T.OP.OP_IF, T.OP.OP_2, h("04" + "c1".repeat(64)), SPEC_S, T.OP.OP_2, T.OP.OP_CHECKMULTISIG,
       T.OP.OP_ELSE, 3_101_234n, T.OP.OP_CHECKLOCKTIMEVERIFY, T.OP.OP_DROP, h("04" + "c1".repeat(64)), T.OP.OP_CHECKSIG, T.OP.OP_ENDIF]);
@@ -64,8 +65,10 @@ describe("redeem script", () => {
   });
 
   it("isValidCompressedPubKey also requires a curve point", () => {
-    expect(C.isCompressedPubKey(SPEC_S)).toBe(true);
-    expect(C.isValidCompressedPubKey(SPEC_S)).toBe(false);
+    const notAPoint = h("03" + "5e".repeat(32)); // the spec's old illustrative key: the right shape, off the curve
+    expect(C.isCompressedPubKey(notAPoint)).toBe(true);
+    expect(C.isValidCompressedPubKey(notAPoint)).toBe(false);
+    expect(C.isValidCompressedPubKey(SPEC_S)).toBe(true);
     expect(C.isValidCompressedPubKey(sPub)).toBe(true);
   });
 

@@ -20,6 +20,9 @@ const sPriv = h("22".repeat(32));
 const cPub = T.pubkeyFromPriv(cPriv);
 const sPub = T.pubkeyFromPriv(sPriv);
 const refundHeight = 3_101_234;
+// The spec example's keys: SHA-256("x402-ycash spec example client key C") and "… server key S", as public keys.
+const SPEC_C = "03efe7ffc36c3fed9fcd4f1b8de29a5a5a44faa7bf8418334518cf3a765df54ba6";
+const SPEC_S = "0289bb2b0ac2056bbc117fcee21dc12b8147066cea2d6ff9a1a650b8e444378435";
 const redeemScript = C.buildChannelScript({ clientPubKey: cPub, serverPubKey: sPub, refundHeight });
 const payTo = T.encodeAddress("ycash:regtest", "p2pkh", h("aa".repeat(20)));
 const channel = C.channelFromScript({
@@ -46,9 +49,9 @@ const doc = {
   description: "YEC payment channel (batch-settlement): redeem scripts, vouchers, completed closes, refund. Offline, deterministic; the builders' spends are mined on both lines by test/devnet/channel_yec.devnet.test.ts.",
   branchId: BRANCH.toString(16),
   specExample: {
-    clientPubKey: "02" + "c1".repeat(32), serverPubKey: "03" + "5e".repeat(32), refundHeight,
-    redeemScript: hex(C.buildChannelScript({ clientPubKey: h("02" + "c1".repeat(32)), serverPubKey: h("03" + "5e".repeat(32)), refundHeight })),
-    hash160: "2a658b51612cf2df64fe5375e8253bdec61f3c64",
+    clientPubKey: SPEC_C, serverPubKey: SPEC_S, refundHeight,
+    redeemScript: hex(C.buildChannelScript({ clientPubKey: h(SPEC_C), serverPubKey: h(SPEC_S), refundHeight })),
+    hash160: hex(T.hash160(C.buildChannelScript({ clientPubKey: h(SPEC_C), serverPubKey: h(SPEC_S), refundHeight }))),
   },
   channel: {
     clientPriv: hex(cPriv), serverPriv: hex(sPriv), clientPubKey: hex(cPub), serverPubKey: hex(sPub), refundHeight,
