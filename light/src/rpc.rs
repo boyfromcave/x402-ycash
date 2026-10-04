@@ -16,7 +16,27 @@ use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
-use crate::wallet::{BuildRequest, Error, Wallet};
+use x402_ycash_light::keys;
+use x402_ycash_light::wallet::{BuildRequest, Error, Wallet};
+
+/// Where the binary keeps the imported key: `<data>/spending.key`, bech32, mode 0600.
+pub fn key_path(data_dir: &std::path::Path) -> std::path::PathBuf {
+    data_dir.join("spending.key")
+}
+
+fn write_secret_file(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut f = options.open(path)?;
+    f.write_all(contents.as_bytes())?;
+    f.write_all(b"\n")
+}
 
 pub type Shared = Arc<Mutex<Wallet>>;
 
@@ -124,7 +144,18 @@ pub async fn dispatch(shared: &Shared, method: &str, p: &Value) -> Result<Value,
         "import_key" => {
             let c: ImportParams = params_req(p)?;
             let mut g = shared.lock().await;
-            to_json(g.import_key(&c.key, c.birthday).await)
+            let extsk =
+                keys::import(&g.params, &c.key).map_err(|e| (INVALID_PARAMS, e.to_string()))?;
+            let had_key = g.has_key();
+            let info = g.register_key(extsk.clone(), c.birthday).await.map_err(w)?;
+            if !had_key {
+                write_secret_file(
+                    &key_path(&g.data_dir),
+                    &keys::encode_extsk(&g.params, &extsk),
+                )
+                .map_err(|e| (WALLET_ERROR, format!("cannot write spending.key: {e}")))?;
+            }
+            to_json(Ok(info))
         }
         "sync" => {
             let c: SyncParams = params(p)?;

@@ -4,11 +4,12 @@
 //! Layout of `--data`:
 //!   wallet.sqlite        the WalletDb (notes, nullifiers, commitment tree, created transactions)
 //!   cache/               the FsBlockDb: blockmeta.sqlite + blocks/ (compact blocks, deleted once scanned)
-//!   spending.key         the imported extended spending key, bech32, mode 0600
+//! The spending key is injected (`Options::spending_key`, `register_key`); where it is kept is the
+//! embedding application's business (the x402-light binary stores it as `spending.key`, mode 0600).
 
 use std::fs;
 use std::num::NonZeroU32;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use nonempty::NonEmpty;
 use rand::rngs::OsRng;
@@ -57,7 +58,7 @@ pub struct Wallet {
     pub(crate) db: Db,
     pub(crate) cache: FsBlockDb,
     pub(crate) blocks_dir: PathBuf,
-    key_path: PathBuf,
+    pub data_dir: PathBuf,
     extsk: Option<ExtendedSpendingKey>,
     params_dir: Option<PathBuf>,
     prover: Option<LocalTxProver>,
@@ -71,6 +72,8 @@ pub struct Options {
     pub lwd: String,
     pub params: YcashNetwork,
     pub proving_params_dir: Option<PathBuf>,
+    /// The Sapling extended spending key whose account this wallet holds, if already known.
+    pub spending_key: Option<ExtendedSpendingKey>,
 }
 
 /// One confirmation, the ycashd default for `z_sendmany` on both lines.
@@ -96,12 +99,7 @@ impl Wallet {
         )?;
         init_wallet_db(&mut db, None).map_err(|e| Error::Init(e.to_string()))?;
 
-        let key_path = opts.data_dir.join("spending.key");
-        let extsk = match fs::read_to_string(&key_path) {
-            Ok(s) => Some(keys::decode_extsk(&opts.params, &s)?),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => return Err(e.into()),
-        };
+        let extsk = opts.spending_key;
 
         let (client, channel) = lwd::connect(&opts.lwd).await?;
         Ok(Wallet {
@@ -109,7 +107,7 @@ impl Wallet {
             db,
             cache,
             blocks_dir,
-            key_path,
+            data_dir: opts.data_dir,
             extsk,
             params_dir: opts.proving_params_dir,
             prover: None,
@@ -141,14 +139,14 @@ impl Wallet {
             .ok_or(Error::NoKey)
     }
 
-    /// Imports a spending key (or seed phrase) with a birthday, registering the account with the
-    /// tree state just before the birthday so scanning starts there. One key per data directory.
-    pub async fn import_key(
+    /// Registers a spending key with a birthday: the account is created with the tree state just
+    /// before the birthday so scanning starts there. One key per wallet; the key is not persisted
+    /// here (see the module docs).
+    pub async fn register_key(
         &mut self,
-        secret: &str,
+        extsk: ExtendedSpendingKey,
         birthday: Option<u32>,
     ) -> Result<KeyInfo, Error> {
-        let extsk = keys::import(&self.params, secret)?;
         if let Some(existing) = &self.extsk {
             if existing.to_bytes() != extsk.to_bytes() {
                 return Err(Error::KeyExists);
@@ -181,8 +179,6 @@ impl Wallet {
             Some("imported Sapling extended spending key"),
         )?;
 
-        let encoded = keys::encode_extsk(&self.params, &extsk);
-        write_secret_file(&self.key_path, &encoded)?;
         self.extsk = Some(extsk);
         self.key_info()
     }
@@ -267,7 +263,8 @@ impl Wallet {
             .get_wallet_summary(Self::policy(min_confirmations))?
         {
             out.scannedHeight = Some(u32::from(summary.fully_scanned_height()));
-            out.synced = summary.is_synced() && chain_height == Some(lwd_latest) && lwd_latest == lwd_height;
+            out.synced =
+                summary.is_synced() && chain_height == Some(lwd_latest) && lwd_latest == lwd_height;
             if let Some(b) = summary.account_balances().get(&account) {
                 let s = b.sapling_balance();
                 balance = Balance {
@@ -563,21 +560,6 @@ impl Wallet {
     }
 }
 
-fn write_secret_file(path: &Path, contents: &str) -> Result<(), Error> {
-    use std::io::Write;
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut f = options.open(path)?;
-    f.write_all(contents.as_bytes())?;
-    f.write_all(b"\n")?;
-    Ok(())
-}
-
 // ---------------------------------------------------------------------- wire types
 
 #[derive(Debug, Serialize)]
@@ -684,7 +666,7 @@ pub enum Error {
     Lwd(#[from] lwd::Error),
     #[error(transparent)]
     Key(#[from] keys::KeyError),
-    #[error("no spending key imported (import_key first)")]
+    #[error("no spending key registered (import_key first)")]
     NoKey,
     #[error("this wallet already holds a different key; use another --data directory")]
     KeyExists,

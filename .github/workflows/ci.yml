@@ -11,6 +11,28 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
+  light:
+    # The Rust Sapling light client (light/). Its zcash_* crates are path dependencies on the
+    # librustzcash6 fork at ../../../librustzcash6 relative to light/, so clone it alongside.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: boyfromcave/librustzcash6
+          ref: ec525fae828ff67af0bf5d1995acfe445340ce66
+          path: ../librustzcash6
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: "rustfmt, clippy" }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: light }
+      - run: cargo fmt --check
+        working-directory: light
+      - run: cargo clippy --all-targets -- -D warnings
+        working-directory: light
+      - run: cargo test
+        working-directory: light
   facilitator-image:
     runs-on: ubuntu-latest
     steps:

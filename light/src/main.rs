@@ -3,12 +3,7 @@
 //! `serve` runs the JSON-RPC server (schema.json) with a background sync loop; `once` runs one
 //! method and prints its result, for scripts and the integration test.
 
-mod keys;
-mod lwd;
-mod net;
 mod rpc;
-mod sync;
-mod wallet;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -19,8 +14,7 @@ use clap::{Args, Parser, Subcommand};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use net::YcashNetwork;
-use wallet::{Options, Wallet};
+use x402_ycash_light::{keys, sync, Options, Wallet, YcashNetwork};
 
 #[derive(Parser)]
 #[command(
@@ -97,11 +91,18 @@ async fn open(common: &Common) -> Result<Wallet, String> {
     if let Some(spec) = &common.upgrades {
         network = network.with_upgrades(spec)?;
     }
+    // The binary keeps the key in <data>/spending.key (rpc::import_key writes it, mode 0600).
+    let spending_key = match std::fs::read_to_string(rpc::key_path(&common.data)) {
+        Ok(s) => Some(keys::decode_extsk(&network, &s).map_err(|e| e.to_string())?),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e.to_string()),
+    };
     Wallet::open(Options {
         data_dir: common.data.clone(),
         lwd: common.lwd.clone(),
         params: network,
         proving_params_dir: common.params.clone(),
+        spending_key,
     })
     .await
     .map_err(|e| e.to_string())
