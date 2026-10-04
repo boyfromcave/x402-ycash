@@ -21,3 +21,4 @@ export {
   type JwsSigner,
   type PrivacyTier,
 } from "./shielded/index.js";
+export * as exact from "./exact/index.js";
