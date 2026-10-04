@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "outDir": "dist",
+    "types": ["node"],
+    // Typecheck and tests read the mechanism from source, so CI needs no build step first.
+    "paths": { "x402-ycash-mechanism": ["../ycash/src/index.ts"] }
+  },
+  "include": ["src/**/*", "test/**/*"]
+}
