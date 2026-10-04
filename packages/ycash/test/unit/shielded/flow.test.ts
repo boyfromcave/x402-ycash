@@ -77,9 +77,10 @@ let now: number;
 
 function makeHandler(opts: { signer?: JwsSigner; maxOutstanding?: number; fallbackPriceMicroUsd?: number } = {}): SaplingProofHandler {
   return new SaplingProofHandler({
+    network: YCASH_REGTEST,
     rpc: wallet,
-    store,
-    receiptSigner: opts.signer ?? es256kSigner(RECEIPT_KEY),
+    settlementStore: store,
+    receiptKey: opts.signer ?? RECEIPT_KEY,
     now: () => now,
     ...(opts.maxOutstanding === undefined ? {} : { maxOutstanding: opts.maxOutstanding }),
     ...(opts.fallbackPriceMicroUsd === undefined ? {} : { fallbackPriceMicroUsd: opts.fallbackPriceMicroUsd }),
@@ -130,11 +131,14 @@ describe("sapling-proof server: enhanceRequirements", () => {
   it("refuses what it cannot issue", async () => {
     await expect(handler.enhanceRequirements({ ...template(), asset: "YED" }, RESOURCE)).rejects.toThrow(/YEC only/);
     await expect(handler.enhanceRequirements(template({ assetTransferMethod: "transparent" }), RESOURCE)).rejects.toThrow(/sapling-proof/);
-    await expect(handler.enhanceRequirements({ ...template(), network: "eip155:1" }, RESOURCE)).rejects.toThrow(/Ycash/);
+    await expect(handler.enhanceRequirements({ ...template(), network: "eip155:1" }, RESOURCE)).rejects.toThrow(/serves ycash:regtest/);
     await expect(handler.enhanceRequirements({ ...template(), amount: "0" }, RESOURCE)).rejects.toThrow(/amount/);
     await expect(handler.enhanceRequirements(template(), "")).rejects.toThrow(/resource/);
-    // a mainnet requirement on a regtest wallet: the address HRP gives it away
-    await expect(handler.enhanceRequirements({ ...template(), network: YCASH_MAINNET }, RESOURCE)).rejects.toThrow(/not a ycash:mainnet Sapling/);
+    // a mainnet requirement at a regtest handler
+    await expect(handler.enhanceRequirements({ ...template(), network: YCASH_MAINNET }, RESOURCE)).rejects.toThrow(/serves ycash:regtest/);
+    // a mainnet handler on a regtest wallet: the address HRP gives it away
+    const mainnet = new SaplingProofHandler({ network: YCASH_MAINNET, rpc: wallet, settlementStore: store, receiptKey: RECEIPT_KEY });
+    await expect(mainnet.enhanceRequirements({ ...template(), network: YCASH_MAINNET }, RESOURCE)).rejects.toThrow(/not a ycash:mainnet Sapling/);
   });
   it("enforces an issuance limit, freed when records are pruned", async () => {
     const h = makeHandler({ maxOutstanding: 1 });
@@ -143,6 +147,36 @@ describe("sapling-proof server: enhanceRequirements", () => {
     now = NOW + 600 + 150 + 3600 + 1;
     await h.server.registry.prune(now);
     await expect(h.enhanceRequirements(template(), RESOURCE)).resolves.toBeTruthy();
+  });
+});
+
+describe("sapling-proof handler: construction from the facilitator's SchemeDeps", () => {
+  it("takes network, store, operator range, capabilities, logger, base address and a hex receipt key", async () => {
+    const logs: string[] = [];
+    const caps: NodeCapabilities = { line: "v4", subversion: "", version: 0, yellowback: true, chain: "regtest" };
+    const h = new SaplingProofHandler({
+      network: YCASH_REGTEST,
+      rpc: wallet,
+      settlementStore: store,
+      confirmations: { minimum: 0, maximum: 6 },
+      capabilities: caps,
+      logger: { info: (m) => logs.push(m), warn: (m) => logs.push(m) },
+      baseAddress: "yregtestsapling1base",
+      receiptKey: Buffer.from(RECEIPT_KEY).toString("hex"),
+      now: () => now,
+    });
+    expect(h.receiptSigner.kid).toBe(es256kSigner(RECEIPT_KEY).kid);
+    const req = await h.enhanceRequirements(template(), RESOURCE);
+    expect(wallet.baseCalls).toBe(0); // the configured base address is used
+    await expect(h.enhanceRequirements(template({ confirmationPolicy: { confirmations: -1 } }), RESOURCE)).rejects.toThrow(/operator's range/);
+    wallet.pay(req.payTo, 1_500_000, req.extra.memo as string, 1);
+    expect((await h.settle(payloadFor(req), req)).success).toBe(true);
+    expect((await h.settle(payloadFor(req), req)).errorReason).toBe(ERR.duplicateSettlement);
+    expect(logs).toEqual(["sapling-proof settled", "sapling-proof settle refused"]);
+    const other = { ...req, network: YCASH_MAINNET };
+    expect(await h.settle(payloadFor(other), other)).toMatchObject({ errorReason: "network_mismatch" });
+    expect(await h.verify(payloadFor(other), other)).toMatchObject({ isValid: false, invalidReason: "network_mismatch" });
+    expect(() => new SaplingProofHandler({ network: YCASH_MAINNET, rpc: wallet, settlementStore: store, capabilities: caps, receiptKey: RECEIPT_KEY })).toThrow(/regtest, not ycash:mainnet/);
   });
 });
 
