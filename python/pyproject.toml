@@ -1,7 +1,7 @@
 [project]
 name = "x402-ycash"
 version = "0.1.0"
-description = "Ycash bindings for the x402 Python SDK: the exact scheme (YEC) facilitator and server, the v4 transaction codec and the Yellowback TRANSFER codec"
+description = "Ycash bindings for the x402 Python SDK: exact (YEC, YED, sapling-proof) and batch-settlement facilitators and servers, the v4 transaction codec and the Yellowback TRANSFER codec"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"

@@ -1,8 +1,10 @@
 """x402_ycash: Ycash bindings for the x402 Python SDK.
 
 Subpackages: ``tx`` (v4 codec, ZIP-243, keys, addresses, fee floor), ``yed`` (Yellowback TRANSFER
-codec, dollar floor), ``node`` (async ycashd JSON-RPC), ``exact`` (the exact scheme: facilitator,
-server, client), ``channel`` (payment-channel builders) and ``store`` (settlement stores).
+codec, dollar floor, overlay verdicts), ``node`` (async ycashd JSON-RPC), ``exact`` (the exact
+scheme, YEC and YED: facilitator, server, client), ``shielded`` (sapling-proof), ``batch``
+(batch-settlement channels: server, facilitator), ``channel`` (payment-channel builders) and
+``store`` (settlement and channel stores).
 """
 
 from .constants import (
