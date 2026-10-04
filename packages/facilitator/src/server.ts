@@ -46,7 +46,7 @@ export async function startFacilitator(config: FacilitatorConfig, opts: StartOpt
     logger,
     channelStore: new FileChannelStore(config.channelStorePath),
     ...(sp
-      ? { saplingProof: { receiptKey: sp.receiptKey, registry: new FileIssuedAddressRegistry(sp.registryPath), ...(sp.baseAddress ? { baseAddress: sp.baseAddress } : {}) } }
+      ? { saplingProof: { receiptKey: sp.receiptKey, registry: new FileIssuedAddressRegistry(sp.registryPath), ...(sp.baseAddress ? { baseAddress: sp.baseAddress } : {}), ...(sp.noteWaitMs !== undefined ? { noteWaitMs: sp.noteWaitMs } : {}) } }
       : {}),
   };
   const registered = (opts.register ?? registerSchemes)(facilitator, deps);

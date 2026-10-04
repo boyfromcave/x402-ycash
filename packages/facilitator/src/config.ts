@@ -27,6 +27,8 @@ export interface SaplingProofConfig {
   receiptKey: string;
   /** The issued-address registry file shared with the merchant's server. */
   registryPath: string;
+  /** How long settle waits for a just-sent note to reach the wallet (default 10 s). */
+  noteWaitMs?: number;
 }
 
 export interface FacilitatorConfig {
@@ -85,6 +87,7 @@ const fileSchema = z
     saplingBaseAddress: z.string().min(1),
     receiptKey: z.string().regex(/^[0-9a-fA-F]{64}$/, "must be 64 hex characters"),
     issuedAddressRegistryPath: z.string().min(1),
+    saplingNoteWaitMs: z.number().int().min(0).max(60_000),
     confirmations: confirmationsSchema,
     bodyLimit: z.string().regex(/^\d+(b|kb|mb)$/),
     logLevel: z.enum(LOG_LEVELS as [LogLevel, ...LogLevel[]]),
@@ -214,7 +217,9 @@ function resolveSaplingProof(file: z.output<typeof fileSchema>, env: Env, networ
   // The network comes from config; a base address of another network's HRP is a wrong wallet (X-F1).
   const hrp = shielded.SAPLING_HRP[network] + "1";
   if (baseAddress && !baseAddress.startsWith(hrp)) throw new ConfigError(`X402_SAPLING_BASE_ADDRESS must be a ${network} Sapling address (${hrp}…)`);
-  return { receiptKey: receiptKey.toLowerCase(), registryPath, ...(baseAddress ? { baseAddress } : {}) };
+  const noteWaitMs = intEnv(env, "X402_SAPLING_NOTE_WAIT_MS") ?? file.saplingNoteWaitMs;
+  if (noteWaitMs !== undefined && (noteWaitMs < 0 || noteWaitMs > 60_000)) throw new ConfigError("X402_SAPLING_NOTE_WAIT_MS must be 0..60000");
+  return { receiptKey: receiptKey.toLowerCase(), registryPath, ...(baseAddress ? { baseAddress } : {}), ...(noteWaitMs !== undefined ? { noteWaitMs } : {}) };
 }
 
 function resolveRpc(file: z.output<typeof fileSchema>, env: Env): RpcSource {
@@ -258,6 +263,6 @@ export function redactConfig(c: FacilitatorConfig): Record<string, unknown> {
     ...rest,
     rpc,
     apiKey: apiKey ? "(set)" : "(unset)",
-    saplingProof: saplingProof ? { baseAddress: saplingProof.baseAddress ?? "(wallet)", registryPath: saplingProof.registryPath, receiptKey: "(set)" } : "(off)",
+    saplingProof: saplingProof ? { baseAddress: saplingProof.baseAddress ?? "(wallet)", registryPath: saplingProof.registryPath, noteWaitMs: saplingProof.noteWaitMs, receiptKey: "(set)" } : "(off)",
   };
 }
