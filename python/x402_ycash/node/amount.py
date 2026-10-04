@@ -18,7 +18,7 @@ def zat_to_yec_string(zat: int) -> str:
     return f"{sign}{whole}.{frac:08d}"
 
 
-def yec_to_zat(yec: float | int | str | Decimal) -> int:
+def yec_to_zat(yec: float | str | Decimal) -> int:
     """A YEC amount the node printed (ValueFromAmount: a JSON number with at most 8 decimals) to
     zatoshis. JSON numbers are parsed as Decimal by the client (no float round trip); a float is
     formatted to 8 places first."""

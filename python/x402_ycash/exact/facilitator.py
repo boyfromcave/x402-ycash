@@ -116,7 +116,7 @@ class ExactYcashFacilitatorScheme:
                                   invalid_message="sapling-proof is not served by this facilitator", payer="")
         try:
             r = await verify_transparent(self._rpc, self._store, payload, requirements, self.limits)
-        except Exception as e:  # a node or transport failure says nothing about the payment
+        except Exception as e:  # noqa: BLE001  # a node or transport failure says nothing about the payment
             return VerifyResponse(is_valid=False, invalid_reason=ERR_SETTLEMENT_FAILED,
                                   invalid_message=f"node lookup failed: {e}", payer="")
         if isinstance(r, Failure):
@@ -155,7 +155,7 @@ class ExactYcashFacilitatorScheme:
                 await self._store.release(s.key)  # the node answered and did not accept it
                 return _failure(rejected[0], network, s.txid, rejected[1], v.payer)
             return await self._observe(s, requirements, v.payer)  # steps 4, 5
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # never raise out of settle: core expects a response
             log.warning("exact settle failed txid=%s error=%s", s.txid, e)
             return _failure(ERR_SETTLEMENT_FAILED, network, s.txid, str(e))
 
@@ -205,7 +205,7 @@ class ExactYcashFacilitatorScheme:
         """−1 in the mempool, the depth when mined, None when not seen."""
         try:
             out = await self._rpc.get_tx_out(s.txid, s.pay_to_vout, True)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return None  # a transient node error is not evidence of absence; keep polling
         if not out:
             return None

@@ -10,3 +10,16 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+  python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv venv --python 3.13 .venv
+      - run: uv pip install --python .venv/bin/python -e . pytest pytest-asyncio mypy ruff
+      - run: .venv/bin/ruff check x402_ycash tests
+      - run: .venv/bin/mypy x402_ycash
+      - run: .venv/bin/python -m pytest

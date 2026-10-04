@@ -89,7 +89,7 @@ def yed_channel_split(deposit_cents: int, cumulative_cents: int) -> YedChannelSp
     if not _deposit_ok(deposit_cents):
         raise ValueError(f"channel deposit {deposit_cents} cents is outside [{YED_MIN_OUTPUT_CENTS}, {YED_MAX_OUTPUT_CENTS}]")
     if not isinstance(cumulative_cents, int):
-        raise ValueError(f"cumulative {cumulative_cents} is not an integer")
+        raise TypeError(f"cumulative {cumulative_cents} is not an integer")
     if cumulative_cents < YED_MIN_OUTPUT_CENTS:
         raise ValueError(f"cumulative {cumulative_cents} cents is below the $1.00 floor")
     if cumulative_cents > deposit_cents:

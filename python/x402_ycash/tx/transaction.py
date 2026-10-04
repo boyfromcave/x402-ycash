@@ -154,10 +154,10 @@ def _check_shape(tx: Tx) -> None:
         for v, n, w in ((s.cv, 32, "cv"), (s.anchor, 32, "anchor"), (s.nullifier, 32, "nullifier"), (s.rk, 32, "rk"),
                         (s.zkproof, GROTH_PROOF_SIZE, "zkproof"), (s.spend_auth_sig, 64, "spendAuthSig")):
             _fixed(v, n, w)
-    for o in tx.shielded_outputs:
-        for v, n, w in ((o.cv, 32, "cv"), (o.cmu, 32, "cmu"), (o.ephemeral_key, 32, "ephemeralKey"),
-                        (o.enc_ciphertext, ENC_CIPHERTEXT_SIZE, "encCiphertext"),
-                        (o.out_ciphertext, OUT_CIPHERTEXT_SIZE, "outCiphertext"), (o.zkproof, GROTH_PROOF_SIZE, "zkproof")):
+    for d in tx.shielded_outputs:
+        for v, n, w in ((d.cv, 32, "cv"), (d.cmu, 32, "cmu"), (d.ephemeral_key, 32, "ephemeralKey"),
+                        (d.enc_ciphertext, ENC_CIPHERTEXT_SIZE, "encCiphertext"),
+                        (d.out_ciphertext, OUT_CIPHERTEXT_SIZE, "outCiphertext"), (d.zkproof, GROTH_PROOF_SIZE, "zkproof")):
             _fixed(v, n, w)
     for js in tx.join_splits:
         _fixed(js, JOINSPLIT_SIZE, "JSDescription")

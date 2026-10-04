@@ -4,15 +4,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from typing import Any, Protocol
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, ClassVar, Protocol
 
+from x402.interfaces import PaymentFlowConfig
 from x402.schemas import AssetAmount, Network, PaymentRequirements, Price, SupportedKind
 from x402.schemas.helpers import convert_to_token_amount, parse_money
 
 from .._sync import run_sync
 from ..constants import ASSET_YEC, ASSET_YED, DUST_ZAT, YED_MAX_OUTPUT_CENTS, YED_MIN_OUTPUT_CENTS, is_ycash_network
-from .constants import ATM_TRANSPARENT, FLOW_AUTHORIZATION, MAX_CONFIRMATIONS, MIN_CONFIRMATIONS, SCHEME_EXACT
+from .constants import ATM_TRANSPARENT, MAX_CONFIRMATIONS, MIN_CONFIRMATIONS, SCHEME_EXACT
 from .policy import CANONICAL_AMOUNT, asset_transfer_method_of, is_int, resolve_confirmation_policy
 
 MoneyParser = Callable[[str, str], AssetAmount | None]
@@ -70,7 +71,10 @@ class ExactYcashServerScheme:
 
     scheme = SCHEME_EXACT
     default_asset_transfer_method = ATM_TRANSPARENT
-    payment_flows = {ATM_TRANSPARENT: {"supported": (FLOW_AUTHORIZATION,), "default": FLOW_AUTHORIZATION}}
+    payment_flows: ClassVar[Mapping[str, PaymentFlowConfig]] = {
+        # literals, not FLOW_AUTHORIZATION: PaymentFlowConfig's fields are Literal-typed
+        ATM_TRANSPARENT: {"supported": ("authorization",), "default": "authorization"},
+    }
 
     def __init__(self, price_source: YecPriceSource | None = None, zero_conf_cap_zat: int | None = None) -> None:
         """``zero_conf_cap_zat``: a YEC payment up to this many zatoshis defaults to policy −1, larger
@@ -151,7 +155,7 @@ class ExactYcashServerScheme:
         if cap is None and self._price_source is not None:
             try:
                 cap = micro_usd_to_zat(_ONE_DOLLAR_MICRO_USD, self._price_source.micro_usd_per_yec(req.network))
-            except Exception:
+            except Exception:  # noqa: BLE001  # any price failure means no zero-conf default
                 cap = None  # no price, no zero-confirmation default: 1 is the safe side
         return -1 if cap is not None and int(req.amount) <= cap else 1
 
