@@ -45,7 +45,18 @@ export interface ShieldedExactFacilitatorConfig {
   receiptSigner: JwsSigner;
   /** Unix seconds; injectable for tests. */
   now?: () => number;
+  /**
+   * How long settle waits for the note to reach the merchant's wallet before answering
+   * not_received (default 10 s). The client presents the txid as soon as its z_sendmany returns,
+   * before the payment has crossed the network; nothing is claimed while waiting.
+   */
+  noteWaitMs?: number;
+  /** Poll interval of that wait (default 500 ms). */
+  notePollMs?: number;
 }
+
+const DEFAULT_NOTE_WAIT_MS = 10_000;
+const DEFAULT_NOTE_POLL_MS = 500;
 
 /** What the checks established, before the claim. */
 interface Checked {
@@ -94,7 +105,7 @@ export class ShieldedExactFacilitator {
 
   async settle(payload: PaymentPayload, requirements: PaymentRequirements): Promise<SettleResponse> {
     const network = requirements.network;
-    const r = await this.check(payload, requirements);
+    const r = await this.checkWaitingForNote(payload, requirements);
     if (!r.ok) {
       const res: SettleResponse = { success: false, errorReason: r.reason, errorMessage: r.message, transaction: r.txid, network };
       if (r.reason === ERR.settlementPending) res.extra = { status: "pending", confirmations: r.observed ?? -1 };
@@ -118,6 +129,17 @@ export class ShieldedExactFacilitator {
       // The resource has not run: an attempt that ends abnormally must not hold the claim.
       await this.config.store.release(key);
       return { success: false, errorReason: ERR.unexpected, errorMessage: `receipt signing failed: ${String(e)}`, transaction: r.value.txid, network };
+    }
+  }
+
+  /** The checks, repeated while the only failure is a note not yet received, up to noteWaitMs. */
+  private async checkWaitingForNote(payload: PaymentPayload, requirements: PaymentRequirements): Promise<Outcome> {
+    const pollMs = this.config.notePollMs ?? DEFAULT_NOTE_POLL_MS;
+    const deadline = Date.now() + (this.config.noteWaitMs ?? DEFAULT_NOTE_WAIT_MS);
+    for (;;) {
+      const r = await this.check(payload, requirements);
+      if (r.ok || r.reason !== ERR.notReceived || Date.now() + pollMs > deadline) return r;
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
     }
   }
 

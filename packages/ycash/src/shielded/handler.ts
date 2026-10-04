@@ -48,6 +48,9 @@ export interface SaplingProofHandlerConfig extends Omit<ShieldedExactServerConfi
   baseAddress?: string;
   /** The receipt key: a 32-byte secp256k1 private key (bytes or hex), or a ready JWS signer. */
   receiptKey: Uint8Array | string | JwsSigner;
+  /** As ShieldedExactFacilitatorConfig.noteWaitMs (default 10 s). */
+  noteWaitMs?: number;
+  notePollMs?: number;
 }
 
 export class SaplingProofHandler implements ShieldedExactHandlerShape {
@@ -67,24 +70,26 @@ export class SaplingProofHandler implements ShieldedExactHandlerShape {
     this.logger = config.logger;
     const k = config.receiptKey;
     this.receiptSigner = typeof k === "object" && "sign" in k ? k : es256kSigner(typeof k === "string" ? Uint8Array.from(Buffer.from(k, "hex")) : k);
-    this.server = new ShieldedExactServer({ ...config, ...(config.baseAddress ? { baseAddress: config.baseAddress } : {}) });
+    // The operator's range is checked before issuing (no address used, nothing counted toward maxOutstanding).
+    this.server = new ShieldedExactServer({
+      ...config,
+      ...(config.baseAddress ? { baseAddress: config.baseAddress } : {}),
+      ...(config.confirmations ? { confirmationRange: config.confirmations } : {}),
+    });
     this.facilitator = new ShieldedExactFacilitator({
       rpc: config.rpc,
       registry: this.server.registry,
       store: config.settlementStore,
       receiptSigner: this.receiptSigner,
       ...(config.now ? { now: config.now } : {}),
+      ...(config.noteWaitMs !== undefined ? { noteWaitMs: config.noteWaitMs } : {}),
+      ...(config.notePollMs !== undefined ? { notePollMs: config.notePollMs } : {}),
     });
   }
 
   async enhanceRequirements(requirements: PaymentRequirements, resource: ResourceInfo | string): Promise<PaymentRequirements> {
     this.checkNetwork(requirements);
-    const out = await this.server.enhanceRequirements(requirements, resource);
-    const c = (out.extra.confirmationPolicy as { confirmations: number }).confirmations;
-    if (this.confirmations && (c < this.confirmations.minimum || c > this.confirmations.maximum)) {
-      throw new Error(`confirmations ${c} is outside the operator's range [${this.confirmations.minimum}, ${this.confirmations.maximum}]`);
-    }
-    return out;
+    return this.server.enhanceRequirements(requirements, resource);
   }
 
   async verify(payload: PaymentPayload, requirements: PaymentRequirements): Promise<VerifyResponse> {

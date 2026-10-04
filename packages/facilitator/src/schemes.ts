@@ -43,33 +43,17 @@ export interface SchemeDeps {
   saplingProof?: SaplingProofDeps;
 }
 
-/** `invalid_exact_ycash_not_received`: no note of the txid at payTo yet (spec step 4: still reachable). */
-const NOT_RECEIVED = "invalid_exact_ycash_not_received";
-const DEFAULT_NOTE_WAIT_MS = 10_000;
-const NOTE_POLL_MS = 500;
-
 /**
  * The facilitator half of a SaplingProofHandler, as the exact scheme's `ShieldedExactHandler`.
  * Issuing requirements is the merchant's job (its server writes the shared registry); the
  * facilitator only verifies and settles, so `enhanceRequirements` is never called here.
- *
- * Over HTTP the client presents the txid as soon as its `z_sendmany` returns, before the payment
- * has crossed the network to the merchant's node; settle therefore waits a bounded time for the
- * note (nothing is claimed meanwhile), well inside core's settle timeout.
+ * The bounded wait for the note (the client presents the txid before its payment reaches the
+ * merchant's node) is the mechanism's (`noteWaitMs` on the handler), fed by X402_SAPLING_NOTE_WAIT_MS.
  */
-export function facilitatorHalf(handler: SaplingProofHandler, opts: { noteWaitMs?: number; pollMs?: number } = {}): exact.ShieldedExactHandler {
-  const waitMs = opts.noteWaitMs ?? DEFAULT_NOTE_WAIT_MS;
-  const pollMs = opts.pollMs ?? NOTE_POLL_MS;
+export function facilitatorHalf(handler: SaplingProofHandler): exact.ShieldedExactHandler {
   return {
     verify: (payload, requirements) => handler.verify(payload, requirements),
-    async settle(payload, requirements) {
-      const deadline = Date.now() + waitMs;
-      for (;;) {
-        const res = await handler.settle(payload, requirements);
-        if (res.success || res.errorReason !== NOT_RECEIVED || Date.now() + pollMs > deadline) return res;
-        await new Promise(r => setTimeout(r, pollMs));
-      }
-    },
+    settle: (payload, requirements) => handler.settle(payload, requirements),
     enhanceRequirements: () => Promise.reject(new Error("a facilitator does not issue sapling-proof requirements; the merchant's server does")),
   };
 }
@@ -92,8 +76,9 @@ export function registerSchemes(facilitator: x402Facilitator, deps: SchemeDeps):
       receiptKey: deps.saplingProof.receiptKey,
       registry: deps.saplingProof.registry,
       ...(deps.saplingProof.baseAddress ? { baseAddress: deps.saplingProof.baseAddress } : {}),
+      ...(deps.saplingProof.noteWaitMs !== undefined ? { noteWaitMs: deps.saplingProof.noteWaitMs } : {}),
     });
-    shielded = facilitatorHalf(handler, deps.saplingProof.noteWaitMs !== undefined ? { noteWaitMs: deps.saplingProof.noteWaitMs } : {});
+    shielded = facilitatorHalf(handler);
   }
   facilitator.register(
     deps.network,

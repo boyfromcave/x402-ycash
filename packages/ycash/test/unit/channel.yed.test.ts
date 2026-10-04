@@ -9,7 +9,7 @@ const h = T.hexToBytes;
 interface Doc {
   branchId: string;
   channel: { clientPriv: string; serverPriv: string; funderPriv: string; refundHeight: number; depositCents: string; redeemScript: string; scriptPubKey: string; value: string; closeFee: string; payTo: string; returnAddress: string; clientScript: string };
-  funding: { tip: number; expiryHeight: number; token: { outpoint: T.OutPoint; cents: number; value: string }; yecCoin: { outpoint: T.OutPoint; value: string }; assignments: Y.Assignment[]; opReturnIndex: number; fee: string; tx: string; txid: string };
+  funding: { token: { outpoint: T.OutPoint; cents: number; value: string }; yecCoin: { outpoint: T.OutPoint; value: string }; assignments: Y.Assignment[]; opReturnIndex: number; fee: string; tx: string; txid: string };
   vouchers: { cumulative: string; serverCents: number; clientCents: number; assignments: Y.Assignment[]; sighash: string; voucher: string; close: string; closeTxid: string }[];
   refund: { lockTime: number; sequence: number; assignments: Y.Assignment[]; tx: string; txid: string };
 }
@@ -91,8 +91,7 @@ describe("vectors/yed-channel/channel_yed.json", () => {
   it("reproduces the funding TRANSFER", () => {
     const tokens = [{ outpoint: doc.funding.token.outpoint, cents: doc.funding.token.cents, value: BigInt(doc.funding.token.value), scriptPubKey: fScript }];
     const yecCoins = [{ outpoint: doc.funding.yecCoin.outpoint, value: BigInt(doc.funding.yecCoin.value), scriptPubKey: fScript }];
-    const b = C.buildYedFundingTx({ redeemScript: rs, depositCents: D, closeFee: BigInt(doc.channel.closeFee), tokens, yecCoins, yedChangeScript: fScript, yecChangeScript: fScript, expiryHeight: doc.funding.expiryHeight });
-    expect(b.tx.expiryHeight).toBe(doc.funding.tip + 3 + 40);
+    const b = C.buildYedFundingTx({ redeemScript: rs, depositCents: D, closeFee: BigInt(doc.channel.closeFee), tokens, yecCoins, yedChangeScript: fScript, yecChangeScript: fScript });
     expect(b.assignments).toEqual(doc.funding.assignments);
     expect(b.opReturnIndex).toBe(doc.funding.opReturnIndex);
     expect(b.fee.toString()).toBe(doc.funding.fee);

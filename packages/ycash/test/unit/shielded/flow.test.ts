@@ -75,13 +75,15 @@ let store: InMemorySettlementStore;
 let handler: SaplingProofHandler;
 let now: number;
 
-function makeHandler(opts: { signer?: JwsSigner; maxOutstanding?: number; fallbackPriceMicroUsd?: number } = {}): SaplingProofHandler {
+function makeHandler(opts: { signer?: JwsSigner; maxOutstanding?: number; fallbackPriceMicroUsd?: number; noteWaitMs?: number } = {}): SaplingProofHandler {
   return new SaplingProofHandler({
     network: YCASH_REGTEST,
     rpc: wallet,
     settlementStore: store,
     receiptKey: opts.signer ?? RECEIPT_KEY,
     now: () => now,
+    noteWaitMs: opts.noteWaitMs ?? 0, // the unit tests answer not_received at once; the wait has its own test
+    notePollMs: 5,
     ...(opts.maxOutstanding === undefined ? {} : { maxOutstanding: opts.maxOutstanding }),
     ...(opts.fallbackPriceMicroUsd === undefined ? {} : { fallbackPriceMicroUsd: opts.fallbackPriceMicroUsd }),
   });
@@ -140,6 +142,16 @@ describe("sapling-proof server: enhanceRequirements", () => {
     const mainnet = new SaplingProofHandler({ network: YCASH_MAINNET, rpc: wallet, settlementStore: store, receiptKey: RECEIPT_KEY });
     await expect(mainnet.enhanceRequirements({ ...template(), network: YCASH_MAINNET }, RESOURCE)).rejects.toThrow(/not a ycash:mainnet Sapling/);
   });
+  it("checks the operator's range before issuing: a refusal uses no address and does not count toward maxOutstanding", async () => {
+    const h = new SaplingProofHandler({
+      network: YCASH_REGTEST, rpc: wallet, settlementStore: store, receiptKey: RECEIPT_KEY, now: () => now,
+      confirmations: { minimum: 1, maximum: 6 }, maxOutstanding: 1,
+    });
+    for (let i = 0; i < 3; i++) await expect(h.enhanceRequirements(template({ confirmationPolicy: { confirmations: -1 } }), RESOURCE)).rejects.toThrow(/operator's range/);
+    expect(wallet.divCalls).toBe(0);
+    expect(await h.server.registry.outstanding(now)).toBe(0);
+    await expect(h.enhanceRequirements(template(), RESOURCE)).resolves.toMatchObject({ payTo: "yregtestsapling1div1" });
+  });
   it("enforces an issuance limit, freed when records are pruned", async () => {
     const h = makeHandler({ maxOutstanding: 1 });
     await h.enhanceRequirements(template(), RESOURCE);
@@ -168,7 +180,9 @@ describe("sapling-proof handler: construction from the facilitator's SchemeDeps"
     expect(h.receiptSigner.kid).toBe(es256kSigner(RECEIPT_KEY).kid);
     const req = await h.enhanceRequirements(template(), RESOURCE);
     expect(wallet.baseCalls).toBe(0); // the configured base address is used
+    const issued = wallet.divCalls;
     await expect(h.enhanceRequirements(template({ confirmationPolicy: { confirmations: -1 } }), RESOURCE)).rejects.toThrow(/operator's range/);
+    expect(wallet.divCalls).toBe(issued); // refused before issuing: no address used
     wallet.pay(req.payTo, 1_500_000, req.extra.memo as string, 1);
     expect((await h.settle(payloadFor(req), req)).success).toBe(true);
     expect((await h.settle(payloadFor(req), req)).errorReason).toBe(ERR.duplicateSettlement);
@@ -247,6 +261,20 @@ describe("sapling-proof facilitator: settle", () => {
     // malformed txid
     expect(await handler.settle(payloadFor(req, TXID.toUpperCase()), req)).toMatchObject({ errorReason: ERR.txidMalformed });
     expect(await handler.settle({ ...payloadFor(req), payload: {} }, req)).toMatchObject({ errorReason: ERR.txidMalformed });
+  });
+  it("waits a bounded time (noteWaitMs) for a note still crossing the network, and no longer; other refusals return at once", async () => {
+    const h = makeHandler({ noteWaitMs: 2_000 });
+    const req = await h.enhanceRequirements(template(), RESOURCE);
+    setTimeout(() => wallet.pay(req.payTo, 1_500_000, req.extra.memo as string, 1), 50);
+    expect(await h.settle(payloadFor(req), req)).toMatchObject({ success: true });
+    const short = makeHandler({ noteWaitMs: 40 });
+    const other = await short.enhanceRequirements(template(), RESOURCE);
+    let t0 = Date.now();
+    expect(await short.settle(payloadFor(other, "bb".repeat(32)), other)).toMatchObject({ errorReason: ERR.notReceived });
+    expect(Date.now() - t0).toBeLessThan(1_000);
+    t0 = Date.now();
+    expect(await makeHandler({ noteWaitMs: 5_000 }).settle(payloadFor(req, TXID.toUpperCase()), req)).toMatchObject({ errorReason: ERR.unknownInstrument });
+    expect(Date.now() - t0).toBeLessThan(200);
   });
   it("binds the proof to the request: a txid that paid another request settles nothing here", async () => {
     const a = await issue();
