@@ -72,8 +72,16 @@ async function load(path: string): Promise<Devnet> {
   // long run the devnet's one-shot connections fall apart and the mesh can split ({0,1,4} and {2,3}
   // was seen). A reconnect does not replay the mempool, so heal both: re-add every peer, then hand each
   // node the mempool transactions it lacks. Errors are ignored: a refusal is the node's to make.
-  const p2pPorts = nodes.map((_, i) => /^port=(\d+)$/m.exec(readFileSync(join(state.dir, `node${i}`, "ycash.conf"), "utf8"))?.[1]);
+  // Each node's P2P port from the devnet's node<i>/ycash.conf; a node list without them skips the reconnect.
+  const p2pPort = (i: number): string | undefined => {
+    try {
+      return /^port=(\d+)$/m.exec(readFileSync(join(state.dir, `node${i}`, "ycash.conf"), "utf8"))?.[1];
+    } catch {
+      return undefined;
+    }
+  };
   const heal = async (pools: string[][]) => {
+    const p2pPorts = nodes.map((_, i) => p2pPort(i));
     for (const [i, node] of nodes.entries()) {
       const others = p2pPorts.filter((port, j) => j !== i && port);
       for (const port of others) await node.call("addnode", [`127.0.0.1:${port}`, "onetry"]).catch(() => undefined);
