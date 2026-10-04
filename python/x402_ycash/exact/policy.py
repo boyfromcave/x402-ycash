@@ -37,7 +37,8 @@ def asset_transfer_method_of(extra: dict[str, Any] | None) -> Any:
 
 
 def is_shielded_method(extra: dict[str, Any] | None) -> bool:
-    return asset_transfer_method_of(extra) == ATM_SAPLING_PROOF
+    """``sapling-proof`` or ``sapling``: routed to the shielded handler (x402_ycash.shielded)."""
+    return asset_transfer_method_of(extra) in (ATM_SAPLING_PROOF, ATM_SAPLING_RESERVED)
 
 
 def is_int(v: Any) -> bool:
@@ -139,7 +140,7 @@ def check_transparent_method(extra: dict[str, Any] | None) -> tuple[str, str] | 
     reason is "method", "flow" or "fees"."""
     method = asset_transfer_method_of(extra)
     if method == ATM_SAPLING_RESERVED:
-        return "method", "assetTransferMethod sapling is reserved, not yet specified"
+        return "method", "assetTransferMethod sapling is a shielded method (x402_ycash.shielded), not transparent"
     if method != ATM_TRANSPARENT:
         return "method", f"unknown assetTransferMethod {method}"
     extra = extra or {}

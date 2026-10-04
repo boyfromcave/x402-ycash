@@ -31,6 +31,12 @@ export interface AgentConfig {
   maxPaymentZat: string;
   /** sapling-proof: the source address z_sendmany pays from (a Sapling address for tier P1). */
   shieldedFrom?: string;
+  /**
+   * sapling: AGENT_SAPLING_BUILDER, the Sapling transaction builder (an http(s) URL of
+   * `x402-light serve`, or a shell command; contract in x402-ycash-mechanism shielded/builder.ts).
+   * Absent, the agent refuses sapling routes.
+   */
+  saplingBuilder?: string;
   /** batch-settlement: where channel records (with their keys) are kept; default in memory. */
   channelStorePath?: string;
   /** batch-settlement: the deposit D of a new channel, zatoshis; default amount × 100, capped at maxDeposit. */
@@ -123,6 +129,7 @@ export function loadAgentConfig(env: Env = process.env): AgentConfig {
     signer,
     maxPaymentZat,
     ...(env.AGENT_SHIELDED_FROM ? { shieldedFrom: env.AGENT_SHIELDED_FROM } : {}),
+    ...(env.AGENT_SAPLING_BUILDER ? { saplingBuilder: env.AGENT_SAPLING_BUILDER } : {}),
     ...(env.AGENT_CHANNEL_STORE ? { channelStorePath: env.AGENT_CHANNEL_STORE } : {}),
     ...(deposit ? { channelDepositZat: BigInt(deposit) } : {}),
     ...(maxDeposit ? { channelMaxDepositZat: BigInt(maxDeposit) } : {}),

@@ -1,7 +1,7 @@
 [project]
 name = "x402-ycash"
 version = "0.1.0"
-description = "Ycash bindings for the x402 Python SDK: exact (YEC, YED, sapling-proof) and batch-settlement facilitators and servers, the v4 transaction codec and the Yellowback TRANSFER codec"
+description = "Ycash bindings for the x402 Python SDK: exact (YEC, YED, sapling-proof, sapling) and batch-settlement facilitators and servers, the v4 transaction codec and the Yellowback TRANSFER codec"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
@@ -9,6 +9,9 @@ dependencies = [
     "x402>=2.25.0,<3",
     "httpx>=0.28.1",
     "coincurve>=21.0.0",
+    # ChaCha20-Poly1305 for Sapling note trial decryption (the `sapling` facilitator); Jubjub, Pedersen
+    # and BLAKE2 are pure Python / hashlib. Neither the stdlib nor coincurve has the AEAD.
+    "cryptography>=42",
 ]
 
 [dependency-groups]

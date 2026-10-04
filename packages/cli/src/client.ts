@@ -13,6 +13,8 @@ import {
   LwdChain,
   LwdUtxoSource,
   rpcWalletFunder,
+  SaplingExactClient,
+  saplingBuilderFrom,
   ShieldedExactClient,
   tx,
   utxoSourceFunder,
@@ -62,6 +64,8 @@ export function buildClient(config: CliConfig): PayingClient {
   const source = config.wif ? (config.lwd ? new LwdUtxoSource(config.lwd, held) : new exact.RpcUtxoSource(mustNode(node), { importAddress: true, ...held })) : undefined;
   const transparent = new exact.ExactYcashScheme(config.wif && source ? new exact.LocalKeySigner(config.wif, source) : new exact.RpcWalletSigner(mustNode(node), held));
   const shielded = config.shieldedFrom ? new ShieldedExactClient({ rpc: mustNode(node), from: config.shieldedFrom }) : undefined;
+  // sapling: the external builder signs, nothing is broadcast here; the node (if any) gives the tip for nExpiryHeight.
+  const sapling = config.saplingBuilder ? new SaplingExactClient({ builder: saplingBuilderFrom(config.saplingBuilder), ...(node ? { chain: node } : {}) }) : undefined;
   // Both assets; the channel's remainder returns to the WIF key's address or a new wallet address.
   const funder = config.wif && source ? utxoSourceFunder(tx.decodeWif(config.wif, config.network).privKey, source) : rpcWalletFunder(mustNode(node), held);
   const deposit = depositFor(config);
@@ -79,7 +83,7 @@ export function buildClient(config: CliConfig): PayingClient {
     ...(config.maxCloseFeeZat !== undefined ? { maxCloseFee: { [ASSET_YEC]: config.maxCloseFeeZat, [ASSET_YED]: config.maxCloseFeeZat } } : {}),
   });
   const client = new x402Client()
-    .register(config.network, new exact.ExactYcashMethodRouter({ transparent, ...(shielded ? { shielded } : {}) }))
+    .register(config.network, new exact.ExactYcashMethodRouter({ transparent, ...(shielded ? { shielded } : {}), ...(sapling ? { sapling } : {}) }))
     .register(config.network, channels);
   // YEC is not USD-pegged, so it needs an explicit allowance with an atomic cap (spec "Assets and
   // Amounts"); YED is a default asset with core's $1 cap (X-F43), replaced by the CLI's own in cents.

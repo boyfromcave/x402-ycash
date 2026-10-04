@@ -10,7 +10,7 @@ from ..constants import YCASH_MAINNET, YCASH_REGTEST, YCASH_TESTNET
 SCHEME_EXACT = "exact"
 ASSET_TRANSFER_METHOD_SAPLING_PROOF = "sapling-proof"
 ASSET_TRANSFER_METHOD_SAPLING = "sapling"
-"""Reserved (plan X4b) and refused until specified."""
+"""The facilitator-submitted shielded method (plan X4b; x402_ycash.shielded.sapling_facilitator)."""
 PAYMENT_FLOW_UPFRONT = "upfront"
 
 MEMO_PREFIX = "x402:"

@@ -146,6 +146,7 @@ be used, with the same keys in camelCase; the environment wins over the file.
 | `X402_RECEIPT_KEY` + `X402_ISSUED_REGISTRY` | (unset) | Both turn on `sapling-proof`: the receipt key (64 hex, a secp256k1 private key; never logged) and the issued-address registry file shared with the merchant. |
 | `X402_SAPLING_BASE_ADDRESS`, `X402_SAPLING_NOTE_WAIT_MS` | (wallet's), `10000` | The merchant's base Sapling address; how long settle waits for a just-sent note to reach the wallet. |
 | `X402_SAPLING_ISSUER`, `X402_SAPLING_VIEWING_KEY`, `X402_SAPLING_START_INDEX`, `X402_SAPLING_INDEX_FILE` | `node-wallet`, (unset), `1099511627776` (2^40), `x402-ycash-sapling-index.json` | `offline` is the viewing-key setup: addresses are issued from the merchant's `zxview…` key, and the node holds only that key (checked at startup). See docs/mainnet-runbook.md, "Shielded layout". |
+| `X402_SHIELDED_METHODS`, `X402_SAPLING_MAINNET_OK` | `sapling-proof`, (unset) | The shielded methods served, a comma list of `sapling-proof` and `sapling`. `sapling` (the facilitator-submitted method) trial-decrypts the client's transaction with the offline issuer's viewing key, so it needs `X402_SAPLING_ISSUER=offline`; it is refused on `ycash:mainnet` unless `X402_SAPLING_MAINNET_OK=1`, since the spec says not to list it there before the end-to-end proof against the Rust light client exists. `/supported` lists the methods. |
 | `X402_API_KEY` | (unset) | When set, `/verify` and `/settle` require `Authorization: Bearer <key>`. |
 | `X402_BODY_LIMIT`, `X402_LOG_LEVEL`, `X402_SHUTDOWN_TIMEOUT_MS`, `X402_NODE_WAIT_MS`, `X402_RPC_TIMEOUT_MS` | `512kb`, `info`, `30000`, `60000`, `30000` | |
 
@@ -154,7 +155,9 @@ be used, with the same keys in camelCase; the environment wins over the file.
 - `examples/merchant-express` sells its routes through `@x402/express`: `GET /exact/quote` and
   `GET /exact/ticker` (exact, transparent YEC; the ticker is priced under the zero-confirmation cap
   `MERCHANT_ZERO_CONF_CAP_ZAT`, so it is served on mempool acceptance), `GET /channel/search` (a YEC
-  channel) and `GET /shielded/report` (shielded YEC to a fresh diversified address per request).
+  channel) and `GET /shielded/report` (shielded YEC to a fresh diversified address per request), and
+  `GET /shielded/private-report` (`sapling`: the client hands over a signed Sapling transaction, charged
+  only once served; `PRICE_PRIVATE_REPORT_ZAT`), offered only while the facilitator lists `sapling`.
   Exact needs only `FACILITATOR_URL` and `MERCHANT_PAY_TO`. The channel route needs the merchant's
   node (`MERCHANT_DEVNET_JSON` or `MERCHANT_RPC_*`) and `MERCHANT_CHANNEL_KEY` (the server key S,
   64 hex), with `MERCHANT_MAX_DEPOSIT_ZAT`, `MERCHANT_CHANNEL_STORE`, `MERCHANT_MIN_LOCK_BLOCKS`,
@@ -169,7 +172,10 @@ be used, with the same keys in camelCase; the environment wins over the file.
   holds (`AGENT_WIF`, its coins listed by the node, or by lightwalletd with `AGENT_LWD_URL` and no
   node at all) or with the node's wallet. It pays exact
   routes, channels (`AGENT_CHANNEL_STORE`, `AGENT_CHANNEL_DEPOSIT_ZAT`) and, with
-  `AGENT_SHIELDED_FROM`, sapling-proof routes. Run it with `npm start -w x402-ycash-example-agent-client`.
+  `AGENT_SHIELDED_FROM`, sapling-proof routes; with `AGENT_SAPLING_BUILDER` (CLI: `--sapling-builder`), sapling
+  routes, paid with a signed transaction from an external builder: an http(s) URL of `x402-light serve`
+  (JSON-RPC `build {to, amountZat, memoHex, expiryHeight?} → {txHex, txid}`) or a shell command speaking the
+  same JSON on stdin/stdout (`packages/ycash/src/shielded/builder.ts`). Without one, sapling routes are refused. Run it with `npm start -w x402-ycash-example-agent-client`.
 
   Two limits protect the agent's funds, and they are independent of anything the merchant says:
   - **`MAX_PAYMENT_ZAT`**, the spend control, caps each payment's `amount` (and so each channel

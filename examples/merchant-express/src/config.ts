@@ -64,6 +64,8 @@ export interface MerchantConfig {
   priceTickerZat: string;
   priceChannelZat: string;
   priceShieldedZat: string;
+  /** The sapling route's price (PRICE_PRIVATE_REPORT_ZAT). */
+  pricePrivateReportZat: string;
   /** exact YEC payments up to this many zatoshis default to policy −1 (default: the ticker price). */
   zeroConfCapZat: bigint;
   /** The merchant's node: the channel server's chain view, and the wallet that issues shielded addresses. */
@@ -207,6 +209,7 @@ export function loadMerchantConfig(env: Env = process.env): MerchantConfig {
     priceTickerZat,
     priceChannelZat: zat(env, "PRICE_CHANNEL_ZAT", "1000"),
     priceShieldedZat: zat(env, "PRICE_SHIELDED_ZAT", "1500000"),
+    pricePrivateReportZat: zat(env, "PRICE_PRIVATE_REPORT_ZAT", "1500000"),
     zeroConfCapZat: BigInt(zat(env, "MERCHANT_ZERO_CONF_CAP_ZAT", priceTickerZat)),
     ...(wallet ? { wallet } : {}),
     ...(channel ? { channel } : {}),

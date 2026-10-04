@@ -106,7 +106,9 @@ class ExactYcashFacilitatorScheme:
         _ = network
         return {
             "assets": ["YEC", "YED"] if self.yellowback else ["YEC"],
-            "assetTransferMethods": [ATM_TRANSPARENT, ATM_SAPLING_PROOF] if self._shielded else [ATM_TRANSPARENT],
+            # The shielded handler's own methods (a ShieldedMethodRouter lists sapling-proof and/or sapling).
+            "assetTransferMethods": [ATM_TRANSPARENT, *getattr(self._shielded, "flows", {ATM_SAPLING_PROOF: "upfront"})]
+            if self._shielded else [ATM_TRANSPARENT],
             "areFeesSponsored": False,
             "confirmations": {"minimum": self.limits.min_confirmations, "maximum": self.limits.max_confirmations},
         }
@@ -136,7 +138,7 @@ class ExactYcashFacilitatorScheme:
             averify = getattr(self._shielded, "averify", None)
             if averify is None:
                 return VerifyResponse(is_valid=False, invalid_reason=ERR_PAYMENT_FLOW,
-                                      invalid_message="sapling-proof is upfront: settle, not verify", payer="")
+                                      invalid_message="this shielded method is upfront: settle, not verify", payer="")
             result: VerifyResponse = await averify(payload, requirements)
             return result
         try:

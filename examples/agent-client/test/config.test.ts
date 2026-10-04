@@ -76,3 +76,69 @@ describe("createAgent", () => {
     await expect(a.call("http://x/r")).rejects.toThrow(/maxAmountPerPayment|spendControls/);
   });
 });
+
+describe("sapling (AGENT_SAPLING_BUILDER)", () => {
+  const MEMO = "x402:" + "d4".repeat(32);
+  const offer = (payTo: string) => ({
+    scheme: "exact",
+    network: "ycash:regtest",
+    asset: "YEC",
+    amount: "1500000",
+    payTo,
+    maxTimeoutSeconds: 900,
+    extra: { assetTransferMethod: "sapling", areFeesSponsored: false, memo: MEMO, expiresAt: Math.floor(Date.now() / 1000) + 900 },
+  });
+  const required = (payTo: string) => ({ x402Version: 2, resource: { url: "http://shop/shielded/private-report", description: "", mimeType: "" }, accepts: [offer(payTo)] });
+
+  it("reads the builder, joins sapling to exact, and refuses sapling routes cleanly without one", async () => {
+    expect(loadAgentConfig({ ...node, AGENT_SAPLING_BUILDER: "x402-light build" }).saplingBuilder).toBe("x402-light build");
+    expect(createAgent(loadAgentConfig({ ...node, AGENT_SAPLING_BUILDER: "http://127.0.0.1:1/" })).schemes).toEqual(["exact (transparent, sapling)", "batch-settlement"]);
+    const pr = required("yregtestsapling1x");
+    const res = new Response("{}", { status: 402, headers: { "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(pr)).toString("base64") } });
+    const a = createAgent(loadAgentConfig({ ...node, MAX_PAYMENT_ZAT: "5000000" }), undefined, async () => res.clone());
+    await expect(a.call("http://shop/shielded/private-report")).rejects.toThrow(/no Sapling transaction builder is configured/);
+  });
+
+  it("pays a sapling 402 with the builder's transaction: the expiry from the node's tip, the hex in payload.transaction", async () => {
+    const { createServer } = await import("node:http");
+    const { addressOf, buildPaymentTx, TEST_KEY } = await import("../../../packages/ycash/test/unit/shielded/saplingBuild.js");
+    const payTo = addressOf(TEST_KEY);
+    const TIP = 400;
+    const built = buildPaymentTx({ notes: [{ key: TEST_KEY, index: payTo.index, value: 1_500_000n, memo: MEMO }], valueBalance: 1000n, expiryHeight: TIP + 3 + 12 });
+    const builds: unknown[] = [];
+    // One endpoint plays the agent's node (getblockcount) and x402-light serve (build).
+    const server = createServer((rq, rs) => {
+      let body = "";
+      rq.on("data", (c: Buffer) => (body += c.toString()));
+      rq.on("end", () => {
+        const call = JSON.parse(body) as { id: number; method: string; params: unknown };
+        rs.setHeader("content-type", "application/json");
+        if (call.method === "getblockcount") return rs.end(JSON.stringify({ id: call.id, result: TIP, error: null }));
+        builds.push(call.params);
+        rs.end(JSON.stringify({ jsonrpc: "2.0", id: call.id, result: { txHex: built.hex, txid: built.txid } }));
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+    try {
+      let presented: { payload?: { transaction?: string }; accepted?: { extra?: Record<string, unknown> } } | undefined;
+      const shop: typeof fetch = async (input, init) => {
+        const sig = (input instanceof Request ? input.headers : new Headers(init?.headers)).get("PAYMENT-SIGNATURE");
+        if (!sig) {
+          const pr = required(payTo.address);
+          return new Response("{}", { status: 402, headers: { "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(pr)).toString("base64") } });
+        }
+        presented = JSON.parse(Buffer.from(sig, "base64").toString("utf8")) as typeof presented;
+        return new Response(JSON.stringify({ paidWith: "exact/sapling" }), { status: 200 });
+      };
+      const a = createAgent(loadAgentConfig({ AGENT_RPC_URL: url, AGENT_RPC_USER: "u", AGENT_RPC_PASSWORD: "p", AGENT_SAPLING_BUILDER: url, MAX_PAYMENT_ZAT: "5000000" }), undefined, shop);
+      const r = await a.call("http://shop/shielded/private-report");
+      expect(r.status).toBe(200);
+      expect(presented?.payload).toEqual({ transaction: built.hex });
+      expect(presented?.accepted?.extra).toMatchObject({ assetTransferMethod: "sapling", memo: MEMO });
+      expect(builds).toEqual([{ to: payTo.address, amountZat: "1500000", memoHex: Buffer.from(MEMO).toString("hex"), expiryHeight: TIP + 3 + 12 }]);
+    } finally {
+      server.close();
+    }
+  });
+});

@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -64,6 +64,17 @@ describe("startFacilitator", () => {
     const supported = (await (await fetch(`${running.url}/supported`)).json()) as { kinds: { scheme: string; extra: Record<string, unknown> }[] };
     expect(supported.kinds.find(k => k.scheme === "exact")?.extra).toMatchObject({ assetTransferMethods: ["transparent", "sapling-proof"] });
     expect(logs.join("\n")).not.toContain("11".repeat(32)); // the receipt key never reaches a log line
+  });
+
+  it("lists sapling in /supported when opted in with the offline issuer's viewing key", async () => {
+    const vk = (JSON.parse(readFileSync(new URL("../../../vectors/shielded/divaddr.json", import.meta.url), "utf8")) as { cases: { viewingKey: string }[] }).cases[0]!.viewingKey;
+    node = await startFakeNode({ viewingKey: true });
+    const dir = mkdtempSync(join(tmpdir(), "x402-fac-sap-"));
+    const shieldedEnv = { X402_RECEIPT_KEY: "11".repeat(32), X402_ISSUED_REGISTRY: join(dir, "issued.json"), X402_SAPLING_ISSUER: "offline", X402_SAPLING_VIEWING_KEY: vk, X402_SAPLING_INDEX_FILE: join(dir, "i.json") };
+    running = await startFacilitator(config(node, { ...shieldedEnv, X402_SHIELDED_METHODS: "sapling-proof,sapling" }), { logger });
+    const supported = (await (await fetch(`${running.url}/supported`)).json()) as { kinds: { scheme: string; extra: Record<string, unknown> }[] };
+    expect(supported.kinds.find(k => k.scheme === "exact")?.extra).toMatchObject({ assetTransferMethods: ["transparent", "sapling-proof", "sapling"] });
+    expect(logs.join("\n")).not.toContain(vk); // the viewing key never reaches a log line
   });
 
   it("refuses to start when the node's chain is not the network's", async () => {
@@ -161,6 +172,25 @@ describe("registerSchemes", () => {
     };
     expect(await facilitatorHalf(handler).settle({} as never, {} as never)).toMatchObject({ errorReason: "invalid_exact_ycash_not_received" });
     expect(calls).toBe(1);
+  });
+
+  it("routes sapling-proof and sapling through one router; sapling alone, and sapling without a viewing key", async () => {
+    const vk = (JSON.parse(readFileSync(new URL("../../../vectors/shielded/divaddr.json", import.meta.url), "utf8")) as { cases: { viewingKey: string }[] }).cases[0]!.viewingKey;
+    const sp = { receiptKey: "22".repeat(32), registry: new InMemoryIssuedAddressRegistry(), viewingKey: vk };
+    const both = new x402Facilitator();
+    expect(registerSchemes(both, { ...deps, saplingProof: { ...sp, methods: ["sapling-proof", "sapling"] } })).toEqual(["exact (transparent, sapling-proof, sapling)", "batch-settlement"]);
+    expect(both.getSupported().kinds[0]?.extra).toMatchObject({ assetTransferMethods: ["transparent", "sapling-proof", "sapling"] });
+    const only = new x402Facilitator();
+    expect(registerSchemes(only, { ...deps, saplingProof: { ...sp, methods: ["sapling"] } })).toEqual(["exact (transparent, sapling)", "batch-settlement"]);
+    // sapling-proof is not configured here: refused by the router, not served
+    const req = { scheme: "exact", network: "ycash:regtest", asset: "YEC", amount: "1", payTo: "x", maxTimeoutSeconds: 60, extra: { assetTransferMethod: "sapling-proof", paymentFlow: "upfront" } };
+    const res = await only.settle({ x402Version: 2, accepted: req, payload: { txid: "00".repeat(32) } } as never, req as never);
+    expect(res).toMatchObject({ success: false, errorReason: "invalid_exact_ycash_asset_transfer_method" });
+    // sapling verify reaches the sapling facilitator (rule 1 here: no transaction in the payload)
+    const sreq = { ...req, extra: { assetTransferMethod: "sapling", memo: "x402:" + "00".repeat(32), expiresAt: 1 } };
+    const v = await both.verify({ x402Version: 2, accepted: sreq, payload: {} } as never, sreq as never).catch((e: { invalidReason?: string }) => ({ isValid: false, invalidReason: e.invalidReason }));
+    expect(v).toMatchObject({ isValid: false, invalidReason: "invalid_exact_ycash_transaction" });
+    expect(() => registerSchemes(new x402Facilitator(), { ...deps, saplingProof: { ...sp, viewingKey: undefined, methods: ["sapling"] } })).toThrow(/viewing key/);
   });
 
   it("refuses a sapling-proof handler whose node is on another chain", () => {

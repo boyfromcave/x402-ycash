@@ -34,14 +34,35 @@ const pool = YcashRpc.fromDevnetJson(path, 2, { timeoutMs: 120_000 });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Mines on the pool node and waits for the wallet node to see the tip.
+ * Mines on the pool node, once it holds the wallet's mempool, and waits for the wallet node to see the tip.
  *
  * @param n - Blocks to mine.
  */
 async function mine(n: number): Promise<void> {
+  // The pool mines only what reached its mempool: wait for every wallet transaction to relay first.
+  const want = await wallet.getRawMempool();
+  for (let i = 0; i < 300; i++) {
+    const have = new Set(await pool.getRawMempool());
+    if (want.every((t) => have.has(t))) break;
+    await sleep(200);
+  }
   await pool.call("generate", [n]);
   const tip = await pool.getBlockCount();
   while ((await wallet.getBlockCount()) < tip) await sleep(200);
+}
+
+/**
+ * Polls until a condition holds (60 s).
+ *
+ * @param cond - The condition.
+ * @param what - For the timeout error.
+ */
+async function until(cond: () => Promise<boolean>, what: string): Promise<void> {
+  for (let i = 0; i < 300; i++) {
+    if (await cond()) return;
+    await sleep(200);
+  }
+  throw new Error(`timed out waiting for ${what}`);
 }
 
 /**
@@ -70,19 +91,27 @@ const amountZat = 1_500_000n;
 
 // A funded transparent address of the wallet for the t→z payment and for shielding.
 const taddr = await wallet.call<string>("getnewaddress");
+// A second funded address shields the z→z payer's note: reusing taddr right after the t→z races the
+// wallet's view of the coin that payment spent (4.5.0: "inputs already spent" at commit).
+const taddr2 = await wallet.call<string>("getnewaddress");
 await wallet.call("sendtoaddress", [taddr, 1.0]);
+await wallet.call("sendtoaddress", [taddr2, 1.0]);
 await mine(1);
+// getblockcount advances before the wallet has processed the block: wait for the coins themselves.
+for (const a of [taddr, taddr2]) await until(async () => (await wallet.listUnspent(1, 9_999_999, [a])).length > 0, `a confirmed coin at ${a}`);
 
 const payments: Case["payments"] = [];
-const privacy = info.subversion.includes("6.") ? { privacyPolicy: "AllowRevealedSenders" } : {};
+// 6.21.0: a transparent source has transparent change, which needs AllowFullyTransparent (X-F12).
+const privacy = info.subversion.includes("6.") ? { privacyPolicy: "AllowFullyTransparent" } : {};
 // t→z
 const tz = await wallet.zSendManyAndWait(taddr, [{ address: payTo, amount: amountZat, memo: memoToHex(memo) }], { fee: 1000n, ...privacy });
 payments.push({ kind: "t→z", txid: tz, hex: await wallet.call<string>("getrawtransaction", [tz]), amountZat: amountZat.toString(), memo, outputIndex: await outputIndexOf(payTo, tz) });
 await mine(1);
 // z→z: shield to a second key of the wallet first, then pay payTo from it.
 const payer = await wallet.zGetNewAddress();
-await wallet.zSendManyAndWait(taddr, [{ address: payer, amount: 50_000_000n }], { fee: 1000n, ...privacy });
+await wallet.zSendManyAndWait(taddr2, [{ address: payer, amount: 50_000_000n }], { fee: 1000n, ...privacy });
 await mine(1);
+await until(async () => (await wallet.zListReceivedByAddress(payer, 1)).length > 0, `a confirmed note at ${payer}`);
 const zz = await wallet.zSendManyAndWait(payer, [{ address: payTo, amount: amountZat, memo: memoToHex(memo) }], { fee: 1000n });
 payments.push({ kind: "z→z", txid: zz, hex: await wallet.call<string>("getrawtransaction", [zz]), amountZat: amountZat.toString(), memo, outputIndex: await outputIndexOf(payTo, zz) });
 await mine(1);

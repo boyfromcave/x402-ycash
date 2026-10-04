@@ -224,9 +224,9 @@ class ShieldedExactFacilitator:
             return _Refused(ERR_MEMO_MISMATCH, f"no note of {txid} carries extra.memo", txid)
 
         # 6. Amount: the sum covers it. Overpayment is accepted and kept (spec, "Amount acceptance").
-        received = sum(_note_zat(n) for n in notes)
-        if received < int(req.amount):
-            return _Refused(ERR_UNDERPAID, f"received {received} zatoshis, {req.amount} required; the funds stay at payTo", txid)
+        received_zat = sum(_note_zat(n) for n in notes)
+        if received_zat < int(req.amount):
+            return _Refused(ERR_UNDERPAID, f"received {received_zat} zatoshis, {req.amount} required; the funds stay at payTo", txid)
 
         # 7. Depth: every note meets the policy. Below it: pending, nothing claimed.
         min_conf = min(int(n.get("confirmations") or 0) for n in notes)
@@ -236,4 +236,4 @@ class ShieldedExactFacilitator:
             return _Refused(ERR_SETTLEMENT_PENDING, f"{txid} has {max(min_conf, 0)} confirmations, the policy needs {need}", txid, observed)
 
         # 8. Window: the record is still held (step 2 found it); pruning honours the retention bound.
-        return _Checked(network, txid, issued, received, observed)
+        return _Checked(network, txid, issued, received_zat, observed)

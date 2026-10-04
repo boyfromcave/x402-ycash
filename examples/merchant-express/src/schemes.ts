@@ -4,7 +4,7 @@ import type { HTTPRequestContext } from "@x402/core/server";
 import type { x402ResourceServer } from "@x402/express";
 import { ASSET_YED, BatchYcashServerScheme, exact, FileChannelStore, FileIssuedAddressRegistry, shielded, type YcashNetwork, type YcashRpc } from "x402-ycash-mechanism";
 import type { ChannelConfig, ShieldedConfig } from "./config.js";
-import { ShieldedRouteIssuer } from "./shielded.js";
+import { shieldedHook, ShieldedRouteIssuer, type ShieldedMethod } from "./shielded.js";
 
 /** The three payment modes this example sells. */
 export interface PaymentModes {
@@ -14,6 +14,12 @@ export interface PaymentModes {
   channel: boolean;
   /** `exact`, `sapling-proof` YEC: a shielded payment to a fresh address per request (plan X4a). */
   shielded: boolean;
+  /**
+   * `exact`, `sapling` YEC: the client hands over a signed Sapling transaction, the facilitator
+   * decrypts it before the resource runs and broadcasts after (plan X4b); only while the facilitator
+   * lists `sapling` in /supported (app.ts gates it).
+   */
+  sapling: boolean;
   /** `exact`, `transparent` YED at ≥ $1.00 (plan X3); only when the facilitator lists YED. */
   yedExact: boolean;
   /** `batch-settlement`: a YED channel under the dollar floor (plan X3); only when the facilitator lists YED. */
@@ -35,7 +41,7 @@ export interface ServerSchemeDeps {
   /** exact YEC payments up to this many zatoshis default to policy −1. */
   zeroConfCapZat?: bigint;
   channel?: ChannelConfig;
-  shielded?: ShieldedConfig & { amount: string; maxTimeoutSeconds: number };
+  shielded?: ShieldedConfig & { amount: string; maxTimeoutSeconds: number; saplingAmount?: string };
   yed?: YedModes;
   log?: (msg: string, fields?: Record<string, unknown>) => void;
 }
@@ -44,6 +50,8 @@ export interface ServerSchemes {
   modes: PaymentModes;
   /** The shielded route's dynamic payTo (a fresh diversified address per request). */
   shieldedPayTo?: (context: HTTPRequestContext) => Promise<string>;
+  /** The sapling route's dynamic payTo (the same issuance, its own price). */
+  saplingPayTo?: (context: HTTPRequestContext) => Promise<string>;
   /** Stops background work (the channel close watcher). */
   close?: () => Promise<void>;
 }
@@ -51,11 +59,11 @@ export interface ServerSchemes {
 export type RegisterServerSchemes = (server: x402ResourceServer, deps: ServerSchemeDeps) => ServerSchemes;
 
 export const registerServerSchemes: RegisterServerSchemes = (server, deps) => {
-  const modes: PaymentModes = { exact: false, channel: false, shielded: false, yedExact: false, yedChannel: false };
+  const modes: PaymentModes = { exact: false, channel: false, shielded: false, sapling: false, yedExact: false, yedChannel: false };
   const out: ServerSchemes = { modes };
 
   // exact: transparent YEC always; sapling-proof when the merchant's wallet or viewing key issues addresses.
-  let issuer: ShieldedRouteIssuer | undefined;
+  let hook: ReturnType<typeof shieldedHook> | undefined;
   const off = deps.shielded?.offline;
   if (deps.shielded && (deps.wallet || off)) {
     const server = new shielded.ShieldedExactServer({
@@ -66,15 +74,24 @@ export const registerServerSchemes: RegisterServerSchemes = (server, deps) => {
       defaultConfirmations: deps.shielded.confirmations,
       ...(deps.shielded.baseAddress ? { baseAddress: deps.shielded.baseAddress } : {}),
     });
-    issuer = new ShieldedRouteIssuer(server, { network: deps.network, amount: deps.shielded.amount, maxTimeoutSeconds: deps.shielded.maxTimeoutSeconds, confirmations: deps.shielded.confirmations });
+    const route = { network: deps.network, maxTimeoutSeconds: deps.shielded.maxTimeoutSeconds, confirmations: deps.shielded.confirmations };
+    const issuer = new ShieldedRouteIssuer(server, { ...route, amount: deps.shielded.amount });
     out.shieldedPayTo = issuer.payTo;
     modes.shielded = true;
+    const methods: ShieldedMethod[] = ["sapling-proof"];
+    // sapling: the same issuance and registry; the facilitator needs the viewing key (its /supported says).
+    if (deps.shielded.saplingAmount) {
+      out.saplingPayTo = new ShieldedRouteIssuer(server, { ...route, method: "sapling", amount: deps.shielded.saplingAmount }).payTo;
+      modes.sapling = true;
+      methods.push("sapling");
+    }
+    hook = shieldedHook(issuer, methods);
   }
   server.register(
     deps.network,
     new exact.ExactYcashServerScheme({
       ...(deps.zeroConfCapZat !== undefined ? { zeroConfCapZat: deps.zeroConfCapZat } : {}),
-      ...(issuer ? { shielded: issuer } : {}),
+      ...(hook ? { shielded: hook } : {}),
       // "$2" on the YED route means 200 YED cents; the YEC routes price in zatoshis, so they are unaffected.
       ...(deps.yed?.exact ? { usdAsset: ASSET_YED } : {}),
     }),

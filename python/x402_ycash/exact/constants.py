@@ -6,7 +6,10 @@ SCHEME_EXACT = "exact"
 ATM_TRANSPARENT = "transparent"
 """``extra.assetTransferMethod``; absent means transparent."""
 ATM_SAPLING_PROOF = "sapling-proof"
-ATM_SAPLING_RESERVED = "sapling"
+ATM_SAPLING = "sapling"
+"""The facilitator-submitted shielded method (plan X4b), in x402_ycash.shielded."""
+ATM_SAPLING_RESERVED = ATM_SAPLING
+"""Deprecated name, kept for callers."""
 """Reserved, not yet specified (plan X4b): a facilitator MUST reject it."""
 
 FLOW_AUTHORIZATION = "authorization"

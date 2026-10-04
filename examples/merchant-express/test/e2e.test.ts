@@ -39,7 +39,7 @@ describe("agent → merchant → facilitator", () => {
     const merchant = createMerchant(config, {
       register: (server, deps) => {
         server.register(deps.network, new FakeExactServer());
-        return { modes: { exact: true, channel: false, shielded: false, yedExact: false, yedChannel: false } };
+        return { modes: { exact: true, channel: false, shielded: false, sapling: false, yedExact: false, yedChannel: false } };
       },
     });
     shop = await listen(merchant.app);
@@ -104,7 +104,7 @@ describe("agent → merchant → facilitator", () => {
     const res = await fetch(shop.url);
     expect(await res.json()).toEqual({
       network: NETWORK,
-      routes: { [PAID_ROUTES.exact]: "paid", [PAID_ROUTES.ticker]: "paid", [PAID_ROUTES.channel]: "not wired", [PAID_ROUTES.shielded]: "not wired", [PAID_ROUTES.yedReport]: "not wired", [PAID_ROUTES.yedStream]: "not wired" },
+      routes: { [PAID_ROUTES.exact]: "paid", [PAID_ROUTES.ticker]: "paid", [PAID_ROUTES.channel]: "not wired", [PAID_ROUTES.shielded]: "not wired", [PAID_ROUTES.privateReport]: "not wired", [PAID_ROUTES.yedReport]: "not wired", [PAID_ROUTES.yedStream]: "not wired" },
     });
   });
 });
@@ -113,7 +113,7 @@ describe("merchant with the production schemes and no node", () => {
   it("sells exact YEC (both routes) and answers 501 on the channel and shielded routes", async () => {
     const config = loadMerchantConfig({ X402_NETWORK: NETWORK, MERCHANT_PAY_TO: PAY_TO, FACILITATOR_URL: "http://127.0.0.1:9" });
     const merchant = createMerchant(config);
-    expect(merchant.modes).toEqual({ exact: true, channel: false, shielded: false, yedExact: false, yedChannel: false });
+    expect(merchant.modes).toEqual({ exact: true, channel: false, shielded: false, sapling: false, yedExact: false, yedChannel: false });
     const shopNow = await listen(merchant.app);
     try {
       expect((await fetch(`${shopNow.url}/channel/search`)).status).toBe(501);

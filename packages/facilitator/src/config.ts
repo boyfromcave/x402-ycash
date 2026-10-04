@@ -34,7 +34,16 @@ export interface SaplingProofConfig {
    * and the node holds only the key (`z_importviewingkey`), which startup checks.
    */
   offlineIssuer?: OfflineIssuerConfig;
+  /**
+   * The shielded methods served (X402_SHIELDED_METHODS; default `sapling-proof`). `sapling` decrypts
+   * the client's transaction with the offline issuer's viewing key, so it needs that setup.
+   */
+  methods: ShieldedMethod[];
 }
+
+/** The shielded methods of `exact` this service can serve. */
+export const SHIELDED_METHODS = ["sapling-proof", "sapling"] as const;
+export type ShieldedMethod = (typeof SHIELDED_METHODS)[number];
 
 /** The offline issuer (OfflineAddressIssuer): the viewing key, its first index and its index file. */
 export interface OfflineIssuerConfig {
@@ -107,6 +116,8 @@ const fileSchema = z
     saplingViewingKey: z.string().min(1),
     saplingStartIndex: z.string().regex(/^\d{1,27}$/, "must be a decimal diversifier index"),
     saplingIndexPath: z.string().min(1),
+    shieldedMethods: z.array(z.enum(SHIELDED_METHODS)).min(1),
+    saplingMainnetOk: z.boolean(),
     confirmations: confirmationsSchema,
     bodyLimit: z.string().regex(/^\d+(b|kb|mb)$/),
     logLevel: z.enum(LOG_LEVELS as [LogLevel, ...LogLevel[]]),
@@ -226,7 +237,10 @@ function resolveSaplingProof(file: z.output<typeof fileSchema>, env: Env, networ
   const receiptKey = strEnv(env, "X402_RECEIPT_KEY") ?? file.receiptKey;
   const registryPath = strEnv(env, "X402_ISSUED_REGISTRY") ?? file.issuedAddressRegistryPath;
   const baseAddress = strEnv(env, "X402_SAPLING_BASE_ADDRESS") ?? file.saplingBaseAddress;
-  if (!receiptKey && !registryPath && !baseAddress && !strEnv(env, "X402_SAPLING_VIEWING_KEY") && !file.saplingViewingKey) return undefined;
+  if (!receiptKey && !registryPath && !baseAddress && !strEnv(env, "X402_SAPLING_VIEWING_KEY") && !file.saplingViewingKey) {
+    if (strEnv(env, "X402_SHIELDED_METHODS") || file.shieldedMethods) throw new ConfigError("X402_SHIELDED_METHODS needs the shielded setup: X402_RECEIPT_KEY and X402_ISSUED_REGISTRY");
+    return undefined;
+  }
   if (!receiptKey || !registryPath) {
     throw new ConfigError("sapling-proof needs both X402_RECEIPT_KEY (receiptKey) and X402_ISSUED_REGISTRY (issuedAddressRegistryPath)");
   }
@@ -240,13 +254,49 @@ function resolveSaplingProof(file: z.output<typeof fileSchema>, env: Env, networ
   if (noteWaitMs !== undefined && (noteWaitMs < 0 || noteWaitMs > 60_000)) throw new ConfigError("X402_SAPLING_NOTE_WAIT_MS must be 0..60000");
   const offlineIssuer = resolveOfflineIssuer(file, env, network);
   if (offlineIssuer && baseAddress) throw new ConfigError("X402_SAPLING_BASE_ADDRESS is for the node-wallet issuer; the offline issuer derives from X402_SAPLING_VIEWING_KEY");
+  const methods = resolveShieldedMethods(file, env, network, offlineIssuer !== undefined);
   return {
+    methods,
     receiptKey: receiptKey.toLowerCase(),
     registryPath,
     ...(baseAddress ? { baseAddress } : {}),
     ...(noteWaitMs !== undefined ? { noteWaitMs } : {}),
     ...(offlineIssuer ? { offlineIssuer } : {}),
   };
+}
+
+/**
+ * X402_SHIELDED_METHODS (`shieldedMethods`): a comma list of `sapling-proof` and `sapling`. `sapling`
+ * is opt-in, needs the merchant's viewing key (the offline issuer's, reused for trial decryption),
+ * and is refused on mainnet unless X402_SAPLING_MAINNET_OK=1: the spec says a facilitator SHOULD NOT
+ * list it there until the end-to-end proof against the Rust light client's transactions exists
+ * (scheme_exact_ycash.md, "sapling", Pending).
+ *
+ * @param file - The parsed config file.
+ * @param env - The environment, which overrides the file.
+ * @param network - The configured network.
+ * @param hasViewingKey - Whether the offline issuer (and so the viewing key) is configured.
+ * @returns The methods, deduplicated, in the canonical order.
+ * @throws {ConfigError} On an unknown method, `sapling` without the viewing key, or `sapling` on mainnet without the opt-in.
+ */
+function resolveShieldedMethods(file: z.output<typeof fileSchema>, env: Env, network: YcashNetwork, hasViewingKey: boolean): ShieldedMethod[] {
+  const raw = strEnv(env, "X402_SHIELDED_METHODS");
+  const listed = raw !== undefined ? raw.split(",").map((m) => m.trim()).filter((m) => m !== "") : (file.shieldedMethods ?? ["sapling-proof"]);
+  for (const m of listed) {
+    if (!(SHIELDED_METHODS as readonly string[]).includes(m)) throw new ConfigError(`X402_SHIELDED_METHODS: unknown method ${JSON.stringify(m)} (one of ${SHIELDED_METHODS.join(", ")})`);
+  }
+  if (listed.length === 0) throw new ConfigError("X402_SHIELDED_METHODS lists no method");
+  const methods = SHIELDED_METHODS.filter((m) => listed.includes(m));
+  if (methods.includes("sapling")) {
+    if (!hasViewingKey) throw new ConfigError('sapling decrypts with the merchant\'s viewing key: it needs X402_SAPLING_ISSUER="offline" and X402_SAPLING_VIEWING_KEY');
+    const okEnv = strEnv(env, "X402_SAPLING_MAINNET_OK");
+    if (okEnv !== undefined && okEnv !== "0" && okEnv !== "1") throw new ConfigError("X402_SAPLING_MAINNET_OK must be 0 or 1");
+    const mainnetOk = okEnv !== undefined ? okEnv === "1" : file.saplingMainnetOk === true;
+    if (network === "ycash:mainnet" && !mainnetOk) {
+      throw new ConfigError("sapling is not offered on ycash:mainnet until its end-to-end proof exists (spec, \"sapling\", Pending); set X402_SAPLING_MAINNET_OK=1 to override");
+    }
+  }
+  return methods;
 }
 
 /** Default index file of the offline issuer. */
@@ -330,6 +380,7 @@ export function redactConfig(c: FacilitatorConfig): Record<string, unknown> {
           issuer: saplingProof.offlineIssuer ? { kind: "offline", startIndex: saplingProof.offlineIssuer.startIndex.toString(), indexPath: saplingProof.offlineIssuer.indexPath, viewingKey: "(set)" } : { kind: "node-wallet", baseAddress: saplingProof.baseAddress ?? "(wallet)" },
           registryPath: saplingProof.registryPath,
           noteWaitMs: saplingProof.noteWaitMs,
+          methods: saplingProof.methods,
           receiptKey: "(set)",
         }
       : "(off)",

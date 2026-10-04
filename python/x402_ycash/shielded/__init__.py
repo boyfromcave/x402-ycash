@@ -1,8 +1,9 @@
-"""``exact`` with ``assetTransferMethod: "sapling-proof"`` (plan §5.9 X4a; specs/scheme_exact_ycash.md,
-"sapling-proof"): per-request diversified addresses, the request hash and memo, the issued-address
+"""``exact`` with ``assetTransferMethod`` "sapling-proof" (plan §5.9 X4a) and "sapling" (X4b;
+specs/scheme_exact_ycash.md): per-request diversified addresses, the request hash and memo, the issued-address
 registry, settlement against the merchant's wallet, and ES256K offer-and-receipt receipts."""
 
 from .constants import (
+    ASSET_TRANSFER_METHOD_SAPLING,
     ASSET_TRANSFER_METHOD_SAPLING_PROOF,
     CHAIN_OF,
     MEMO_REGEX,
@@ -35,14 +36,18 @@ from .registry import (
     record_retain_until,
 )
 from .request import RequestRecord, memo_for_hash, memo_for_record, memo_to_hex, note_memo_bytes, note_memo_equals, request_hash
+from .sapling_facilitator import PAYMENT_FLOW_AUTHORIZATION, SaplingExactFacilitator, SaplingLimits
+from .sapling_handler import SaplingExactServer, SaplingHandler, ShieldedMethodRouter, sapling_mainnet_allowed
 from .server import EXTRA_PRICE_USD, ShieldedExactServer, ShieldedRouteIssuer
 
 __all__ = [
+    "ASSET_TRANSFER_METHOD_SAPLING",
     "ASSET_TRANSFER_METHOD_SAPLING_PROOF",
     "CHAIN_OF",
     "EXTRA_PRICE_USD",
     "MEMO_REGEX",
     "OFFER_RECEIPT",
+    "PAYMENT_FLOW_AUTHORIZATION",
     "PAYMENT_FLOW_UPFRONT",
     "SAPLING_HRP",
     "Es256kSigner",
@@ -52,9 +57,14 @@ __all__ = [
     "JwsSigner",
     "PriceQuote",
     "RequestRecord",
+    "SaplingExactFacilitator",
+    "SaplingExactServer",
+    "SaplingHandler",
+    "SaplingLimits",
     "SaplingProofHandler",
     "ShieldedExactFacilitator",
     "ShieldedExactServer",
+    "ShieldedMethodRouter",
     "ShieldedRouteIssuer",
     "SqliteIssuedAddressRegistry",
     "create_jws",
@@ -75,6 +85,7 @@ __all__ = [
     "receipt_extension",
     "record_retain_until",
     "request_hash",
+    "sapling_mainnet_allowed",
     "sign_offer",
     "sign_receipt",
     "usd_to_micro",

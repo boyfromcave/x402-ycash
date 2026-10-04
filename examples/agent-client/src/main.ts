@@ -1,6 +1,6 @@
 // Run: RESOURCE_URL=http://127.0.0.1:4021/exact/quote AGENT_DEVNET_JSON=…/devnet.json REQUESTS=10 npm start -w x402-ycash-example-agent-client
 // (AGENT_WIF for a local key, AGENT_LWD_URL with AGENT_WIF for no node at all, AGENT_SHIELDED_FROM
-// for sapling-proof; see the README's quick start).
+// for sapling-proof, AGENT_SAPLING_BUILDER for sapling; see the README's quick start).
 import { createAgent } from "./agent.js";
 import { loadAgentConfig } from "./config.js";
 
