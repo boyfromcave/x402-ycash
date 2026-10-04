@@ -5,6 +5,7 @@
 //! - [`keys`]: Sapling key import (extended spending key or seed phrase), encodings, the USK wrapper.
 //! - [`lwd`]: the lightwalletd-dd connection (`CompactTxStreamer` + `YellowbackStreamer.GetChainInfo`).
 //! - [`sync`]: compact-block sync with overlapped download/scan and checkpoint reorgs.
+//! - [`spend`]: v4 transaction assembly from a proposal with the caller's `nExpiryHeight`.
 //! - [`wallet`]: the store, balances, build/prove/sign and broadcast.
 //!
 //! The spending key is injected by the embedding application (`wallet::Options::spending_key`,
@@ -13,6 +14,7 @@
 pub mod keys;
 pub mod lwd;
 pub mod net;
+pub mod spend;
 pub mod sync;
 pub mod wallet;
 

@@ -9,9 +9,11 @@ import {
   exact,
   FileClientChannelStorage,
   FileCoinReservationStore,
+  LightClientShieldedPayer,
   LwdChain,
   LwdUtxoSource,
   rpcWalletFunder,
+  type LightClient,
   SaplingExactClient,
   saplingBuilderFrom,
   ShieldedExactClient,
@@ -32,6 +34,8 @@ export interface ClientSchemeDeps {
   shieldedFrom?: string;
   /** sapling: the builder spec (AGENT_SAPLING_BUILDER). */
   saplingBuilder?: string;
+  /** The light client behind an http(s) AGENT_SAPLING_BUILDER: sapling builder, tip, and sapling-proof payer. */
+  light?: LightClient;
   channelStorePath?: string;
   channelDepositZat?: bigint;
   /** batch-settlement: the client's own cap on D, zatoshis (default 1 YEC). */
@@ -83,18 +87,23 @@ export const registerClientSchemes: RegisterClientSchemes = (client, deps) => {
   const held = reservations ? { reservations } : {};
   const wif = deps.signer.kind === "wif";
   const source = wif ? (deps.lwd ? new LwdUtxoSource(deps.lwd, held) : new exact.RpcUtxoSource(needNode(deps), { importAddress: true, ...held })) : undefined;
+  // A private agent (signer "none") has no transparent payer: only its shielded methods are registered.
+  const privateOnly = deps.signer.kind === "none";
 
   // exact: transparent (the client signs a complete v4 tx and does not broadcast) and, with a
   // Sapling source, sapling-proof (z_sendmany to the per-request address, then the txid).
-  const transparent = new exact.ExactYcashScheme(
-    deps.signer.kind === "wif" && source ? new exact.LocalKeySigner(deps.signer.wif, source) : new exact.RpcWalletSigner(needNode(deps), held),
-  );
-  const shielded = deps.shieldedFrom ? new ShieldedExactClient({ rpc: needNode(deps), from: deps.shieldedFrom }) : undefined;
-  // sapling: a signed, unbroadcast Sapling transaction from the external builder; with a node the
-  // client sets nExpiryHeight itself from the tip, otherwise the builder does.
-  const sapling = deps.saplingBuilder ? new SaplingExactClient({ builder: saplingBuilderFrom(deps.saplingBuilder), ...(deps.node ? { chain: deps.node } : {}) }) : undefined;
-  const router = new exact.ExactYcashMethodRouter({ transparent, ...(shielded ? { shielded } : {}), ...(sapling ? { sapling } : {}) });
+  const transparent = privateOnly
+    ? undefined
+    : new exact.ExactYcashScheme(deps.signer.kind === "wif" && source ? new exact.LocalKeySigner(deps.signer.wif, source) : new exact.RpcWalletSigner(needNode(deps), held));
+  // sapling-proof: the node wallet's z_sendmany from AGENT_SHIELDED_FROM, else the light client's send.
+  const shielded = deps.shieldedFrom ? new ShieldedExactClient({ rpc: needNode(deps), from: deps.shieldedFrom }) : deps.light ? new LightClientShieldedPayer({ light: deps.light }) : undefined;
+  // sapling: a signed, unbroadcast Sapling transaction from the external builder; the client sets
+  // nExpiryHeight itself from the tip (the node's, else the light client's lightwalletd's).
+  const chain = deps.node ?? deps.light;
+  const sapling = deps.saplingBuilder ? new SaplingExactClient({ builder: deps.light ?? saplingBuilderFrom(deps.saplingBuilder), ...(chain ? { chain } : {}) }) : undefined;
+  const router = new exact.ExactYcashMethodRouter({ ...(transparent ? { transparent } : {}), ...(shielded ? { shielded } : {}), ...(sapling ? { sapling } : {}) });
   client.register(deps.network, router);
+  if (privateOnly) return { names: [`exact (${router.methods.join(", ")})`] };
 
   // batch-settlement: opens a channel on the first 402, then one voucher per request.
   // YEC or YED, as the route's 402 asks: the WIF funder spends the key's token outputs for YED.

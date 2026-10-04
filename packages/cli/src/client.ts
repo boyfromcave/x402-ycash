@@ -10,6 +10,7 @@ import {
   exact,
   FileClientChannelStorage,
   FileCoinReservationStore,
+  LightClientShieldedPayer,
   LwdChain,
   LwdUtxoSource,
   rpcWalletFunder,
@@ -51,7 +52,8 @@ function mustNode<T>(node: T | undefined): T {
 export interface PayingClient {
   client: x402Client;
   http: x402HTTPClient;
-  batch: BatchYcashClientScheme;
+  /** Absent when the only payer is the light client (shielded methods only). */
+  batch?: BatchYcashClientScheme;
   storage: FileClientChannelStorage;
 }
 
@@ -62,10 +64,21 @@ export function buildClient(config: CliConfig): PayingClient {
   const held = { reservations: new FileCoinReservationStore(config.reservationsPath) };
   // A WIF key reads its coins from lightwalletd (--lwd) or from the node, which watches its address.
   const source = config.wif ? (config.lwd ? new LwdUtxoSource(config.lwd, held) : new exact.RpcUtxoSource(mustNode(node), { importAddress: true, ...held })) : undefined;
-  const transparent = new exact.ExactYcashScheme(config.wif && source ? new exact.LocalKeySigner(config.wif, source) : new exact.RpcWalletSigner(mustNode(node), held));
-  const shielded = config.shieldedFrom ? new ShieldedExactClient({ rpc: mustNode(node), from: config.shieldedFrom }) : undefined;
-  // sapling: the external builder signs, nothing is broadcast here; the node (if any) gives the tip for nExpiryHeight.
-  const sapling = config.saplingBuilder ? new SaplingExactClient({ builder: saplingBuilderFrom(config.saplingBuilder), ...(node ? { chain: node } : {}) }) : undefined;
+  // A light-client-only CLI (--sapling-builder http://… alone) has no transparent payer and no channels.
+  const privateOnly = !node && !config.wif;
+  const transparent = privateOnly ? undefined : new exact.ExactYcashScheme(config.wif && source ? new exact.LocalKeySigner(config.wif, source) : new exact.RpcWalletSigner(mustNode(node), held));
+  // sapling-proof: the node wallet's z_sendmany from --shielded-from, else the light client's send.
+  const shielded = config.shieldedFrom ? new ShieldedExactClient({ rpc: mustNode(node), from: config.shieldedFrom }) : config.light ? new LightClientShieldedPayer({ light: config.light }) : undefined;
+  // sapling: the external builder signs, nothing is broadcast here; the tip for nExpiryHeight comes
+  // from the node, else from the light client.
+  const chain = node ?? config.light;
+  const sapling = config.saplingBuilder ? new SaplingExactClient({ builder: config.light ?? saplingBuilderFrom(config.saplingBuilder), ...(chain ? { chain } : {}) }) : undefined;
+  const router = new exact.ExactYcashMethodRouter({ ...(transparent ? { transparent } : {}), ...(shielded ? { shielded } : {}), ...(sapling ? { sapling } : {}) });
+  if (privateOnly) {
+    const client = new x402Client().register(config.network, router);
+    client.setSpendControls({ allowedAssets: [exact.yecSpendControl(config.network, config.maxPaymentZat)] });
+    return { client, http: new x402HTTPClient(client), storage };
+  }
   // Both assets; the channel's remainder returns to the WIF key's address or a new wallet address.
   const funder = config.wif && source ? utxoSourceFunder(tx.decodeWif(config.wif, config.network).privKey, source) : rpcWalletFunder(mustNode(node), held);
   const deposit = depositFor(config);
@@ -83,7 +96,7 @@ export function buildClient(config: CliConfig): PayingClient {
     ...(config.maxCloseFeeZat !== undefined ? { maxCloseFee: { [ASSET_YEC]: config.maxCloseFeeZat, [ASSET_YED]: config.maxCloseFeeZat } } : {}),
   });
   const client = new x402Client()
-    .register(config.network, new exact.ExactYcashMethodRouter({ transparent, ...(shielded ? { shielded } : {}), ...(sapling ? { sapling } : {}) }))
+    .register(config.network, router)
     .register(config.network, channels);
   // YEC is not USD-pegged, so it needs an explicit allowance with an atomic cap (spec "Assets and
   // Amounts"); YED is a default asset with core's $1 cap (X-F43), replaced by the CLI's own in cents.

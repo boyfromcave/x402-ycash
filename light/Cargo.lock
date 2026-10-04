@@ -2928,7 +2928,6 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
- "nonempty",
  "prost",
  "rand",
  "rusqlite",

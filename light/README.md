@@ -7,7 +7,7 @@ lightwalletd-dd, keeps its notes in a `zcash_client_sqlite` database, and builds
 a shielded payment with a memo **without broadcasting it** (the X4b building block), or broadcasts
 it through lightwalletd.
 
-It is a library (`x402_ycash_light`: `net`, `keys`, `lwd`, `sync`, `wallet`; the spending key is
+It is a library (`x402_ycash_light`: `net`, `keys`, `lwd`, `sync`, `spend`, `wallet`; the spending key is
 injected) plus a thin binary, `x402-light`, that adds a loopback JSON-RPC 2.0 server, a `once` CLI
 and the key file. YEW's Rust core is meant to depend on the library.
 
@@ -66,9 +66,9 @@ codes are in [`schema.json`](schema.json); `once METHOD 'PARAMS_JSON'` runs any 
 | `sync` | one pass; returns blocks/outputs scanned, notes found, timings |
 | `status` | node and cache heights, synced flag, balance by confirmations, the 0-conf mempool view |
 | `list_notes` | spendable notes at `minConfirmations` |
-| `build` | `{to, amountZat, memoHex|memo, fee?, minConfirmations}` → `{txHex, txid, feeZat, branchId, expiryHeight}`, **not broadcast** |
+| `build` | `{to, amountZat, memoHex|memo, expiryHeight?, fee?, minConfirmations}` → `{txHex, txid, feeZat, branchId, expiryHeight}`, **not broadcast**; exactly the SDK's builder contract (`packages/ycash/src/shielded/builder.ts`: `amountZat` a decimal string, `expiryHeight` the spec's tip + 3 + ⌈maxTimeoutSeconds/75⌉) |
 | `broadcast` | `{txHex}` through lightwalletd `SendTransaction` |
-| `send` | build + broadcast |
+| `send` | build + broadcast; the agent's `sapling-proof` payment (`LightClientShieldedPayer` in the SDK) |
 
 The key file: `<data>/spending.key` (bech32, mode 0600), written by `import_key`. The data
 directory also holds `wallet.sqlite` and `cache/`.
@@ -104,7 +104,18 @@ before an upgrade. `build` asks `YellowbackStreamer.GetChainInfo` (lightwalletd-
 `nextBlockBranchId` and refuses to build unless the wallet's parameters produce that id for the
 next block, falling back to the chaintip id when the server answers UNIMPLEMENTED; the result
 says which (`branchIdSource`). The transaction is v4 (ZIP-243, Canopy `19bd2d2f` on both lines
-today), fee ZIP-317 conventional (10000 zat for a one-in two-out spend) unless `fee` is given.
+today), fee ZIP-317 conventional (10000 zat for a one-in two-out spend) unless `fee` is given; a fee
+below the x402 floor max(1000, 500 · max(2, logical actions)) is refused.
+
+**Expiry.** `zcash_client_backend::create_proposed_transactions` fixes `nExpiryHeight` at target + 40
+with no setter, and an x402 `sapling` payment must carry tip + 3 + ⌈maxTimeoutSeconds/75⌉ (the
+facilitator refuses anything outside its window). So librustzcash only *proposes* (note selection,
+fee, change) and `src/spend.rs` assembles the transaction: the Sapling bundle with `sapling-crypto`'s
+builder from the proposal's notes and witnesses, the proofs, the ZIP-243 sighash over
+`TransactionData` with the requested expiry, the signatures (the steps of `zcash_primitives`
+`Builder::build_internal`, Sapling-only). The built transaction is then recorded with
+`decrypt_and_store_transaction`, which marks its notes spent and recovers payment and change through
+the OVKs. No librustzcash change was needed.
 
 **Not broadcasting is a wallet state.** `build` records the transaction in the store and marks
 its inputs spent; if it is never broadcast they unlock when `expiryHeight` (target + 40) passes.

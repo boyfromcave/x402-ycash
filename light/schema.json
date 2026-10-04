@@ -38,9 +38,9 @@
       "result": [ { "txid": "hex", "outputIndex": "uint", "valueZat": "uint", "minedHeight": "uint|null" } ]
     },
     "build": {
-      "params": { "to": "Sapling address", "amountZat": "uint", "memoHex": "hex ≤512 bytes (optional)", "memo": "utf-8 text (optional, if memoHex absent)", "fee": "uint zat (optional; default ZIP-317 conventional)", "minConfirmations": "uint (default 1)" },
-      "result": { "txid": "hex", "txHex": "signed raw v4 transaction, NOT broadcast", "feeZat": "uint|null", "targetHeight": "uint", "expiryHeight": "uint", "branchId": "hex", "version": "string" },
-      "note": "The wallet records the transaction and treats its inputs as spent until expiryHeight passes unbroadcast."
+      "params": { "to": "Sapling address", "amountZat": "decimal string (the SDK builder contract) or uint", "memoHex": "hex ≤512 bytes (optional)", "memo": "utf-8 text (optional, if memoHex absent)", "expiryHeight": "uint (optional): nExpiryHeight, at least target height + 3; default target + 40. The x402 client passes tip + 3 + ⌈maxTimeoutSeconds/75⌉", "fee": "uint zat (optional; default ZIP-317 conventional); refused below max(1000, 500·max(2, logical actions))", "minConfirmations": "uint (default 1)" },
+      "result": { "txid": "hex", "txHex": "signed raw v4 transaction, NOT broadcast", "feeZat": "uint|null", "targetHeight": "uint", "expiryHeight": "uint", "branchId": "hex", "branchIdSource": "string", "version": "string" },
+      "note": "The SDK's builder contract (packages/ycash/src/shielded/builder.ts) is exactly build {to, amountZat, memoHex, expiryHeight?} → {txHex, txid}. The wallet records the transaction and treats its inputs as spent until expiryHeight passes unbroadcast."
     },
     "send": {
       "params": "same as build",
@@ -55,7 +55,7 @@
     "-32700": "parse error",
     "-32600": "invalid request",
     "-32601": "method not found",
-    "-32602": "invalid params (bad address, amount, memo, hex, birthday or key)",
+    "-32602": "invalid params (bad address, amount, memo, hex, birthday, key or expiryHeight; a fee below the x402 floor)",
     "-32000": "wallet error (db, lightwalletd, proposal, proving, cache)",
     "-32001": "wallet has not synced yet",
     "-32002": "no spending key imported",
