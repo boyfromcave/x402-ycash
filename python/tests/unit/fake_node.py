@@ -31,6 +31,7 @@ from x402_ycash.tx import (
     verify_input_sig,
 )
 from x402_ycash.tx.transaction import OutPoint
+from x402_ycash.yed import FoundPayload, find_payload, validate_transfer_assignments
 
 BRANCH_ID = 0x19BD2D2F
 NETWORK = "ycash:regtest"
@@ -46,6 +47,9 @@ class FakeNode:
         self.txs: dict[str, dict[str, Any]] = {}  # txid -> {hex, height (None = mempool)}
         self.calls: list[str] = []
         self.send_error: RpcError | None = None
+        self.unconfirmed_tokens: set[str] = set()  # token outpoints the overlay cannot see yet (X-F14)
+        self.z_notes: dict[str, list[dict[str, Any]]] = {}  # address -> z_listreceivedbyaddress entries
+        self.issued: list[str] = []
 
     @staticmethod
     def _key(t: str, n: int) -> str:
@@ -87,14 +91,43 @@ class FakeNode:
 
     async def verify_scripts(self, hex_tx: str) -> VerifyScriptsResult:
         self.calls.append("signrawtransaction")
+        return self._verify(hex_tx)
+
+    def _prevout(self, k: str) -> tuple[int, bytes, int] | None:
+        """A coin in the UTXO set, or an output of a mempool tx (signrawtransaction sees both)."""
+        u = self.utxos.get(k)
+        if u:
+            return u
+        t, _, n = k.partition(":")
+        m = self.txs.get(t)
+        if m and m["height"] is None:
+            vout = parse_tx(m["hex"]).vout
+            if int(n) < len(vout):
+                return (vout[int(n)].value, vout[int(n)].script_pubkey, self.tip + 1)
+        return None
+
+    def _verify(self, hex_tx: str) -> VerifyScriptsResult:
+        from x402_ycash.channel import parse_channel_script, parse_close_script_sig
+        from x402_ycash.tx import p2sh_hash
+
         tx = parse_tx(hex_tx)
         errors = []
         for i, inp in enumerate(tx.vin):
             def err(msg: str, inp: TxIn = inp) -> None:
                 errors.append({"txid": inp.prevout.txid, "vout": inp.prevout.vout, "error": msg})
-            u = self.utxos.get(self._key(inp.prevout.txid, inp.prevout.vout))
+            u = self._prevout(self._key(inp.prevout.txid, inp.prevout.vout))
             if not u:
                 err("Input not found or already spent")
+                continue
+            if p2sh_hash(u[1]) is not None:  # a channel close: both signatures over the redeem script
+                ss = parse_close_script_sig(inp.script_sig)
+                cs = parse_channel_script(ss.redeem_script) if ss else None
+                if ss is None or cs is None or hash160(ss.redeem_script) != p2sh_hash(u[1]) or not ss.sig_s:
+                    err("Operation not valid with the current stack size")
+                    continue
+                digest = sighash_v4(tx, i, ss.redeem_script, u[0], SIGHASH_ALL, BRANCH_ID)
+                if not (verify_input_sig(ss.sig_c, digest, cs.client_pubkey) and verify_input_sig(ss.sig_s, digest, cs.server_pubkey)):
+                    err("Script evaluated without error but finished with a false/empty top stack element")
                 continue
             chunks = parse_script(inp.script_sig)
             sig = chunks[0].data if chunks else None
@@ -120,11 +153,57 @@ class FakeNode:
     async def capabilities(self) -> NodeCapabilities:
         return NodeCapabilities("v4", "/YcashCpp:4.5.0/", 4050050, self.yellowback, self.chain)
 
-    async def yed_validate_raw_transaction(self, hex_tx: str) -> dict[str, Any]:
-        self.calls.append("yed_validaterawtransaction")
+    def _overlay(self, hex_tx: str) -> dict[str, Any]:
+        """The overlay's verdict as both lines compute it, for the cases the tests exercise: a TRANSFER
+        whose assignments register and cover yedIn is ok; anything else burns every input cent."""
         tx = parse_tx(hex_tx)
-        yed_in = sum(self.yed_cents.get(self._key(i.prevout.txid, i.prevout.vout), 0) for i in tx.vin)
-        return {"valid": yed_in == 0, "verdict": "OK" if yed_in == 0 else "BURNED", "yedIn": yed_in, "burned": yed_in}
+        keys = [self._key(i.prevout.txid, i.prevout.vout) for i in tx.vin]
+        yed_in = sum(self.yed_cents.get(k, 0) for k in keys)
+        found = find_payload([o.script_pubkey for o in tx.vout])
+        typ, yed_out = "none", 0
+        if isinstance(found, FoundPayload) and found.payload.type == "transfer":
+            typ = "transfer"
+            a = found.payload.assignments
+            if validate_transfer_assignments(a, len(tx.vout), found.index, yed_in).valid:
+                yed_out = yed_in
+        burned = yed_in - yed_out
+        return {"valid": not self._verify(hex_tx).errors, "verdict": "burned" if burned else "ok", "type": typ,
+                "yedIn": yed_in, "yedOut": yed_out, "burned": burned,
+                "unconfirmedInputs": [{"txid": k.split(":")[0], "vout": int(k.split(":")[1])} for k in keys if k in self.unconfirmed_tokens]}
+
+    async def yed_validate_raw_transaction(self, hex_tx: str) -> dict[str, Any]:
+        self._need_overlay("yed_validaterawtransaction")
+        return self._overlay(hex_tx)
+
+    async def yed_decode_payload(self, hex_tx: str) -> dict[str, Any]:
+        self._need_overlay("yed_decodepayload")
+        tx = parse_tx(hex_tx)
+        found = find_payload([o.script_pubkey for o in tx.vout])
+        if not isinstance(found, FoundPayload):
+            return {"valid": False, "version": 3, "type": "none"}
+        return {"valid": True, "version": 3, **found.payload.to_json(), "opReturnIndex": found.index}
+
+    def _need_overlay(self, method: str) -> None:
+        self.calls.append(method)
+        if not self.yellowback:
+            raise RpcError(-32601, "Method not found", method)
+
+    async def yed_get_price(self, height: int | None = None) -> dict[str, Any]:
+        self._need_overlay("yed_getprice")
+        return {"height": self.tip, "pFast": None, "pMid": 50_000_000, "pSlow": None}
+
+    async def z_get_new_address(self) -> str:
+        return encode_sapling(NETWORK, 0)
+
+    async def z_get_new_diversified_address(self, base: str) -> str:
+        assert base == encode_sapling(NETWORK, 0)
+        a = encode_sapling(NETWORK, len(self.issued) + 1)
+        self.issued.append(a)
+        return a
+
+    async def z_list_received_by_address(self, address: str, minconf: int = 1) -> list[dict[str, Any]]:
+        self.calls.append("z_listreceivedbyaddress")
+        return [n for n in self.z_notes.get(address, []) if n.get("confirmations", 0) >= minconf]
 
     def mine(self, n: int = 1) -> None:
         for _ in range(n):
@@ -136,8 +215,16 @@ class FakeNode:
                 tx = parse_tx(m["hex"])
                 for i in tx.vin:
                     self.utxos.pop(self._key(i.prevout.txid, i.prevout.vout), None)
+                overlay = self._overlay(m["hex"]) if self.yellowback else None
+                for i in tx.vin:
+                    self.yed_cents.pop(self._key(i.prevout.txid, i.prevout.vout), None)
                 for n_, o in enumerate(tx.vout):
                     self.utxos[self._key(t, n_)] = (o.value, o.script_pubkey, self.tip)
+                if overlay and overlay["type"] == "transfer" and overlay["verdict"] == "ok":
+                    found = find_payload([o.script_pubkey for o in tx.vout])
+                    assert isinstance(found, FoundPayload)
+                    for a in found.payload.assignments:
+                        self.yed_cents[self._key(t, a.vout)] = a.cents
 
     def accept_to_mempool(self, hex_tx: str) -> None:
         self.txs[txid(hex_tx)] = {"hex": hex_tx, "height": None}
@@ -145,6 +232,12 @@ class FakeNode:
     @staticmethod
     def send_error_of(code: int, message: str) -> SendRawTransactionError:
         return SendRawTransactionError(RpcError(code, message, "sendrawtransaction"))
+
+
+def encode_sapling(network: str, n: int) -> str:
+    """A stand-in Sapling address with the network's HRP (the facilitator compares strings only)."""
+    hrp = {"ycash:regtest": "yregtestsapling", "ycash:testnet": "ytestsapling", "ycash:mainnet": "ys"}[network]
+    return f"{hrp}1{n:0>70}"
 
 
 def _out(value: int, script: bytes, confirmations: int) -> dict[str, Any]:

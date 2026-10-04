@@ -1,6 +1,8 @@
-"""The exact facilitator for Ycash: verification rules 1–10 and settlement of ``transparent`` YEC
-(specs/scheme_exact_ycash.md), implementing upstream's ``SchemeNetworkFacilitator``. It signs
+"""The exact facilitator for Ycash: verification rules 1–10 and settlement of ``transparent`` YEC and
+YED (specs/scheme_exact_ycash.md), implementing upstream's ``SchemeNetworkFacilitator``. It signs
 nothing and pays nothing; it reads the node, and in settle it claims the txid and broadcasts once.
+``sapling-proof`` is routed to a ShieldedExactHandler (x402_ycash.shielded), so the transparent code
+never grows shielded logic.
 
 Upstream's protocol is sync, so ``verify``/``settle`` run the async ``averify``/``asettle`` on the
 bridge loop (x402_ycash._sync); asyncio callers can await the async methods directly.
@@ -11,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from x402.interfaces import FacilitatorContext
 from x402.schemas import Network, PaymentPayload, PaymentRequirements, SettleResponse, VerifyResponse
@@ -21,11 +23,13 @@ from ..constants import YCASH_CAIP_FAMILY
 from ..node import RpcError, SendRawTransactionError
 from ..store import InMemorySettlementStore, SettlementStore, retain_until_for_expiry
 from .constants import (
+    ATM_SAPLING_PROOF,
     ATM_TRANSPARENT,
     ERR_ASSET_TRANSFER_METHOD,
     ERR_DUPLICATE_SETTLEMENT,
     ERR_EXPIRY,
     ERR_INPUT_SPENT,
+    ERR_PAYMENT_FLOW,
     ERR_SETTLEMENT_FAILED,
     ERR_SETTLEMENT_PENDING,
     ERR_TRANSACTION,
@@ -41,6 +45,14 @@ log = logging.getLogger("x402_ycash.exact")
 DEFAULT_CONFIRMATION_TIMEOUT = 75.0
 """One settle must finish inside core's facilitator timeout; core retries once on pending."""
 DEFAULT_CONFIRMATION_POLL = 1.0
+
+
+@runtime_checkable
+class ShieldedExactHandler(Protocol):
+    """The ``sapling-proof`` facilitator half (x402_ycash.shielded.SaplingProofHandler.facilitator_half).
+    The flow is ``upfront``: core never calls verify, but a handler MAY offer ``averify``."""
+
+    async def asettle(self, payload: PaymentPayload, requirements: PaymentRequirements) -> SettleResponse: ...
 
 
 class ExactYcashFacilitatorScheme:
@@ -62,11 +74,15 @@ class ExactYcashFacilitatorScheme:
         max_inputs: int = 50,
         fee_cap_zat: int = 100_000,
         default_confirmations: int = 1,
+        yellowback: bool = False,
+        shielded: ShieldedExactHandler | None = None,
     ) -> None:
         """``confirmations`` is the (minimum, maximum) range this facilitator settles, advertised in
         ``/supported``; default −1..20, or 0..20 with ``accept_mempool=False`` (the operator refusing
         mempool settlement). ``confirmation_timeout`` (seconds) bounds one settle's wait for the
-        policy depth before ``settlement_pending``; never more than maxTimeoutSeconds."""
+        policy depth before ``settlement_pending``; never more than maxTimeoutSeconds. ``yellowback``
+        says the node runs ``-experimentalfeatures -yellowback``, so ``/supported`` lists YED;
+        verification asks the node itself either way. ``shielded`` serves ``sapling-proof``."""
         self._rpc = rpc
         self._store: SettlementStore = settlement_store or InMemorySettlementStore()
         lo, hi = confirmations or (MIN_CONFIRMATIONS if accept_mempool else 0, MAX_CONFIRMATIONS)
@@ -80,15 +96,17 @@ class ExactYcashFacilitatorScheme:
         )
         self._timeout = confirmation_timeout
         self._poll = confirmation_poll
+        self.yellowback = yellowback
+        self._shielded = shielded
 
     # ------------------------------------------------------------------ SchemeNetworkFacilitator
 
     def get_extra(self, network: Network) -> dict[str, Any] | None:
-        """The ``/supported`` capability block. YED (plan X3) and sapling-proof are not served here."""
+        """The ``/supported`` capability block; YED only on a Yellowback node (spec "/supported")."""
         _ = network
         return {
-            "assets": ["YEC"],
-            "assetTransferMethods": [ATM_TRANSPARENT],
+            "assets": ["YEC", "YED"] if self.yellowback else ["YEC"],
+            "assetTransferMethods": [ATM_TRANSPARENT, ATM_SAPLING_PROOF] if self._shielded else [ATM_TRANSPARENT],
             "areFeesSponsored": False,
             "confirmations": {"minimum": self.limits.min_confirmations, "maximum": self.limits.max_confirmations},
         }
@@ -112,8 +130,15 @@ class ExactYcashFacilitatorScheme:
                       context: FacilitatorContext | None = None) -> VerifyResponse:
         _ = context
         if is_shielded_method(requirements.extra):
-            return VerifyResponse(is_valid=False, invalid_reason=ERR_ASSET_TRANSFER_METHOD,
-                                  invalid_message="sapling-proof is not served by this facilitator", payer="")
+            if self._shielded is None:
+                return VerifyResponse(is_valid=False, invalid_reason=ERR_ASSET_TRANSFER_METHOD,
+                                      invalid_message="sapling-proof is not configured", payer="")
+            averify = getattr(self._shielded, "averify", None)
+            if averify is None:
+                return VerifyResponse(is_valid=False, invalid_reason=ERR_PAYMENT_FLOW,
+                                      invalid_message="sapling-proof is upfront: settle, not verify", payer="")
+            result: VerifyResponse = await averify(payload, requirements)
+            return result
         try:
             r = await verify_transparent(self._rpc, self._store, payload, requirements, self.limits)
         except Exception as e:  # noqa: BLE001  # a node or transport failure says nothing about the payment
@@ -131,7 +156,9 @@ class ExactYcashFacilitatorScheme:
         _ = context
         network = requirements.network
         if is_shielded_method(requirements.extra):
-            return _failure(ERR_ASSET_TRANSFER_METHOD, network, "", "sapling-proof is not served by this facilitator")
+            if self._shielded is None:
+                return _failure(ERR_ASSET_TRANSFER_METHOD, network, "", "sapling-proof is not configured")
+            return await self._shielded.asettle(payload, requirements)
         s = resolve_payment(payload, requirements, self.limits)
         if isinstance(s, Failure):
             return _failure(s.reason, network, "", s.message)
