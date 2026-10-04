@@ -13,7 +13,10 @@
 //!    once the wallet is fully synced from its birthday, never from a partial scan.
 //! 3. **Reorg by checkpoint.** Each chunk's first `prev_hash` is compared with the wallet's stored
 //!    hash for the block before it; on a mismatch (or a continuity error inside the scanner) the
-//!    wallet truncates to the previous checkpoint and resumes from the suggested ranges.
+//!    wallet truncates to the previous checkpoint and resumes from the suggested ranges in the
+//!    same pass. A rewind the store refuses (no checkpoint at or below it since the birthday:
+//!    a reorg within [`REORG_REWIND`] blocks of the birthday, YEW Z-9) goes instead to the block
+//!    before the birthday with the server's chain state for it (`Wallet::rewind_for_reorg`).
 //!
 //! Two gaps in the 0.4.6 wire format are bridged locally: `CompactBlock.chainMetadata` is absent,
 //! so the Sapling tree size after each block (needed for note positions and nullifiers) is
@@ -30,9 +33,10 @@ use zcash_client_backend::data_api::chain::{
     error::Error as ChainError, scan_cached_blocks, ChainState,
 };
 use zcash_client_backend::data_api::scanning::{ScanPriority, ScanRange};
-use zcash_client_backend::data_api::{WalletRead, WalletWrite};
+use zcash_client_backend::data_api::{WalletCommitmentTrees, WalletRead, WalletWrite};
 use zcash_client_backend::proto::compact_formats::{ChainMetadata, CompactBlock};
 use zcash_client_sqlite::chain::BlockMeta;
+use zcash_client_sqlite::error::SqliteClientError;
 use zcash_primitives::block::BlockHash;
 use zcash_protocol::consensus::BlockHeight;
 
@@ -44,7 +48,13 @@ use crate::wallet::{Error, Wallet};
 pub const CHUNK_OUTPUTS: u32 = 1_000;
 pub const DEFAULT_CHUNK_BLOCKS: u32 = 2_000;
 /// Blocks to rewind below a mismatch, as `sync::run` does.
-const REORG_REWIND: u32 = 10;
+pub const REORG_REWIND: u32 = 10;
+/// Refused rewinds answered from the birthday per sync, after which the refusal is returned: a
+/// bound for a server whose chain keeps changing under the birthday (each one rescans from it).
+pub const MAX_BIRTHDAY_REWINDS: u32 = 3;
+/// The deepest reorg either node line accepts: `MAX_REORG_LENGTH = COINBASE_MATURITY - 1`
+/// (ycash-dd `src/main.h:62`, ycash6 `src/main.h:66`), rounded up.
+const MAX_REORG_DEPTH: u32 = 100;
 
 #[allow(non_snake_case)]
 #[derive(Debug, Default, Serialize)]
@@ -55,6 +65,10 @@ pub struct SyncReport {
     pub chunksScanned: u32,
     pub outputsScanned: u64,
     pub reorgs: u32,
+    /// Reorgs whose rewind the store refused (no checkpoint at or below it, e.g. within
+    /// [`REORG_REWIND`] blocks of the birthday), answered by rewinding to the block before the
+    /// birthday and rescanning from there; also counted in `reorgs`.
+    pub birthdayRewinds: u32,
     pub receivedNotes: u32,
     pub spentNotes: u32,
     pub downloadMillis: u128,
@@ -115,9 +129,15 @@ impl Wallet {
                 RangeOutcome::Done => {}
                 RangeOutcome::Reorg(at) => {
                     report.reorgs += 1;
-                    let rewind = at.saturating_sub(REORG_REWIND);
-                    tracing::warn!("chain reorg at {at}, rewinding to checkpoint {rewind}");
-                    self.db.truncate_to_height(rewind)?;
+                    if self.rewind_for_reorg(at, report.birthdayRewinds).await? == Rewind::Birthday
+                    {
+                        report.birthdayRewinds += 1;
+                    }
+                    // The rewind trimmed the scan queue, and the chain tip with it, to the rewound
+                    // height: restore the tip so this pass rescans the new branch.
+                    let tip = lwd::latest_height(&mut self.client).await?;
+                    report.tipHeight = u32::from(tip);
+                    self.db.update_chain_tip(tip)?;
                 }
                 RangeOutcome::HigherPriority => {}
             }
@@ -131,6 +151,68 @@ impl Wallet {
             .map(|s| u32::from(s.fully_scanned_height()));
         report.millis = started.elapsed().as_millis();
         Ok(report)
+    }
+
+    /// Rewinds the store for a reorg detected at `at`: to the latest checkpoint at or below
+    /// `at - REORG_REWIND`, as `sync::run` does. The store refuses (`RequestedRewindInvalid`) when
+    /// it has no such checkpoint among the blocks it scanned, which start at the birthday and are
+    /// checkpointed only where they hold a note commitment: every reorg within ten blocks of the
+    /// birthday (a new or freshly restored wallet's first blocks), and any reorg on a chain with no
+    /// Sapling output between the birthday and the rewind height. Without an answer the sync
+    /// would fail at that refusal on this and every later call (YEW Z-9).
+    ///
+    /// The answer is the block before the birthday, where scanning starts anyway (no note of this
+    /// account predates it): the store is truncated to the chain state the server reports for that
+    /// height (`GetTreeState`), not the one saved at import, so it is right even when the reorg
+    /// replaced the birthday block itself. Only the refusal is handled this way, and at most
+    /// `MAX_BIRTHDAY_REWINDS` times per sync (`done` so far); any other error is returned.
+    pub(crate) async fn rewind_for_reorg(
+        &mut self,
+        at: BlockHeight,
+        done: u32,
+    ) -> Result<Rewind, Error> {
+        let rewind = at.saturating_sub(REORG_REWIND);
+        tracing::warn!("chain reorg at {at}, rewinding to checkpoint {rewind}");
+        match self.db.truncate_to_height(rewind) {
+            Ok(_) => Ok(Rewind::Checkpoint),
+            Err(SqliteClientError::RequestedRewindInvalid {
+                safe_rewind_height,
+                requested_height,
+            }) if done < MAX_BIRTHDAY_REWINDS => {
+                let birthday = self.db.get_account_birthday(self.account()?)?;
+                let below = birthday - 1;
+                tracing::warn!(
+                    "rewind to {requested_height} refused (oldest checkpoint {safe_rewind_height:?}); rewinding to {below}, the block before the birthday"
+                );
+                let state = self.chain_state_at(below).await?;
+                match self.db.truncate_to_chain_state(state) {
+                    Ok(()) => {}
+                    // The branch also replaced note commitments below the birthday, so the
+                    // server's frontier there conflicts with the leaves saved at import. Go to
+                    // a height below any reorg the node accepts (MAX_REORG_LENGTH), whose
+                    // frontier both chains share, and drop every leaf after it. One
+                    // transaction: the store either keeps its old state or has the new one.
+                    // Scanning still starts at the birthday, from the server's state there.
+                    Err(SqliteClientError::CommitmentTree(e)) => {
+                        let deeper = below.saturating_sub(MAX_REORG_DEPTH);
+                        tracing::warn!(
+                            "the tree state at {below} changed ({e}); rewinding the tree to {deeper}"
+                        );
+                        let state = self.chain_state_at(deeper).await?;
+                        self.db.transactionally(|wdb| {
+                            wdb.truncate_to_chain_state(state)?;
+                            wdb.with_sapling_tree_mut(|tree| {
+                                tree.truncate_to_checkpoint(&deeper)?;
+                                Ok::<_, SqliteClientError>(())
+                            })
+                        })?;
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+                Ok(Rewind::Birthday)
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Streams `range` from lightwalletd in a producer task, chunking by outputs/blocks, and scans
@@ -371,8 +453,231 @@ fn bad_cmu(
     })
 }
 
+/// How [`Wallet::rewind_for_reorg`] rewound.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Rewind {
+    /// To a checkpoint at or below `at - REORG_REWIND`.
+    Checkpoint,
+    /// To the block before the birthday, the store having refused the checkpoint rewind.
+    Birthday,
+}
+
 enum RangeOutcome {
     Done,
     Reorg(BlockHeight),
     HigherPriority,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fake_lwd::{self, Chain, Fake};
+    use crate::wallet::{Options, Wallet};
+    use crate::YcashNetwork;
+
+    const BIRTHDAY: u32 = 101;
+
+    /// A wallet over the fake with a fresh key born at `BIRTHDAY`, synced to `tip` of a chain with
+    /// a Sapling output at each of `outputs`.
+    async fn synced(name: &str, tip: u64, outputs: &[u64]) -> (Fake, Wallet, std::path::PathBuf) {
+        synced_from(name, BIRTHDAY, tip, outputs).await
+    }
+
+    async fn synced_from(
+        name: &str,
+        birthday: u32,
+        tip: u64,
+        outputs: &[u64],
+    ) -> (Fake, Wallet, std::path::PathBuf) {
+        let (fake, channel, _) = fake_lwd::start(true).await;
+        let mut chain = Chain::new(tip);
+        chain.outputs.extend(outputs);
+        fake.set_chain(chain);
+        let dir = fake_lwd::temp_data_dir(name);
+        let mut w = Wallet::open(Options {
+            channel: Some(channel),
+            ..Options::new(&dir, "fake", YcashNetwork::devnet_regtest())
+        })
+        .await
+        .expect("open");
+        let extsk = sapling::zip32::ExtendedSpendingKey::master(&[7; 32]);
+        w.register_key(extsk, Some(birthday)).await.expect("key");
+        let r = w.sync(DEFAULT_CHUNK_BLOCKS).await.expect("first sync");
+        assert_eq!(r.scannedHeight, Some(tip as u32));
+        assert_eq!((r.reorgs, r.birthdayRewinds), (0, 0));
+        (fake, w, dir)
+    }
+
+    fn stored_hash(w: &Wallet, h: u64) -> Option<[u8; 32]> {
+        w.db.get_block_hash(BlockHeight::from_u32(h as u32))
+            .expect("read")
+            .map(|b| b.0)
+    }
+
+    /// After a sync: every block from the birthday to the tip is the served chain's. (The scanner
+    /// checks each chunk's Sapling tree size against its checkpoint, so a wrong tree state at the
+    /// rewind would have failed the sync.)
+    async fn assert_on_chain(fake: &Fake, w: &mut Wallet) {
+        let chain = fake.chain().expect("chain");
+        for h in u64::from(BIRTHDAY)..=chain.tip {
+            assert_eq!(stored_hash(w, h), Some(chain.hash(h)), "block {h}");
+        }
+        let top = w.db.get_max_height_hash().expect("max height");
+        assert_eq!(top.map(|(h, _)| u64::from(u32::from(h))), Some(chain.tip));
+    }
+
+    async fn cleanup(w: Wallet, dir: std::path::PathBuf) {
+        drop(w);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// YEW Z-9: a reorg within ten blocks of the birthday replacing the block that holds a
+    /// receipt (102). The checkpoint rewind (105 - 10 = 95) lies below the store's oldest
+    /// checkpoint (102, the only block with a note commitment) and is refused; the sync rewinds to
+    /// 100 with the server's tree state and scans the new branch instead of failing on this and
+    /// every later call.
+    #[tokio::test]
+    async fn a_reorg_near_the_birthday_rewinds_to_the_birthday() {
+        let (fake, mut w, dir) = synced("rewind-near", 105, &[102]).await;
+        fake.with_chain(|c| c.fork(102, 106));
+        fake.tree_states.lock().unwrap().clear();
+
+        let r = w.sync(DEFAULT_CHUNK_BLOCKS).await.expect("syncs through");
+        assert_eq!(r.scannedHeight, Some(106));
+        assert_eq!((r.reorgs, r.birthdayRewinds), (1, 1), "{r:?}");
+        assert_eq!(r.blocksScanned, 6, "rescanned from the birthday: {r:?}");
+        assert!(
+            fake.tree_states
+                .lock()
+                .unwrap()
+                .contains(&u64::from(BIRTHDAY - 1)),
+            "the birthday's chain state comes from the server"
+        );
+        assert_on_chain(&fake, &mut w).await;
+
+        // The next reorg near the birthday is answered the same way, not refused for good.
+        fake.with_chain(|c| c.fork(104, 107));
+        let r = w.sync(DEFAULT_CHUNK_BLOCKS).await.expect("again");
+        assert_eq!((r.scannedHeight, r.birthdayRewinds), (Some(107), 1));
+        assert_on_chain(&fake, &mut w).await;
+        let r = w.sync(DEFAULT_CHUNK_BLOCKS).await.expect("quiet");
+        assert_eq!((r.reorgs, r.blocksScanned), (0, 0));
+        cleanup(w, dir).await;
+    }
+
+    /// A deeper branch: one replacing the birthday block itself, and one forking below the
+    /// birthday. The rewind uses the server's current state for the block before the birthday,
+    /// not the one saved at import.
+    #[tokio::test]
+    async fn a_branch_replacing_the_birthday_block_or_below_syncs_through() {
+        for (name, from, outputs) in [
+            ("rewind-at", u64::from(BIRTHDAY), &[103][..]),
+            ("rewind-below", 97, &[103][..]),
+            // The branch also replaces a note commitment below the birthday: the tree state at
+            // the block before the birthday changes, and the rewind takes the server's.
+            ("rewind-below-tree", 97, &[98, 103][..]),
+        ] {
+            let (fake, mut w, dir) = synced(name, 104, outputs).await;
+            fake.with_chain(|c| c.fork(from, 109));
+            let r = w.sync(DEFAULT_CHUNK_BLOCKS).await.expect("syncs through");
+            assert_eq!(r.scannedHeight, Some(109), "{name}");
+            assert_eq!(r.birthdayRewinds, 1, "{name}: {r:?}");
+            assert_on_chain(&fake, &mut w).await;
+            cleanup(w, dir).await;
+        }
+    }
+
+    /// Far from the birthday, with a checkpoint (a block with a note commitment) at or below the
+    /// rewind height, the checkpoint rewind is accepted as before: no rescan from the birthday.
+    #[tokio::test]
+    async fn a_reorg_far_from_the_birthday_uses_the_checkpoint() {
+        let (fake, mut w, dir) = synced("rewind-far", 140, &[110, 120, 128, 137]).await;
+        fake.with_chain(|c| c.fork(136, 141));
+        fake.tree_states.lock().unwrap().clear();
+        let r = w.sync(DEFAULT_CHUNK_BLOCKS).await.expect("sync");
+        assert_eq!(r.scannedHeight, Some(141));
+        assert_eq!((r.reorgs, r.birthdayRewinds), (1, 0), "{r:?}");
+        assert!(!fake
+            .tree_states
+            .lock()
+            .unwrap()
+            .contains(&u64::from(BIRTHDAY - 1)));
+        // 140 - 10 = 130 lands on the checkpoint at 128: 129..=141 rescanned.
+        assert_eq!(r.blocksScanned, 13, "{r:?}");
+        assert_on_chain(&fake, &mut w).await;
+        cleanup(w, dir).await;
+    }
+
+    /// The refusal is not only "within ten blocks of the birthday": the store checkpoints only
+    /// blocks with note commitments, so with no Sapling output between the birthday and the
+    /// rewind height (common on a quiet chain) it refuses too, and the same answer applies.
+    #[tokio::test]
+    async fn a_reorg_with_no_checkpoint_below_rewinds_to_the_birthday() {
+        let (fake, mut w, dir) = synced("rewind-quiet", 140, &[]).await;
+        fake.with_chain(|c| c.fork(136, 141));
+        let r = w.sync(DEFAULT_CHUNK_BLOCKS).await.expect("sync");
+        assert_eq!(r.scannedHeight, Some(141));
+        assert_eq!((r.reorgs, r.birthdayRewinds), (1, 1), "{r:?}");
+        assert_eq!(r.blocksScanned, 41, "{r:?}");
+        assert_on_chain(&fake, &mut w).await;
+        cleanup(w, dir).await;
+    }
+
+    /// The same, on a chain whose tree is not empty below the reorg: the stale leaf at 298 goes,
+    /// the shared ones (150, 250) stay, and the new branch's 298 and 303 are scanned on top.
+    #[tokio::test]
+    async fn a_branch_replacing_a_commitment_below_the_birthday_keeps_the_shared_tree() {
+        let (fake, mut w, dir) = synced_from("rewind-deep", 301, 304, &[150, 250, 298, 303]).await;
+        fake.with_chain(|c| c.fork(297, 306));
+        let r = w.sync(DEFAULT_CHUNK_BLOCKS).await.expect("syncs through");
+        assert_eq!(
+            (r.scannedHeight, r.birthdayRewinds),
+            (Some(306), 1),
+            "{r:?}"
+        );
+        let asked = fake.tree_states.lock().unwrap().clone();
+        assert!(
+            asked.contains(&300) && asked.contains(&200),
+            "300 conflicted, so the tree went to 300 - 100: {asked:?}"
+        );
+        let chain = fake.chain().expect("chain");
+        for h in 301..=306 {
+            assert_eq!(stored_hash(&w, h), Some(chain.hash(h)), "block {h}");
+        }
+        // The next block's output lands at the right position: scanning checks the tree size.
+        fake.with_chain(|c| {
+            c.outputs.insert(307);
+            c.tip = 307;
+        });
+        let r = w.sync(DEFAULT_CHUNK_BLOCKS).await.expect("next block");
+        assert_eq!((r.scannedHeight, r.reorgs), (Some(307), 0));
+        cleanup(w, dir).await;
+    }
+
+    /// The birthday answer is bounded per sync; past the bound the refusal is returned as is.
+    #[tokio::test]
+    async fn birthday_rewinds_are_bounded() {
+        let (fake, mut w, dir) = synced("rewind-bound", 105, &[102]).await;
+        let at = BlockHeight::from_u32(105);
+        match w.rewind_for_reorg(at, MAX_BIRTHDAY_REWINDS).await {
+            Err(Error::Wallet(SqliteClientError::RequestedRewindInvalid {
+                requested_height,
+                ..
+            })) => assert_eq!(u32::from(requested_height), 95),
+            other => panic!("expected the refusal, got {other:?}"),
+        }
+        assert_eq!(stored_hash(&w, 105), Some(fake.chain().unwrap().hash(105)));
+        assert_eq!(
+            w.rewind_for_reorg(at, MAX_BIRTHDAY_REWINDS - 1)
+                .await
+                .expect("within the bound"),
+            Rewind::Birthday
+        );
+        assert_eq!(
+            stored_hash(&w, u64::from(BIRTHDAY)),
+            None,
+            "truncated to 100"
+        );
+        cleanup(w, dir).await;
+    }
 }

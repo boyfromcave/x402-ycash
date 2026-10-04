@@ -129,7 +129,26 @@ its own loop (`src/sync.rs`), shaped after hhanh00's zcash-sync (YWallet's Ycash
    witnesses.
 3. **Reorg by checkpoint.** Each chunk's first `prev_hash` is checked against the wallet's hash
    for the block before it (and the scanner re-checks every block); a mismatch rewinds the wallet
-   ten blocks and resumes from the suggested ranges.
+   ten blocks (to the latest store checkpoint at or below that height) and rescans the new branch
+   in the same pass.
+
+**Reorgs near the birthday (YEW Z-9).** `zcash_client_sqlite` can only truncate to a checkpoint
+among the blocks it has scanned, and it checkpoints only blocks that hold a note commitment. So it
+refuses the ten-block rewind (`RequestedRewindInvalid`) whenever no such block lies between the
+birthday and the rewind height: every reorg within ten blocks of the birthday, which is a new or
+freshly restored wallet's first blocks, and any reorg on a stretch of chain with no Sapling output
+since the birthday. Before the fix that refusal ended the sync, and every later sync hit it again.
+Now `sync` answers it by rewinding to the block before the birthday with the chain state the server
+reports for it now (`GetTreeState`, so a branch that replaced the birthday block is handled too),
+and rescans from the birthday. When the branch also replaced Sapling outputs *below* the birthday,
+the frontier saved at import conflicts with the server's; the store's tree is then truncated, in
+one transaction, to the frontier 100 blocks further down (deeper than either node line reorgs,
+`MAX_REORG_LENGTH` = 99), which both chains share. The rescan costs at most the blocks since the
+birthday, it happens at most three times per sync (`MAX_BIRTHDAY_REWINDS`; a fourth refusal is
+returned as the error), and the report counts it in `birthdayRewinds` as well as `reorgs`. Notes,
+memos and sent transactions survive a rewind; their mined heights are cleared and set again by the
+rescan. Unit tests: `src/sync.rs` (a forkable fake lightwalletd); devnet:
+`reorg_near_the_birthday_syncs_through` in `tests/regtest.rs`, on both node lines.
 
 `CompactBlock.chainMetadata` (the Sapling tree size after each block) is absent from 0.4.6, and
 the scanner needs it to place notes and derive nullifiers: `sync.rs` computes it from the
@@ -180,6 +199,15 @@ to a merchant `yregtestsapling1…`, checks the branch id against
 mempool view, mines, confirms with `z_listreceivedbyaddress` (amount + memo), syncs again, sends a
 second payment with a fixed 5000-zat fee, and times a 22-block catch-up. Timings land in
 `$X402_SCRATCH/lightcore-<line>.json`. Results and findings: see the x402 plan (chunk `lightcore`).
+
+The second test, `reorg_near_the_birthday_syncs_through` (chunk `lightrewind`), imports a key born
+at the tip and receives 1.5 YEC a few blocks above it. R1 invalidates the receipt's block on every
+node, syncs while the chain stands below it, re-mines the receipt in a competing block at the same
+height and syncs through (one reorg, one birthday rewind, balance unchanged, the note at its
+height). R2 receives 0.25 YEC more, then replaces the chain from the birthday block itself with a
+longer branch carrying both receipts, syncs through again, and spends 0.5 YEC from the rescanned
+notes to prove the witnesses. Its record lands in `$X402_SCRATCH/lightrewind-<line>.json`. The
+tests run one at a time (they share node 0's wallet); `X402_LIGHT_TEST=<name>` runs one.
 
 Both Ycash networks' parameters are available in librustzcash6: mainnet (`ys`, coin type 347,
 Ycash fork 570 000, Canopy latest) and testnet (`ytestsapling`, fork 510 248); regtest is
