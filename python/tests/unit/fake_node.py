@@ -203,6 +203,9 @@ class FakeNode:
 
     async def z_list_received_by_address(self, address: str, minconf: int = 1) -> list[dict[str, Any]]:
         self.calls.append("z_listreceivedbyaddress")
+        if getattr(self, "viewing_key_only", False) and address not in self.z_notes:
+            # A viewing-key-only wallet refuses an address it has decrypted no note at (both lines).
+            raise RpcError(-5, "From address does not belong to this node, zaddr spending key or viewing key not found.", "z_listreceivedbyaddress")
         return [n for n in self.z_notes.get(address, []) if n.get("confirmations", 0) >= minconf]
 
     def mine(self, n: int = 1) -> None:

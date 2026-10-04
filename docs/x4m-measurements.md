@@ -561,7 +561,7 @@ not a new measurement.
 - **One dedicated Sapling key for x402 revenue**, separate from treasury funds. A viewing key, if it
   ever has to be shared, then reveals only that revenue.
 - **Issue per-request addresses from the viewing key, offline** (f), in an index range the node never
-  walks (from 2^40). Alternatively, issue them from the merchant's own wallet with
+  walks (from 2^40): `MERCHANT_SAPLING_ISSUER=offline`. Alternatively, issue them from the merchant's own wallet with
   `z_getnewdiversifiedaddress`.
 - **Settle on a node that holds only the viewing key.** Keep the spending key in a wallet that is not
   on the request path, and sweep from it.
@@ -569,6 +569,21 @@ not a new measurement.
   would learn every payment, so offer hosted facilitators for transparent methods only (as §5.10 says).
 - **Receipts for disclosure:** the `offer-and-receipt` JWS that settlement returns. No on-chain Sapling
   disclosure exists on either line (c). Never hand over a viewing key to prove one payment.
+
+**Rehearsed on both lines (2026-10-03).** These defaults now run end to end in the SDK and were
+rehearsed on a v4.5.0 devnet (seed 291) and a 6.21.0 devnet (seed 293):
+
+- `OfflineAddressIssuer` (`packages/ycash/src/shielded/issuer.ts`) derives each address from the
+  viewing key, from index 2^40, in TypeScript (`src/shielded/sapling`: FF1-AES-256 diversifiers and
+  `pk_d = [ivk]·g_d` on `@noble/curves`' Jubjub). Its output equals both lines' wallets at the same
+  index and sapling-crypto 0.7's `divaddr` (`vectors/shielded/divaddr.json`).
+- In the rehearsal (`examples/merchant-express/test/devnet/viewkey.http.devnet.test.ts`), the
+  merchant ran with no node. The facilitator settled on a stock node that held only the viewing
+  key. An agent paid P1 and P0, and both JWS receipts verified. The spending-key node had been
+  offline throughout; it came back, found both notes and swept them.
+- Learned on the way: a viewing-key node answers `z_listreceivedbyaddress` with `-5` for an
+  offline-issued address until it has decrypted a note to it, on both lines. The facilitator now
+  reads that as "not received yet". The setup is in `docs/mainnet-runbook.md`, "Shielded layout".
 
 **(iii) X4b (facilitator-submitted Sapling, with a Rust builder): no-go for now. Revisit together with
 the agent light client.**

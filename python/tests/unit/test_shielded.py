@@ -202,6 +202,15 @@ async def test_bounded_note_wait(env):
     assert asyncio.get_running_loop().time() - t0 < 0.6  # note_wait 0.3 s
 
 
+async def test_viewing_key_node_refuses_unseen_address_as_not_received(env):
+    node, h, _, _ = env
+    node.viewing_key_only = True
+    req = await issue(h, node)
+    assert (await h.asettle(payload(req), req)).error_reason == C.ERR_NOT_RECEIVED
+    note(req)
+    assert (await h.asettle(payload(req), req)).success
+
+
 @pytest.mark.parametrize(("case", "reason"), [
     ("under", C.ERR_UNDERPAID), ("memo", C.ERR_MEMO_MISMATCH), ("txid", C.ERR_TXID_MALFORMED),
     ("unknown", C.ERR_UNKNOWN_INSTRUMENT), ("flow", C.ERR_PAYMENT_FLOW), ("method", C.ERR_ASSET_TRANSFER_METHOD),

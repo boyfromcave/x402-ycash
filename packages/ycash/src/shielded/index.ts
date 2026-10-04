@@ -5,6 +5,8 @@ export * from "./request.js";
 export * from "./registry.js";
 export * from "./price.js";
 export * from "./receipt.js";
+export * from "./issuer.js";
+export * from "./sapling/index.js";
 export * from "./server.js";
 export * from "./facilitator.js";
 export * from "./client.js";

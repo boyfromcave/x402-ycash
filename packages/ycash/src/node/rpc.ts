@@ -350,7 +350,9 @@ export class YcashRpc {
     const amounts = recipients.map((r) => ({ address: r.address, amount: zatToYecString(r.amount), ...(r.memo ? { memo: r.memo } : {}) }));
     const params: unknown[] = [from, amounts];
     if (opts.minconf !== undefined || opts.fee !== undefined || opts.privacyPolicy !== undefined) params.push(opts.minconf ?? 1);
-    if (opts.fee !== undefined || opts.privacyPolicy !== undefined) params.push(opts.fee === undefined ? null : zatToYecString(opts.fee));
+    // The fee is a JSON number: v4.5.0 reads it with get_real() first, which refuses a string
+    // (`ycash-dd/src/wallet/rpcwallet.cpp:4301-4302`); 6.21.0 takes either.
+    if (opts.fee !== undefined || opts.privacyPolicy !== undefined) params.push(opts.fee === undefined ? null : Number(zatToYecString(opts.fee)));
     if (opts.privacyPolicy !== undefined) params.push(opts.privacyPolicy);
     return this.call("z_sendmany", params);
   }

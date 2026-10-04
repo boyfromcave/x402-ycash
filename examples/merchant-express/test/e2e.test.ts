@@ -1,6 +1,7 @@
 // End to end over real HTTP: the agent (agent-client, @x402/fetch) pays the merchant (@x402/express),
 // which verifies and settles through the facilitator service. A fake `exact` scheme stands in for the
 // Ycash mechanism; everything else is the production code path.
+import { readFileSync } from "node:fs";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -152,6 +153,18 @@ describe("loadMerchantConfig", () => {
     expect(() => loadMerchantConfig({ ...base, ...node, MERCHANT_ISSUED_REGISTRY: "/r.json", MERCHANT_SAPLING_BASE_ADDRESS: "ys1abc" })).toThrow(/regtest Sapling/);
     expect(() => loadMerchantConfig({ ...base, MERCHANT_ISSUED_REGISTRY: "/r.json" })).toThrow(/wallet node/);
     expect(JSON.stringify(describeConfig(c))).not.toContain("5a".repeat(32));
+  });
+  it("issues offline from a viewing key with no node; validates the issuer settings", () => {
+    const vk = (JSON.parse(readFileSync(new URL("../../../vectors/shielded/divaddr.json", import.meta.url), "utf8")) as { cases: { viewingKey: string }[] }).cases[0]!.viewingKey;
+    const off = { ...base, MERCHANT_ISSUED_REGISTRY: "/r.json", MERCHANT_SAPLING_ISSUER: "offline", MERCHANT_SAPLING_VIEWING_KEY: vk };
+    expect(loadMerchantConfig(off).shielded).toEqual({ registryPath: "/r.json", confirmations: 1, offline: { viewingKey: vk, startIndex: 1n << 40n, indexPath: "merchant-sapling-index.json" } });
+    expect(loadMerchantConfig({ ...off, MERCHANT_SAPLING_START_INDEX: "4294967296", MERCHANT_SAPLING_INDEX_FILE: "/i.json" }).shielded?.offline).toMatchObject({ startIndex: 1n << 32n, indexPath: "/i.json" });
+    expect(() => loadMerchantConfig({ ...off, MERCHANT_SAPLING_START_INDEX: "7" })).toThrow(/2\^32/);
+    expect(() => loadMerchantConfig({ ...off, MERCHANT_SAPLING_VIEWING_KEY: undefined })).toThrow(/MERCHANT_SAPLING_VIEWING_KEY/);
+    expect(() => loadMerchantConfig({ ...off, X402_NETWORK: "ycash:testnet", MERCHANT_PAY_TO: undefined })).toThrow();
+    expect(() => loadMerchantConfig({ ...off, MERCHANT_SAPLING_BASE_ADDRESS: "yregtestsapling1abc" })).toThrow(/node-wallet issuer/);
+    expect(() => loadMerchantConfig({ ...off, MERCHANT_SAPLING_ISSUER: "hosted" })).toThrow(/MERCHANT_SAPLING_ISSUER/);
+    expect(JSON.stringify(describeConfig(loadMerchantConfig(off)))).not.toContain(vk);
   });
   it("defaults the zero-confirmation cap to the ticker price", () => {
     expect(loadMerchantConfig({ ...base, PRICE_TICKER_ZAT: "20000" }).zeroConfCapZat).toBe(20_000n);
