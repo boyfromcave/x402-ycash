@@ -300,7 +300,18 @@ describeDevnet("exact YEC through @x402/core on a live devnet", () => {
     await fundPayer(yp, 2);
     // node 0 mints YED (two transactions: the carrier, then the MINT) and sends $1.00 to the payer's yr… address
     if ((await d.wallet.call<unknown[]>("yed_listunspent")).length === 0) {
-      await d.wallet.call("yed_mint", [10_000, 48, "", "", false]);
+      // after a run of stock-mined blocks the price window is empty (mintpol-no-price) or minting is
+      // halted (mintpol-participation, ACT-4); pool blocks carry quotes and participate (yed's ensureYed)
+      await waitFor(async () => {
+        try {
+          await d.wallet.call("yed_mint", [10_000, 48, "", "", false]);
+          return true;
+        } catch (e) {
+          if (!/price|participation/i.test((e as Error).message)) throw e;
+          await d.mine(4, d.pool);
+          return false;
+        }
+      }, { timeoutMs: 180_000, pollMs: 100, what: "a mint price" });
       await waitFor(async () => (await d.mine(1), (await d.wallet.call<unknown[]>("yed_listunspent")).length > 0), { timeoutMs: 120_000, what: "the MINT" });
     }
     await waitFor(async () => {

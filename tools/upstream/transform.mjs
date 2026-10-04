@@ -86,6 +86,9 @@ function rewriteProse(text) {
   let s = text;
   // "the channel scriptSigs of plan §5.7" → "the channel scriptSigs"
   s = s.replace(/\s+(?:of|in)\s+(?:the\s+)?plan\s+§[\d.]+/g, "");
+  // the plan's N rows (node changes not made) have no Appendix A row; a bare phase id "(X4b)"
+  s = s.replace(/,?\s*plan N-\d+\b/g, "");
+  s = s.replace(/\s*\(X\d+[a-z]?(?:,\s*X\d+[a-z]?)*\)/g, "");
   // the plan's node ids outside parentheses ("plan Y-8" → "Y-8")
   s = s.replace(/\bplan ([RSYZGC]-\d+a?)\b/g, "$1");
   // "the plan's node assumptions" and similar
@@ -101,6 +104,8 @@ function rewriteProse(text) {
   s = s.replace(/^(\s*\/\/\s*)x402-ycash: /, "$1");
   s = s.replace(/\bycash-dd\b(?![-.\w/])/g, "Ycash 4.5.0");
   s = s.replace(/\bycash6\b(?![-.\w/])/g, "Ycash 6.21.0");
+  // the reference light client stays in x402-ycash (upstream SDKs are per language)
+  s = s.replace(/(?<![\w/])light\/schema\.json/g, "x402-ycash light/schema.json");
   // spec paths
   s = s.replace(/\bspecs\/scheme_exact_ycash\.md/g, "specs/schemes/exact/scheme_exact_ycash.md");
   s = s.replace(/\bspecs\/scheme_batch_settlement_ycash\.md/g, "specs/schemes/batch-settlement/scheme_batch_settlement_ycash.md");
@@ -130,8 +135,8 @@ function transformCode(dir) {
       return `${kw}"${p}"`;
     });
     // vectors: <repo>/vectors/… → <package>/test/vectors/… (tests sit in test/unit/ or one level below)
-    s = s.replace(/"(?:\.\.\/){4}vectors\//g, '"../vectors/');
-    s = s.replace(/"(?:\.\.\/){5}vectors\//g, '"../../vectors/');
+    s = s.replace(/(["`])(?:\.\.\/){4}vectors\//g, "$1../vectors/");
+    s = s.replace(/(["`])(?:\.\.\/){5}vectors\//g, "$1../../vectors/");
     // the cross-process store test spawns tsx: pnpm puts it in the package's own node_modules
     s = s.replace('"../../../../../node_modules/.bin/tsx"', '"../../../node_modules/.bin/tsx"');
     s = rewriteParens(s);
@@ -171,9 +176,17 @@ function transformSpec(file, which) {
   const header = "| # | Behaviour | `ycash-dd` (4.5.0) | `ycash6` (6.21.0) |";
   s = replaceOnce(s, header, "| # | Behaviour | Ycash 4.5.0 | Ycash 6.21.0 |", file);
   if (which === "exact") {
-    s = replaceOnce(s, "(`sapling`, plan X4b)", "(`sapling`)", file);
     s = replaceOnce(s, "It uses stock RPCs on both node lines. This is plan X4a.", "It uses stock RPCs on both node lines.", file);
-    s = replaceOnce(s, "`sapling` (plan X4b): a facilitator-submitted", "`sapling`: a facilitator-submitted", file);
+    s = replaceOnce(s, "This is plan X4b, privacy tier P2:", "This is privacy tier P2:", file);
+    // the light client lives beside the SDK, not in it (upstream SDKs are per language)
+    s = replaceOnce(s, "(the Rust light client of\nthis repository, `build` → signed hex)", "(a light client whose `build`\nreturns the signed hex)", file);
+    s = replaceOnce(s, "a builder (the Rust light client) |", "a builder (a Sapling light client) |", file);
+    s = replaceOnce(s, "(`vectors/sapling/`)", "(the reference implementation's `test/vectors/sapling/`)", file);
+    // the plan's N rows (node changes not made) have no Appendix A row: the sentences carry the reason
+    s = replaceOnce(s, " ([Appendix A](#appendix-a-node-behaviour-this-binding-relies-on), N-3)", "", file);
+    s = s.replace(/\s?\(N-\d\)/g, "");
+    // findings of the plan cited in prose: "(X-F78, X-F82)" and ", X-F7)"
+    s = s.replace(/ \((?:X-F\d+(?:, )?)+\)/g, "").replace(/, X-F\d+\)/g, ")");
     s = replaceOnce(s, "](./scheme_batch_settlement_ycash.md)", "](../batch-settlement/scheme_batch_settlement_ycash.md)", file);
     s = s.replace(
       /Checked on (\d{4}-\d{2}-\d{2}) against `ycash-dd`[\s\S]*?§3\)\.\n/,
