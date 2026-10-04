@@ -12,6 +12,8 @@ import {
   LwdChain,
   LwdUtxoSource,
   rpcWalletFunder,
+  SaplingExactClient,
+  saplingBuilderFrom,
   ShieldedExactClient,
   utxoSourceFunder,
   type LwdClient,
@@ -28,6 +30,8 @@ export interface ClientSchemeDeps {
   lwd?: LwdClient;
   signer: AgentSigner;
   shieldedFrom?: string;
+  /** sapling: the builder spec (AGENT_SAPLING_BUILDER). */
+  saplingBuilder?: string;
   channelStorePath?: string;
   channelDepositZat?: bigint;
   /** batch-settlement: the client's own cap on D, zatoshis (default 1 YEC). */
@@ -86,7 +90,10 @@ export const registerClientSchemes: RegisterClientSchemes = (client, deps) => {
     deps.signer.kind === "wif" && source ? new exact.LocalKeySigner(deps.signer.wif, source) : new exact.RpcWalletSigner(needNode(deps), held),
   );
   const shielded = deps.shieldedFrom ? new ShieldedExactClient({ rpc: needNode(deps), from: deps.shieldedFrom }) : undefined;
-  const router = new exact.ExactYcashMethodRouter({ transparent, ...(shielded ? { shielded } : {}) });
+  // sapling: a signed, unbroadcast Sapling transaction from the external builder; with a node the
+  // client sets nExpiryHeight itself from the tip, otherwise the builder does.
+  const sapling = deps.saplingBuilder ? new SaplingExactClient({ builder: saplingBuilderFrom(deps.saplingBuilder), ...(deps.node ? { chain: deps.node } : {}) }) : undefined;
+  const router = new exact.ExactYcashMethodRouter({ transparent, ...(shielded ? { shielded } : {}), ...(sapling ? { sapling } : {}) });
   client.register(deps.network, router);
 
   // batch-settlement: opens a channel on the first 402, then one voucher per request.

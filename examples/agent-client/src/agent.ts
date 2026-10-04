@@ -42,6 +42,7 @@ export function createAgent(config: AgentConfig, register: RegisterClientSchemes
     ...(config.lwd ? { lwd: config.lwd } : {}),
     signer: config.signer,
     ...(config.shieldedFrom ? { shieldedFrom: config.shieldedFrom } : {}),
+    ...(config.saplingBuilder ? { saplingBuilder: config.saplingBuilder } : {}),
     ...(config.channelStorePath ? { channelStorePath: config.channelStorePath } : {}),
     ...(config.channelDepositZat !== undefined ? { channelDepositZat: config.channelDepositZat } : {}),
     ...(config.channelMaxDepositZat !== undefined ? { channelMaxDepositZat: config.channelMaxDepositZat } : {}),

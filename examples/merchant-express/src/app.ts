@@ -7,6 +7,7 @@ import { paymentMiddleware, x402ResourceServer } from "@x402/express";
 import { ASSET_YEC } from "x402-ycash-mechanism";
 import type { MerchantConfig } from "./config.js";
 import { registerServerSchemes, type PaymentModes, type RegisterServerSchemes, type ServerSchemes, type YedModes } from "./schemes.js";
+import { facilitatorListsMethod, MethodGate } from "./shielded.js";
 import { SupportedCache, YedGate } from "./yed.js";
 
 export interface MerchantOptions {
@@ -25,6 +26,13 @@ export interface MerchantOptions {
   yedProbe?: (facilitator: FacilitatorClient) => Promise<YedModes>;
   /** default 60 s */
   yedReprobeMs?: number;
+  /**
+   * Whether the facilitator lists `sapling` (the initial view; default: not until probed). The
+   * sapling route is gated live on the facilitator's /supported, re-probed every `saplingReprobeMs`
+   * (default 60 s) and when a request reaches it while off.
+   */
+  saplingListed?: boolean;
+  saplingReprobeMs?: number;
 }
 
 export interface Merchant {
@@ -40,6 +48,7 @@ export const PAID_ROUTES = {
   ticker: "GET /exact/ticker",
   channel: "GET /channel/search",
   shielded: "GET /shielded/report",
+  privateReport: "GET /shielded/private-report",
   yedReport: "GET /yed/report",
   yedStream: "GET /yed/stream",
 } as const;
@@ -51,6 +60,7 @@ export const MODE_OF: Readonly<Record<PaidRoute, keyof PaymentModes>> = {
   ticker: "exact",
   channel: "channel",
   shielded: "shielded",
+  privateReport: "sapling",
   yedReport: "yedExact",
   yedStream: "yedChannel",
 };
@@ -106,6 +116,21 @@ function routes(config: MerchantConfig, schemes: ServerSchemes): RoutesConfig {
       mimeType: "application/json",
     };
   }
+  if (modes.sapling && schemes.saplingPayTo) {
+    all[PAID_ROUTES.privateReport] = {
+      accepts: {
+        scheme: "exact",
+        network,
+        payTo: schemes.saplingPayTo,
+        // Authorization flow: the facilitator decrypts the client's unbroadcast transaction before
+        // the handler runs and broadcasts it after (scheme_exact_ycash.md `sapling`).
+        price: { amount: config.pricePrivateReportZat, asset: ASSET_YEC, extra: { assetTransferMethod: "sapling" } },
+        maxTimeoutSeconds: SHIELDED_TIMEOUT_SECONDS,
+      },
+      description: "One private report, paid in shielded YEC and charged only when served",
+      mimeType: "application/json",
+    };
+  }
   const yed = config.yed;
   if (yed && modes.yedExact) {
     all[PAID_ROUTES.yedReport] = {
@@ -158,18 +183,25 @@ export function createMerchant(config: MerchantConfig, opts: MerchantOptions = {
     zeroConfCapZat: config.zeroConfCapZat,
     ...(config.wallet ? { wallet: config.wallet } : {}),
     ...(config.channel ? { channel: config.channel } : {}),
-    ...(config.shielded ? { shielded: { ...config.shielded, amount: config.priceShieldedZat, maxTimeoutSeconds: SHIELDED_TIMEOUT_SECONDS } } : {}),
+    ...(config.shielded ? { shielded: { ...config.shielded, amount: config.priceShieldedZat, saplingAmount: config.pricePrivateReportZat, maxTimeoutSeconds: SHIELDED_TIMEOUT_SECONDS } } : {}),
     ...(config.yed && yedWiring ? { yed: yedWiring } : {}),
     log,
   });
   // What the schemes can serve; with a gate, the YED modes are that and the gate's current view.
   const wired = schemes.modes;
-  const modes: PaymentModes = gate
-    ? Object.defineProperties({ ...wired }, {
-      yedExact: { enumerable: true, get: () => wired.yedExact && gate.modes.exact },
-      yedChannel: { enumerable: true, get: () => wired.yedChannel && gate.modes.channel },
-    })
-    : wired;
+  // The sapling route is served only while the facilitator lists `sapling` (its viewing key is configured).
+  const saplingGate = wired.sapling
+    ? new MethodGate(opts.saplingListed ?? false, () => facilitatorListsMethod(raw, config.network, "sapling"), { log, what: "sapling", ...(opts.saplingReprobeMs !== undefined ? { intervalMs: opts.saplingReprobeMs } : {}) })
+    : undefined;
+  const modes: PaymentModes = Object.defineProperties({ ...wired }, {
+    ...(gate
+      ? {
+        yedExact: { enumerable: true, get: () => wired.yedExact && gate.modes.exact },
+        yedChannel: { enumerable: true, get: () => wired.yedChannel && gate.modes.channel },
+      }
+      : {}),
+    ...(saplingGate ? { sapling: { enumerable: true, get: () => wired.sapling && saplingGate.listed } } : {}),
+  });
 
   const app = express();
   app.disable("x-powered-by");
@@ -197,6 +229,18 @@ export function createMerchant(config: MerchantConfig, opts: MerchantOptions = {
     }
     gate.start();
   }
+  if (saplingGate && PAID_ROUTES.privateReport in paid) {
+    const route = PAID_ROUTES.privateReport;
+    app.get(route.slice(route.indexOf(" ") + 1), (_req, res, next) => {
+      void (async () => {
+        if (!modes.sapling) await saplingGate.refresh();
+        if (modes.sapling) return next();
+        res.status(501).json({ error: "payment mode not available", mode: "sapling", reason: "the facilitator does not list sapling (it needs the merchant's viewing key; re-probed)" });
+      })().catch(next);
+    });
+    if (opts.saplingListed === undefined) void saplingGate.refresh(true);
+    saplingGate.start();
+  }
   if (Object.keys(paid).length > 0) app.use(paymentMiddleware(paid, server));
 
   // Each paid route gets its handler only when the middleware guards it; otherwise a 501. Registering
@@ -214,6 +258,9 @@ export function createMerchant(config: MerchantConfig, opts: MerchantOptions = {
     },
     shielded: (_req, res) => {
       res.json({ report: "Private report body.", paidWith: "exact/sapling-proof" });
+    },
+    privateReport: (_req, res) => {
+      res.json({ report: "Private report body, charged only once served.", paidWith: "exact/sapling" });
     },
     yedReport: (_req, res) => {
       res.json({ report: "Dollar report body.", paidWith: "exact/transparent YED" });
@@ -240,6 +287,7 @@ export function createMerchant(config: MerchantConfig, opts: MerchantOptions = {
     modes,
     close: async () => {
       gate?.stop();
+      saplingGate?.stop();
       await schemes.close?.();
     },
   };

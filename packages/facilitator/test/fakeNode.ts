@@ -9,6 +9,8 @@ export interface FakeNodeOptions {
   yellowback?: boolean;
   /** Answer -28 (warming up) to this many requests first. */
   warmupCalls?: number;
+  /** Hold the merchant's viewing key: answer z_listreceivedbyaddress and z_validateaddress (offline-issuer startup). */
+  viewingKey?: boolean;
 }
 
 export interface FakeNode {
@@ -43,6 +45,10 @@ export async function startFakeNode(opts: FakeNodeOptions = {}): Promise<FakeNod
           return reply(200, { chain: opts.chain ?? "regtest", blocks: 232 });
         case "getblockcount":
           return reply(200, 232);
+        case "z_listreceivedbyaddress":
+          return opts.viewingKey ? reply(200, []) : reply(500, null, { code: -5, message: "viewing key not found" });
+        case "z_validateaddress":
+          return reply(200, { isvalid: true, ismine: false });
         case "yed_getinfo":
           return opts.yellowback === false ? reply(404, null, { code: -32601, message: "Method not found" }) : reply(200, {});
         default:

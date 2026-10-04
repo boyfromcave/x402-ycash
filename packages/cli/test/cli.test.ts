@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { batch as B, channel, FileClientChannelStorage, tx as T, type YcashRpc } from "x402-ycash-mechanism";
+import { buildClient } from "../src/client.js";
 import { loadCliConfig, parseCli, run, UsageError } from "../src/index.js";
 
 const NET = "ycash:regtest" as const;
@@ -10,6 +11,15 @@ const devnetEnv = { X402_RPC_URL: "http://127.0.0.1:1", X402_RPC_USER: "u", X402
 const wif = T.encodeWif(T.hexToBytes("07".repeat(32)), NET);
 
 describe("configuration", () => {
+  it("--sapling-builder / X402_SAPLING_BUILDER: the builder that pays sapling routes; without it sapling is refused", async () => {
+    expect(loadCliConfig(parseCli(["pay", "x", "--sapling-builder", "x402-light build"]), devnetEnv).saplingBuilder).toBe("x402-light build");
+    expect(loadCliConfig(parseCli(["pay", "x"]), { ...devnetEnv, X402_SAPLING_BUILDER: "http://127.0.0.1:9/" }).saplingBuilder).toBe("http://127.0.0.1:9/");
+    const dir = mkdtempSync(join(tmpdir(), "x402-cli-sap-"));
+    const req = { scheme: "exact", network: NET, asset: "YEC", amount: "1", payTo: "yregtestsapling1x", maxTimeoutSeconds: 60, extra: { assetTransferMethod: "sapling", memo: "x402:" + "00".repeat(32), expiresAt: 4e9 } };
+    const none = buildClient(loadCliConfig(parseCli(["pay", "x", "--channels", join(dir, "c.json")]), devnetEnv));
+    await expect(none.client.createPaymentPayload({ x402Version: 2, accepts: [req], resource: { url: "x", description: "", mimeType: "" } } as never)).rejects.toThrow(/no Sapling transaction builder/);
+  });
+
   it("takes flags over the environment, with defaults", () => {
     const c = loadCliConfig(parseCli(["pay", "http://x", "--count", "3", "--network", "ycash:testnet", "--channels", "/c.json"]), { ...devnetEnv, X402_NETWORK: "ycash:mainnet", X402_CHANNEL_STORE: "/env.json" });
     expect(c).toMatchObject({ network: "ycash:testnet", count: 3, channelStorePath: "/c.json", maxPaymentZat: 1_000_000n });

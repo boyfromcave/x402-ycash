@@ -6,7 +6,13 @@ export * from "./store/index.js";
 export * as shielded from "./shielded/index.js";
 export {
   ASSET_TRANSFER_METHOD_SAPLING_PROOF,
+  ASSET_TRANSFER_METHOD_SAPLING,
   SaplingProofHandler,
+  SaplingHandler,
+  ShieldedMethodRouter,
+  SaplingExactClient,
+  saplingBuilderFrom,
+  type SaplingTransactionBuilder,
   ShieldedExactServer,
   ShieldedExactFacilitator,
   ShieldedExactClient,

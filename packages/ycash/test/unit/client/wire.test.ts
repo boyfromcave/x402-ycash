@@ -25,7 +25,7 @@ describe("ExactYcashMethodRouter", () => {
 
   it("refuses a method it has no wallet for, and an empty configuration", async () => {
     await expect(new exact.ExactYcashMethodRouter({ transparent }).createPaymentPayload(2, req({ assetTransferMethod: "sapling-proof" }))).rejects.toThrow(/Sapling wallet/);
-    await expect(new exact.ExactYcashMethodRouter({ shielded }).createPaymentPayload(2, req({}))).rejects.toThrow(/sapling-proof only/);
+    await expect(new exact.ExactYcashMethodRouter({ shielded }).createPaymentPayload(2, req({}))).rejects.toThrow(/shielded methods only/);
     expect(() => new exact.ExactYcashMethodRouter({})).toThrow();
   });
 

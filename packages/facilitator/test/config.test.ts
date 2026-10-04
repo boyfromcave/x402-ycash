@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { shielded } from "x402-ycash-mechanism";
 import { ConfigError, DEFAULTS, loadConfig, redactConfig } from "../src/config.js";
 
 const base = { X402_NETWORK: "ycash:regtest", X402_RPC_URL: "http://127.0.0.1:18232", X402_RPC_USER: "u", X402_RPC_PASSWORD: "p" };
@@ -90,7 +91,7 @@ describe("loadConfig", () => {
 
   it("turns sapling-proof on with a receipt key and the issued-address registry, from env or file", () => {
     const key = "Ab".repeat(32);
-    expect(loadConfig({ ...base, X402_RECEIPT_KEY: key, X402_ISSUED_REGISTRY: "/data/issued.json" }).saplingProof).toEqual({ receiptKey: key.toLowerCase(), registryPath: "/data/issued.json" });
+    expect(loadConfig({ ...base, X402_RECEIPT_KEY: key, X402_ISSUED_REGISTRY: "/data/issued.json" }).saplingProof).toEqual({ methods: ["sapling-proof"], receiptKey: key.toLowerCase(), registryPath: "/data/issued.json" });
     const path = file({ network: "ycash:regtest", rpc: { url: "http://n:1", user: "u", password: "p" }, receiptKey: key, issuedAddressRegistryPath: "/r.json", saplingBaseAddress: "yregtestsapling1abc", channelStorePath: "/c.json" });
     expect(loadConfig({ X402_FACILITATOR_CONFIG: path })).toMatchObject({ channelStorePath: "/c.json", saplingProof: { receiptKey: key.toLowerCase(), registryPath: "/r.json", baseAddress: "yregtestsapling1abc" } });
   });
@@ -123,6 +124,40 @@ describe("loadConfig", () => {
     const shown = JSON.stringify(redactConfig(loadConfig(off)));
     expect(shown).not.toContain(vk);
     expect(shown).toContain('"kind":"offline"');
+  });
+
+  it("X402_SHIELDED_METHODS: sapling-proof by default, sapling opted in with the offline issuer's viewing key", () => {
+    const vk = (JSON.parse(readFileSync(new URL("../../../vectors/shielded/divaddr.json", import.meta.url), "utf8")) as { cases: { viewingKey: string }[] }).cases[0]!.viewingKey;
+    const sp = { ...base, X402_RECEIPT_KEY: "11".repeat(32), X402_ISSUED_REGISTRY: "/r.json" };
+    const off = { ...sp, X402_SAPLING_ISSUER: "offline", X402_SAPLING_VIEWING_KEY: vk };
+    expect(loadConfig(off).saplingProof?.methods).toEqual(["sapling-proof"]);
+    expect(loadConfig({ ...off, X402_SHIELDED_METHODS: "sapling, sapling-proof" }).saplingProof?.methods).toEqual(["sapling-proof", "sapling"]);
+    expect(loadConfig({ ...off, X402_SHIELDED_METHODS: "sapling" }).saplingProof?.methods).toEqual(["sapling"]);
+    const path = file({ network: "ycash:regtest", rpc: { url: "http://n:1", user: "u", password: "p" }, receiptKey: "11".repeat(32), issuedAddressRegistryPath: "/r.json", saplingIssuer: "offline", saplingViewingKey: vk, shieldedMethods: ["sapling"] });
+    expect(loadConfig({ X402_FACILITATOR_CONFIG: path }).saplingProof?.methods).toEqual(["sapling"]);
+    expect(() => loadConfig({ ...off, X402_SHIELDED_METHODS: "sapling,transparent" })).toThrow(/unknown method "transparent"/);
+    expect(() => loadConfig({ ...off, X402_SHIELDED_METHODS: " , " })).toThrow(/no method/);
+    // sapling decrypts with the viewing key: the node-wallet issuer has none here
+    expect(() => loadConfig({ ...sp, X402_SHIELDED_METHODS: "sapling" })).toThrow(/viewing key/);
+    // methods without the shielded setup at all
+    expect(() => loadConfig({ ...base, X402_SHIELDED_METHODS: "sapling-proof" })).toThrow(/needs the shielded setup/);
+    expect(JSON.stringify(redactConfig(loadConfig({ ...off, X402_SHIELDED_METHODS: "sapling" })))).toContain('"methods":["sapling"]');
+  });
+
+  it("refuses sapling on mainnet unless X402_SAPLING_MAINNET_OK=1 (spec: SHOULD NOT list it before the end-to-end proof)", () => {
+    const regtestKey = (JSON.parse(readFileSync(new URL("../../../vectors/shielded/divaddr.json", import.meta.url), "utf8")) as { cases: { viewingKey: string }[] }).cases[0]!.viewingKey;
+    const vk = shielded.bech32Encode("zxviews", shielded.bech32Decode(regtestKey).bytes);
+    const main = { ...base, X402_NETWORK: "ycash:mainnet", X402_RECEIPT_KEY: "11".repeat(32), X402_ISSUED_REGISTRY: "/r.json", X402_SAPLING_ISSUER: "offline", X402_SAPLING_VIEWING_KEY: vk };
+    expect(loadConfig(main).saplingProof?.methods).toEqual(["sapling-proof"]);
+    expect(() => loadConfig({ ...main, X402_SHIELDED_METHODS: "sapling-proof,sapling" })).toThrow(/X402_SAPLING_MAINNET_OK=1/);
+    expect(() => loadConfig({ ...main, X402_SHIELDED_METHODS: "sapling", X402_SAPLING_MAINNET_OK: "0" })).toThrow(/X402_SAPLING_MAINNET_OK=1/);
+    expect(() => loadConfig({ ...main, X402_SHIELDED_METHODS: "sapling", X402_SAPLING_MAINNET_OK: "yes" })).toThrow(/0 or 1/);
+    expect(loadConfig({ ...main, X402_SHIELDED_METHODS: "sapling", X402_SAPLING_MAINNET_OK: "1" }).saplingProof?.methods).toEqual(["sapling"]);
+    const path = file({ network: "ycash:mainnet", rpc: { url: "http://n:1", user: "u", password: "p" }, receiptKey: "11".repeat(32), issuedAddressRegistryPath: "/r.json", saplingIssuer: "offline", saplingViewingKey: vk, shieldedMethods: ["sapling"], saplingMainnetOk: true });
+    expect(loadConfig({ X402_FACILITATOR_CONFIG: path }).saplingProof?.methods).toEqual(["sapling"]);
+    // testnet needs no opt-in
+    const tvk = shielded.bech32Encode("zxviewtestsapling", shielded.bech32Decode(regtestKey).bytes);
+    expect(loadConfig({ ...main, X402_NETWORK: "ycash:testnet", X402_SAPLING_VIEWING_KEY: tvk, X402_SHIELDED_METHODS: "sapling" }).saplingProof?.methods).toEqual(["sapling"]);
   });
 
   it("redacts the receipt key", () => {

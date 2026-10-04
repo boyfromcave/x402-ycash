@@ -49,7 +49,18 @@ export async function startFacilitator(config: FacilitatorConfig, opts: StartOpt
     logger,
     channelStore: new FileChannelStore(config.channelStorePath),
     ...(sp
-      ? { saplingProof: { receiptKey: sp.receiptKey, registry: new FileIssuedAddressRegistry(sp.registryPath), ...(sp.baseAddress ? { baseAddress: sp.baseAddress } : {}), ...(sp.noteWaitMs !== undefined ? { noteWaitMs: sp.noteWaitMs } : {}), ...(issuer ? { issuer } : {}) } }
+      ? {
+          saplingProof: {
+            methods: sp.methods,
+            receiptKey: sp.receiptKey,
+            registry: new FileIssuedAddressRegistry(sp.registryPath),
+            ...(sp.baseAddress ? { baseAddress: sp.baseAddress } : {}),
+            ...(sp.noteWaitMs !== undefined ? { noteWaitMs: sp.noteWaitMs } : {}),
+            ...(issuer ? { issuer } : {}),
+            // sapling reuses the offline issuer's viewing key for trial decryption.
+            ...(oi ? { viewingKey: oi.viewingKey } : {}),
+          },
+        }
       : {}),
   };
   const registered = (opts.register ?? registerSchemes)(facilitator, deps);

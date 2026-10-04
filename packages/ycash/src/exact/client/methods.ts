@@ -17,6 +17,8 @@ export interface ExactYcashMethodRouterConfig {
   transparent?: SchemeNetworkClient;
   /** `sapling-proof`: a ShieldedExactClient over the payer's node wallet. */
   shielded?: ShieldedExactPayer;
+  /** `sapling`: a SaplingExactClient over an external Sapling builder (src/shielded/builder.ts). */
+  sapling?: ShieldedExactPayer;
 }
 
 /**
@@ -34,7 +36,7 @@ export class ExactYcashMethodRouter implements SchemeNetworkClient {
    * @throws Error when neither is given.
    */
   constructor(private readonly config: ExactYcashMethodRouterConfig) {
-    if (!config.transparent && !config.shielded) throw new Error("ExactYcashMethodRouter needs a transparent client, a shielded payer, or both");
+    if (!config.transparent && !config.shielded && !config.sapling) throw new Error("ExactYcashMethodRouter needs a transparent client or a shielded payer");
   }
 
   /**
@@ -43,7 +45,7 @@ export class ExactYcashMethodRouter implements SchemeNetworkClient {
    * @returns The configured method names.
    */
   get methods(): string[] {
-    return [...(this.config.transparent ? ["transparent"] : []), ...(this.config.shielded ? ["sapling-proof"] : [])];
+    return [...(this.config.transparent ? ["transparent"] : []), ...(this.config.shielded ? ["sapling-proof"] : []), ...(this.config.sapling ? ["sapling"] : [])];
   }
 
   /**
@@ -57,12 +59,15 @@ export class ExactYcashMethodRouter implements SchemeNetworkClient {
    */
   createPaymentPayload(x402Version: number, requirements: PaymentRequirements, context?: PaymentPayloadContext): Promise<PaymentPayloadResult> {
     if (isShieldedMethod(requirements.extra)) {
-      // `sapling` needs a signed-but-unbroadcast Sapling transaction: the Rust light client's `build` (pending).
-      if (assetTransferMethodOf(requirements.extra) === ATM_SAPLING) return Promise.reject(new Error("this client cannot pay sapling: it needs a Sapling transaction builder"));
+      // `sapling` needs a signed-but-unbroadcast Sapling transaction, which no node wallet builds (plan Z-1).
+      if (assetTransferMethodOf(requirements.extra) === ATM_SAPLING) {
+        if (!this.config.sapling) return Promise.reject(new Error("this client cannot pay sapling: no Sapling transaction builder is configured"));
+        return this.config.sapling.createPaymentPayload(x402Version, requirements);
+      }
       if (!this.config.shielded) return Promise.reject(new Error("this client has no Sapling wallet configured for sapling-proof"));
       return this.config.shielded.createPaymentPayload(x402Version, requirements);
     }
-    if (!this.config.transparent) return Promise.reject(new Error("this client pays sapling-proof only, not transparent"));
+    if (!this.config.transparent) return Promise.reject(new Error("this client pays shielded methods only, not transparent"));
     return this.config.transparent.createPaymentPayload(x402Version, requirements, context);
   }
 }

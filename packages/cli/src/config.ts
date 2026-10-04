@@ -19,6 +19,8 @@ export interface CliConfig {
   wif?: string;
   /** sapling-proof: the z_sendmany source (a Sapling address for tier P1). */
   shieldedFrom?: string;
+  /** sapling: the Sapling transaction builder, an http(s) JSON-RPC URL or a shell command (shielded/builder.ts). */
+  saplingBuilder?: string;
   /** Channel records, with their keys: a wallet file. */
   channelStorePath: string;
   maxPaymentZat: bigint;
@@ -65,6 +67,9 @@ node (flag / env):   --devnet FILE / X402_DEVNET_JSON, --node N / X402_DEVNET_NO
                      grpc://… plaintext, grpcs://… TLS, a bare host:port is TLS unless loopback)
 payer:               --wif / X402_WIF (a local key; default: the node's wallet signs)
                      --shielded-from / X402_SHIELDED_FROM (pays sapling-proof routes from this address)
+                     --sapling-builder / X402_SAPLING_BUILDER (pays sapling routes with transactions from this
+                     builder: an http(s) URL of x402-light serve, or a shell command; build {to, amountZat,
+                     memoHex, expiryHeight?} -> {txHex, txid}; without it sapling routes are refused)
 other:               --network / X402_NETWORK (default ycash:regtest), --channels FILE / X402_CHANNEL_STORE
                      (default ~/.x402-ycash/channels.json), --max-payment ZAT / X402_MAX_PAYMENT_ZAT (default 1000000),
                      --max-deposit ZAT / X402_MAX_DEPOSIT_ZAT (default 100000000, 1 YEC), --reservations FILE /
@@ -92,6 +97,7 @@ const OPTIONS = {
   lwd: { type: "string" },
   wif: { type: "string" },
   "shielded-from": { type: "string" },
+  "sapling-builder": { type: "string" },
   channels: { type: "string" },
   "max-payment": { type: "string" },
   deposit: { type: "string" },
@@ -196,6 +202,7 @@ export function loadCliConfig(args: ParsedArgs, env: Env = process.env, node?: Y
     }
   }
   const shieldedFrom = f["shielded-from"] ?? env.X402_SHIELDED_FROM;
+  const saplingBuilder = f["sapling-builder"] ?? env.X402_SAPLING_BUILDER;
   const asset = assetOf(f.asset);
   // --deposit is in the asset's unit: zatoshis for YEC, cents for YED.
   const depositZat = asset === ASSET_YED ? undefined : zat("--deposit", f.deposit);
@@ -223,6 +230,7 @@ export function loadCliConfig(args: ParsedArgs, env: Env = process.env, node?: Y
     ...(maxDepositCents !== undefined ? { maxDepositCents } : {}),
     ...(wif ? { wif } : {}),
     ...(shieldedFrom ? { shieldedFrom } : {}),
+    ...(saplingBuilder ? { saplingBuilder } : {}),
     ...(depositZat !== undefined ? { depositZat } : {}),
     ...(maxDepositZat !== undefined ? { maxDepositZat } : {}),
     ...(maxCloseFeeZat !== undefined ? { maxCloseFeeZat } : {}),

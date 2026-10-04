@@ -4,7 +4,9 @@ import type { x402Facilitator } from "@x402/core/facilitator";
 import {
   BatchYcashFacilitatorScheme,
   exact,
+  SaplingHandler,
   SaplingProofHandler,
+  ShieldedMethodRouter,
   type ChannelStore,
   type IssuedAddressRegistry,
   type shielded,
@@ -16,8 +18,12 @@ import {
 import type { ConfirmationLimits } from "./config.js";
 import type { Logger } from "./logger.js";
 
-/** The self-hosted sapling-proof method's inputs (config `saplingProof`, opened by server.ts). */
+/** The self-hosted shielded methods' inputs (config `saplingProof`, opened by server.ts). */
 export interface SaplingProofDeps {
+  /** The methods served (default `sapling-proof` only). */
+  methods?: readonly ("sapling-proof" | "sapling")[];
+  /** The merchant's `zxview…` key: `sapling` trial-decrypts the client's transaction with it. */
+  viewingKey?: string;
   receiptKey: string;
   /** The issued-address registry the merchant's server writes (the same file). */
   registry: IssuedAddressRegistry;
@@ -47,17 +53,18 @@ export interface SchemeDeps {
 }
 
 /**
- * The facilitator half of a SaplingProofHandler, as the exact scheme's `ShieldedExactHandler`.
+ * The facilitator half of a shielded handler, as the exact scheme's `ShieldedExactHandler`.
  * Issuing requirements is the merchant's job (its server writes the shared registry); the
  * facilitator only verifies and settles, so `enhanceRequirements` is never called here.
  * The bounded wait for the note (the client presents the txid before its payment reaches the
  * merchant's node) is the mechanism's (`noteWaitMs` on the handler), fed by X402_SAPLING_NOTE_WAIT_MS.
  */
-export function facilitatorHalf(handler: SaplingProofHandler): exact.ShieldedExactHandler {
+export function facilitatorHalf(handler: SaplingProofHandler | SaplingHandler | ShieldedMethodRouter): exact.ShieldedExactHandler {
   return {
+    ...(handler instanceof ShieldedMethodRouter ? { flows: handler.flows } : {}),
     verify: (payload, requirements) => handler.verify(payload, requirements),
     settle: (payload, requirements) => handler.settle(payload, requirements),
-    enhanceRequirements: () => Promise.reject(new Error("a facilitator does not issue sapling-proof requirements; the merchant's server does")),
+    enhanceRequirements: () => Promise.reject(new Error("a facilitator does not issue shielded requirements; the merchant's server does")),
   };
 }
 
@@ -66,23 +73,12 @@ export function registerSchemes(facilitator: x402Facilitator, deps: SchemeDeps):
   const registered: string[] = [];
 
   // exact (scheme_exact_ycash.md): `transparent` YEC, verified per the spec's rules 1–10 and
-  // settled with the txid claim; plus `sapling-proof` when this is the merchant's own facilitator.
+  // settled with the txid claim; plus the shielded methods when this is the merchant's own facilitator.
   let shielded: exact.ShieldedExactHandler | undefined;
+  let methods: readonly string[] = [];
   if (deps.saplingProof) {
-    const handler = new SaplingProofHandler({
-      network: deps.network,
-      rpc: deps.rpc,
-      settlementStore: deps.settlementStore,
-      confirmations: deps.confirmations,
-      capabilities: deps.capabilities,
-      logger: deps.logger,
-      receiptKey: deps.saplingProof.receiptKey,
-      registry: deps.saplingProof.registry,
-      ...(deps.saplingProof.baseAddress ? { baseAddress: deps.saplingProof.baseAddress } : {}),
-      ...(deps.saplingProof.noteWaitMs !== undefined ? { noteWaitMs: deps.saplingProof.noteWaitMs } : {}),
-      ...(deps.saplingProof.issuer ? { issuer: deps.saplingProof.issuer } : {}),
-    });
-    shielded = facilitatorHalf(handler);
+    shielded = facilitatorHalf(shieldedRouter(deps, deps.saplingProof));
+    methods = shielded.flows ? Object.keys(shielded.flows) : [];
   }
   facilitator.register(
     deps.network,
@@ -96,7 +92,7 @@ export function registerSchemes(facilitator: x402Facilitator, deps: SchemeDeps):
       ...(shielded ? { shielded } : {}),
     }),
   );
-  registered.push(shielded ? "exact (transparent, sapling-proof)" : "exact (transparent)");
+  registered.push(`exact (${["transparent", ...methods].join(", ")})`);
 
   // batch-settlement (scheme_batch_settlement_ycash.md): YEC channels. The resource server holds
   // the channel state and verifies vouchers itself; this relays funding and `claim` closes.
@@ -112,4 +108,38 @@ export function registerSchemes(facilitator: x402Facilitator, deps: SchemeDeps):
   registered.push("batch-settlement");
 
   return registered;
+}
+
+/**
+ * The shielded methods behind the exact scheme's one hook: `sapling-proof` on the merchant's wallet
+ * (SaplingProofHandler) and, opted in, `sapling` with the merchant's viewing key (SaplingHandler).
+ * Both share the issued-address registry the merchant's server writes and the settlement store.
+ *
+ * @param deps - The service's dependencies.
+ * @param sp - The shielded configuration.
+ * @returns The router.
+ * @throws Error when `sapling` is asked for without the viewing key, or the node is on another chain.
+ */
+export function shieldedRouter(deps: SchemeDeps, sp: SaplingProofDeps): ShieldedMethodRouter {
+  const methods = sp.methods ?? ["sapling-proof"];
+  const common = {
+    network: deps.network,
+    rpc: deps.rpc,
+    settlementStore: deps.settlementStore,
+    confirmations: deps.confirmations,
+    capabilities: deps.capabilities,
+    logger: deps.logger,
+    receiptKey: sp.receiptKey,
+    registry: sp.registry,
+    ...(sp.baseAddress ? { baseAddress: sp.baseAddress } : {}),
+    ...(sp.issuer ? { issuer: sp.issuer } : {}),
+  };
+  const proof = methods.includes("sapling-proof") ? new SaplingProofHandler({ ...common, ...(sp.noteWaitMs !== undefined ? { noteWaitMs: sp.noteWaitMs } : {}) }) : undefined;
+  let sapling: SaplingHandler | undefined;
+  if (methods.includes("sapling")) {
+    if (!sp.viewingKey) throw new Error("sapling needs the merchant's viewing key (the offline issuer's X402_SAPLING_VIEWING_KEY)");
+    // The note wait of settle step 4 is the same knob as sapling-proof's (X402_SAPLING_NOTE_WAIT_MS).
+    sapling = new SaplingHandler({ ...common, viewingKey: sp.viewingKey, ...(sp.noteWaitMs !== undefined ? { observeWaitMs: sp.noteWaitMs } : {}) });
+  }
+  return new ShieldedMethodRouter({ ...(proof ? { "sapling-proof": proof } : {}), ...(sapling ? { sapling } : {}) });
 }
