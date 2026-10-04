@@ -11,16 +11,14 @@ chain with a transparent pool and a Sapling shielded pool. It covers two assets,
   not a contract: a YED amount lives on a transparent output, recorded by every Yellowback node
   from a payload in the transaction's single `OP_RETURN`.
 
-There are three asset transfer methods, chosen with `extra.assetTransferMethod`:
+There are four asset transfer methods, chosen with `extra.assetTransferMethod`:
 
 | Method | Asset | Family | Flow | What the client sends |
 |---|---|---|---|---|
 | `transparent` | `YEC` | facilitator-submitted | `authorization` | a complete signed v4 transaction, not broadcast |
 | `transparent` | `YED` (≥ $1.00) | facilitator-submitted | `authorization` | a complete signed v4 transaction carrying a Yellowback TRANSFER, not broadcast |
 | `sapling-proof` | `YEC` | client-submitted (payment proof) | `upfront` | the txid of a shielded payment it already sent to a per-request address |
-
-A fourth method, a facilitator-submitted shielded payment (`sapling`, plan X4b), is **reserved,
-not yet specified** (see [Reserved methods](#reserved-methods)).
+| `sapling` | `YEC` | facilitator-submitted | `authorization` | a complete signed Sapling v4 transaction paying a per-request address, not broadcast |
 
 Ycash has no smart contracts, no signed-transfer authorization, no account nonces and no CSV. This
 binding needs none of them. Like the Cardano binding, it uses the UTXO set as its replay primitive
@@ -120,6 +118,24 @@ itself, to a Sapling address the server issued for this request only, and presen
 flow is `upfront`, as the family requires. The checklist is answered in
 [`sapling-proof`](#sapling-proof-client-submitted-shielded-yec).
 
+**`sapling` (YEC): facilitator-submitted.** The client signs a complete Sapling transaction paying
+a Sapling address the server issued for this request only, and does not broadcast it; the
+merchant's facilitator trial-decrypts the payment output with its incoming viewing key, and submits
+the transaction during settle. The flow is `authorization`; `extra.paymentFlow` is not emitted.
+
+| Declaration | Answer |
+|---|---|
+| **Fee payer** | Self-funded by the payer. The fee is inside the signed transaction (`valueBalance`, plus any transparent inputs). `extra.areFeesSponsored` is `false`. |
+| **Replay primitive** | The spent notes' **nullifiers** (and the outpoints of any transparent input). They are **shared with the payer's wallet state**: the payment is exclusive only as long as the payer's wallet does not spend the same notes elsewhere, so unrelated payer activity **can invalidate the payment after the resource handler ran**. Unlike the transparent method, the facilitator **cannot narrow that to a race**: neither node line has an RPC that tells whether a nullifier is unspent or already spent in the mempool ([Appendix A](#appendix-a-node-behaviour-this-binding-relies-on), N-3), so a double-spent note is discovered only at settle, when relay refuses the transaction. There is no limit on concurrent pending payments beyond the payer's number of spendable notes: each pending payment holds its own. |
+| **Validity window** | Bounded by `nExpiryHeight`, as for `transparent` (rule 10 bounds it by `maxTimeoutSeconds`; an expiry of 0 is refused). |
+| **Duplicate submission** | **Indistinguishable.** `sendrawtransaction` of a transaction already in the mempool returns its txid. The facilitator MUST deduplicate settlements atomically by txid (see [Duplicate Settlement Mitigation](#duplicate-settlement-mitigation-required)). |
+
+It satisfies the family's requirements as follows. **Transfer correctness:** rule 5 requires
+exactly one output that decrypts under the merchant's key, to `payTo`, and rule 6 its value.
+**Facilitator safety:** the facilitator signs nothing and pays nothing. **Replay:** a spent
+nullifier makes the node refuse the transaction at relay, and settle reports that as a failure,
+never as a success. **Duplicate delivery:** the required txid claim.
+
 ## Protocol Flow
 
 `transparent`:
@@ -143,6 +159,31 @@ sequenceDiagram
     Note right of Facilitator: claim the txid atomically
     Facilitator->>Node: sendrawtransaction, then gettxout(txid, vout, true)
     Facilitator->>Server: 8. success, or settlement_pending + txid
+    Server->>Client: 9. 200 + resource, PAYMENT-RESPONSE
+```
+
+`sapling` (the facilitator is the merchant's own, holding the incoming viewing key):
+
+```mermaid
+sequenceDiagram
+    participant Client as Client/Agent
+    participant Server as Resource Server
+    participant Facilitator as Merchant facilitator (ivk)
+    participant Node as ycashd (merchant's, viewing key imported)
+
+    Client->>Server: 1. GET /api
+    Server->>Client: 2. 402, PAYMENT-REQUIRED (accepts[]: per-request ys1… payTo, memo)
+    Note over Client: 3. Build a Sapling v4 tx: one output to payTo<br/>(value ≥ amount, memo), sign, do not broadcast
+    Client->>Server: 4. GET /api, PAYMENT-SIGNATURE {transaction}
+    Server->>Facilitator: 5. POST /verify
+    Note over Facilitator: trial-decrypt the outputs with ivk;<br/>recompute cmu; check address, value, memo, fee, expiry
+    Facilitator->>Node: gettxout, signrawtransaction hex [] [] (transparent inputs only)
+    Facilitator->>Server: isValid
+    Note over Server: 6. Run the resource handler
+    Server->>Facilitator: 7. POST /settle
+    Note right of Facilitator: claim the txid atomically
+    Facilitator->>Node: sendrawtransaction (proofs, signatures, nullifiers checked here),<br/>then z_listreceivedbyaddress(payTo, 0)
+    Facilitator->>Server: 8. success (+ signed receipt), or settlement_pending + txid
     Server->>Client: 9. 200 + resource, PAYMENT-RESPONSE
 ```
 
@@ -279,6 +320,29 @@ requirements; a client MUST NOT infer it from `/supported`.
 }
 ```
 
+### `sapling`, YEC
+
+As `sapling-proof` (a fresh diversified `payTo`, `memo`, `expiresAt`), with
+`"assetTransferMethod": "sapling"` and no `paymentFlow`:
+
+```json
+{
+  "scheme": "exact",
+  "network": "ycash:mainnet",
+  "asset": "YEC",
+  "amount": "1500000",
+  "payTo": "ys1qq7y0g2y5rjv4rnq3q0n9e3n6m9h3z5s2v7k8w4p0x6c9d2f5g8h3j6k9m2n5p8r3t6v9x2z5a8c3e6f9g2h5j8",
+  "maxTimeoutSeconds": 900,
+  "extra": {
+    "assetTransferMethod": "sapling",
+    "areFeesSponsored": false,
+    "memo": "x402:9f2c4a7e1b3d5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8",
+    "expiresAt": 1791100800,
+    "confirmationPolicy": { "confirmations": -1 }
+  }
+}
+```
+
 (The addresses in these examples are illustrative, not valid checksums.)
 
 ### `/supported`
@@ -305,8 +369,9 @@ requirements; a client MUST NOT infer it from `/supported`.
 
 `signers` is empty: the facilitator signs nothing. A facilitator lists `YED` only when its node
 runs with `-experimentalfeatures -yellowback` (verification rules 4Y and 9Y need the overlay's
-RPCs). `sapling-proof` is listed only by a facilitator the merchant hosts itself, since it needs
-the merchant's wallet ([Security Considerations](#viewing-key-custody)).
+RPCs). `sapling-proof` and `sapling` are listed only by a facilitator the merchant hosts itself,
+since they need the merchant's wallet or incoming viewing key
+([Security Considerations](#viewing-key-custody)).
 
 ## `PaymentPayload`
 
@@ -347,6 +412,19 @@ display order.
   "x402Version": 2,
   "accepted": { "scheme": "exact", "network": "ycash:mainnet", "asset": "YEC", "amount": "1500000", "payTo": "ys1…", "maxTimeoutSeconds": 900, "extra": { "assetTransferMethod": "sapling-proof", "paymentFlow": "upfront", "memo": "x402:9f2c…7e8", "expiresAt": 1791100800 } },
   "payload": { "txid": "5be1c7d0e8f3a2b4c6d8e0f1a3b5c7d9e1f3a5b7c9d1e3f5a7b9c1d3e5f7a9b1" }
+}
+```
+
+### `sapling`
+
+`payload.transaction`: the complete signed Sapling transaction, serialised as the node's
+`sendrawtransaction` takes it, in lowercase hexadecimal; the same field as `transparent`.
+
+```json
+{
+  "x402Version": 2,
+  "accepted": { "scheme": "exact", "network": "ycash:mainnet", "asset": "YEC", "amount": "1500000", "payTo": "ys1…", "maxTimeoutSeconds": 900, "extra": { "assetTransferMethod": "sapling", "areFeesSponsored": false, "memo": "x402:9f2c…7e8", "expiresAt": 1791100800, "confirmationPolicy": { "confirmations": -1 } } },
+  "payload": { "transaction": "0400008085202f8900…" }
 }
 ```
 
@@ -618,8 +696,9 @@ and the response carries a signed receipt (below).
 |---|---|---|---|
 | P0 | transparent → merchant `ys1…` | the payer and the amount entering the shielded pool; **not the payee** | no shielded wallet; stateless keys work |
 | P1 | shielded → merchant `ys1…` | nothing: not payer, payee nor amount | a synced shielded wallet (full node or light client) |
+| P2 | `sapling`: shielded → merchant `ys1…`, verified before broadcast | nothing | P1 plus a Sapling builder (see [`sapling`](#sapling-facilitator-submitted-shielded-yec)) |
 
-The merchant learns the amount and the memo in both tiers. Diversified addresses all belong to one
+The merchant learns the amount and the memo in every tier. Diversified addresses all belong to one
 key, so per-request addresses add no scanning cost: the merchant's wallet trial-decrypts each
 shielded output once, however many addresses it issued.
 
@@ -636,22 +715,199 @@ offer (`extensions["offer-receipt"].info.offers[]`), which signs the requirement
 signed ES256K: a signer MUST produce a low-S signature, and a verifier accepts a high-S one too
 (it normalises s to the low half before verifying), as both SDKs do and `vectors/shielded` pins.
 
-## Reserved methods
+## `sapling` (facilitator-submitted, shielded YEC)
 
-`sapling` (plan X4b): a facilitator-submitted shielded payment. The client would build and sign a
-complete Sapling v4 transaction without broadcasting it, and the merchant's facilitator would
-trial-decrypt the payment output with its incoming viewing key, check value and memo, and broadcast
-it after the handler. Its replay primitive would be the spent notes' nullifiers, with
-`nExpiryHeight` as the validity window. It is **reserved, not yet specified**: neither node line
-can build a shielded transaction without broadcasting it, and neither can tell a facilitator that a
-nullifier is unspent, so a double-spent payment would surface only at settle, after the handler
-ran. A facilitator MUST reject `assetTransferMethod: "sapling"` until a later version of this
-document specifies it.
+The client builds and signs a complete Sapling transaction and hands it over unbroadcast; the
+merchant's facilitator reads the payment out of it with the merchant's incoming viewing key before
+the resource runs, and broadcasts it after. This is plan X4b, privacy tier P2: the payer is
+charged only when the handler succeeded, and nothing about payer, payee or amount is on chain.
+
+Neither node line can build a shielded transaction without broadcasting it (Appendix A, Z-1), so
+the client is a Sapling-capable light client or SDK with its own builder (the Rust light client of
+this repository, `build` → signed hex). Neither line can decrypt an unmined transaction for a
+caller (N-2), so the facilitator decrypts offline, with the viewing key the merchant gives it, and
+is therefore the merchant's own ([Privacy](#privacy)).
+
+### Requirements
+
+As `sapling-proof`: `asset` `"YEC"`, `payTo` a **fresh diversified Sapling address** issued for
+this request only, `extra.memo` the commitment `"x402:" + requestHash` over the same request
+record, `extra.expiresAt` the issuance time plus `maxTimeoutSeconds`. The record does not name the
+method, so one registry and one issuer serve both shielded methods. The differences:
+`extra.assetTransferMethod` is `"sapling"`, `extra.paymentFlow` is absent (the flow is
+`authorization`), `extra.areFeesSponsored` is `false`, and `confirmationPolicy` MAY be −1 as for
+`transparent`, with one difference in exposure: no mempool check exists for a shielded spend
+(N-3), so a zero-confirmation settle of a z→z payment trusts relay acceptance alone (see
+[Zero-confirmation settlement](#zero-confirmation-settlement)).
+
+### Client
+
+The client builds a transaction with these properties; a facilitator rejects any other shape.
+
+- **Format.** Version 4, Overwintered, Sapling version group id, as `transparent`; at least one
+  Sapling output and a binding signature; no JoinSplits; `nLockTime` 0.
+- **Payment output.** Exactly one output encrypted to `payTo`: a **ZIP 212 note** (lead byte
+  0x02, rcm and esk derived from rseed) of value ≥ `amount` zatoshis, its 512-byte memo the
+  UTF-8 bytes of `extra.memo` followed by zero bytes. Both node lines send 0x02 notes since Canopy
+  and their wallets refuse any other lead byte three blocks after it (Appendix A, Z-6), so a 0x01
+  note would be unspendable in the merchant's wallet: the facilitator refuses it.
+- **Other outputs.** Any number of further Sapling outputs (change to the payer, a dummy output)
+  and transparent outputs; none of them may decrypt under the merchant's key (rule 5).
+- **Sources.** Sapling spends (tier P2), or transparent inputs signed `SIGHASH_ALL` (t→z, tier
+  P0 with the authorization flow), or both.
+- **Fee.** `valueBalance` + Σ transparent inputs − Σ transparent outputs ≥
+  **max(1000, 500 × max(2, logical actions))** zatoshis, with logical actions as in
+  [Transaction Construction](#transaction-construction-transparent): the ZIP-317 count adds
+  max(Sapling spends, Sapling outputs). A z→z payment with one spend and two outputs pays 1000.
+  As for `transparent` this is SDK and facilitator policy; both lines' relay floor for a Sapling
+  transaction with up to 50 outputs is the same 1000 zatoshis (Appendix A, S-8).
+- **`nExpiryHeight`** = tip + 3 + ⌈`maxTimeoutSeconds` / 75⌉, as `transparent`.
+- **Not broadcast.** The client hands the transaction to the server and MUST NOT broadcast it.
+
+### Facilitator verification rules
+
+`/verify` is read-only: it never broadcasts. A facilitator MUST enforce every rule, in order.
+
+1. **Envelope.** As `transparent` rule 1, with `extra.assetTransferMethod` `sapling` on both sides
+   (`invalid_exact_ycash_asset_transfer_method` otherwise), `extra.paymentFlow` absent or
+   `authorization` (`invalid_exact_ycash_payment_flow`), and `extra.memo` and `extra.expiresAt`
+   present and equal on both sides (`invalid_exact_ycash_requirements_mismatch`).
+2. **Network.** The facilitator node's chain matches `network`, and the viewing key is a key of
+   that network (its bech32 HRP; checked once, at configuration) (`network_mismatch`).
+3. **Decoding.** `payload.transaction` is lowercase hex that decodes to exactly one v4 Sapling
+   transaction with no trailing bytes, at least one Sapling output and a binding signature, no
+   JoinSplits, `nLockTime` 0, no repeated nullifier, and within the facilitator's size and
+   component limits (`invalid_exact_ycash_transaction`).
+4. **Instrument.** `payTo` was issued by this server for a request it still holds, and `memo`
+   and the terms are those of the request record (`invalid_exact_ycash_unknown_instrument`).
+5. **Recipient.** Trial-decrypt every Sapling output with the merchant's incoming viewing key
+   (ivk), authenticating each candidate as a receiving wallet does: the AEAD tag, a known lead
+   byte, a diversifier with a valid g_d, pk_d = [ivk]·g_d, the recomputed note commitment's
+   u-coordinate equal to the output's `cmu`, and for a 0x02 note epk = [esk(rseed)]·g_d.
+   **Exactly one** output MUST decrypt, its address (d ‖ pk_d, bech32) MUST equal `payTo`, and its
+   lead byte MUST be 0x02 (`invalid_exact_ycash_sapling_output`).
+
+   The address is matched exactly, not "any address of the key", for three reasons: the
+   decrypted plaintext yields d and pk_d directly, so the match costs nothing and needs no search
+   of the 2^88 diversifier space (an offline issuer at index 2^40 is found as cheaply as index 0);
+   it keeps the instrument unique to the request, the binding `sapling-proof` relies on; and it
+   makes the consumption key and the wallet observation (settle step 4) well defined.
+6. **Amount.** The note's value is ≥ `amount` (`invalid_exact_ycash_underpaid`). Overpayment is
+   accepted and kept, as for `sapling-proof`.
+7. **Memo.** The note's memo, trailing zero bytes removed, equals the UTF-8 bytes of `extra.memo`
+   (`invalid_exact_ycash_memo_mismatch`).
+8. **Fee.** `valueBalance` + Σ transparent input values (rule 9) − Σ transparent outputs is ≥ the
+   floor above (`invalid_exact_ycash_fee_too_low`) and ≤ the facilitator's sanity cap, RECOMMENDED
+   100,000 zatoshis (`invalid_exact_ycash_fee_too_high`).
+9. **Transparent inputs**, if any, as `transparent` rules 5, 6 and 9: every scriptSig's signatures
+   are `SIGHASH_ALL` (`invalid_exact_ycash_sighash`); `gettxout(txid, n, false)` and
+   `gettxout(txid, n, true)` both find the coin (`invalid_exact_ycash_input_spent`); and
+   `signrawtransaction hex [] []` returns `complete: true` with no `errors`
+   (`invalid_exact_ycash_script`). **This call verifies transparent inputs only**: on both lines it
+   runs `VerifyScript` over `vin` and never touches the Sapling bundle (Appendix A, R-5, Z-7).
+   The Sapling spend proofs, output proofs, spend authorisation signatures and the binding
+   signature are verified by the node at relay, in `ContextualCheckTransaction`, and nowhere
+   earlier: **the facilitator relies on relay acceptance at settle for them.** A payload with
+   invalid proofs or signatures therefore passes `/verify` and fails settle step 3, after the
+   handler ran; it costs the merchant one handler run and the payer nothing, which is the same
+   exposure the shared replay primitive already declares. A facilitator MAY verify the binding
+   signature and the spend authorisation signatures itself (RedJubjub over the ZIP-243 shielded
+   signature hash) to close part of that gap; it cannot verify the Groth16 proofs without the
+   Sapling parameters, and this version does not require it.
+10. **Expiry.** As `transparent` rule 8: tip + 4 ≤ `nExpiryHeight` ≤ tip + 4 +
+    ⌈`maxTimeoutSeconds` / 75⌉ + 1; 0 fails (`invalid_exact_ycash_expiry`).
+11. **Not claimed.** The txid is not already claimed (`duplicate_settlement`). As for
+    `transparent`, a claimed txid is checked right after rule 4 and answers `duplicate_settlement`
+    without rules 5 to 10, since a broadcast transaction's inputs are spent by itself.
+
+**Nullifier spentness is not checked**, because no RPC on either line answers it (N-3). A note
+already spent in a block, or in another mempool transaction, is discovered at settle step 3: the
+node refuses the transaction (`bad-txns-sapling-duplicate-nullifier` on both lines for a spent
+nullifier; for a nullifier another mempool transaction holds, 4.5.0 refuses with `-25` and no
+reason and 6.21.0 with `txn-mempool-conflict`, as for transparent inputs, X-F7). This is the gap
+the family declaration states, and the reason `/verify` and `/settle` are not the same guarantee
+for this method.
+
+### Settlement
+
+1. **Check the claim first.** If the txid is already claimed (an earlier settle of the same
+   payload, or a retry after `settlement_pending`), skip the rules and resume observing (step 4);
+   never broadcast again.
+2. Otherwise re-run rules 2 to 10 (the handler ran in between), then **claim the txid**
+   atomically (`ycash:<network-suffix>:<txid>`, kept until `nExpiryHeight` + 10 blocks). A settle
+   that loses the claim race only observes: the winner owns the broadcast.
+3. **Submit** with `sendrawtransaction(hex)`. The node verifies the Sapling bundle and the
+   nullifiers here. A transaction already in the mempool returns its txid, one already mined gives
+   −27; both mean it is on its way. A rejection is terminal and releases the claim:
+   `invalid_exact_ycash_input_spent` for a spent nullifier or input (a mempool conflict or a spent
+   coin), `invalid_exact_ycash_expiry` for an expiring transaction, else
+   `invalid_exact_ycash_sapling_rejected` carrying the node's reason (an invalid proof or
+   signature, a duplicate nullifier). A transport failure or an unknown result keeps the claim and
+   observes.
+4. **Observe** the note in the merchant's wallet with `z_listreceivedbyaddress(payTo, 0)` on the
+   node that holds the merchant's viewing key (the facilitator's node, which imported it with
+   `z_importviewingkey`): the entry whose `txid` is the claimed txid, with its `confirmations`
+   (0 in the mempool). A viewing-key-only wallet answers `-5` at an address it has decrypted no
+   note to yet (X-F78); the facilitator reads that as "not seen yet" and keeps polling, for a
+   bounded time within `maxTimeoutSeconds`. The wallet's decryption is the second, independent
+   reading of the same note the facilitator decrypted in rule 5; a facilitator without a wallet
+   node MAY instead observe the txid (`getrawtransaction`, which needs `-txindex` once the
+   transaction is mined) and trust its own decryption.
+5. **Respond.** At or above the policy depth: success, with `transaction` the txid, no `payer`
+   (the method does not identify payers), `extra.status` `"mempool"` or `"confirmed"` with the
+   depth and `receivedZat`, and a signed receipt as for `sapling-proof` ([Receipts](#receipts)).
+   Below it: `settlement_pending` with the txid and `extra: {status: "pending", confirmations}`;
+   the retry resumes at step 1. Past `nExpiryHeight` with no note seen, the transaction can no
+   longer land: `invalid_exact_ycash_expiry`, terminal.
+
+### What the merchant learns
+
+The decrypted note: its value, memo, diversifier and rseed, which is what its wallet learns of any
+incoming payment; and the whole unbroadcast transaction, which is what everyone learns once it is
+relayed, a few seconds earlier. From a z→z payment the merchant learns nothing about the payer
+beyond the HTTP connection the payload arrived on. From a t→z payment it learns the transparent
+inputs, as anyone reading the chain would.
+
+### Privacy
+
+| Tier | Payer source | Revealed on chain | Agent needs |
+|---|---|---|---|
+| P0 | transparent → merchant `ys1…` (t→z) | the payer and the amount entering the shielded pool; not the payee | a Sapling builder; stateless keys work |
+| P2 | shielded → merchant `ys1…` (z→z), verified before broadcast | nothing: not payer, payee nor amount | a synced shielded wallet with a builder (the Rust light client) |
+
+The payer is unlinkable on chain in P2, and the facilitator cannot link a payment to any other of
+the payer's: a spent note is a nullifier, and the change output is encrypted to the payer. The
+facilitator MUST be the merchant's own: whoever holds the incoming viewing key decrypts every
+payment ever made to that key, so a third-party facilitator would learn the merchant's complete
+shielded revenue, amounts and memos included, for every method that pays this key
+([Viewing-key custody](#viewing-key-custody)). A merchant that must delegate uses a key dedicated
+to x402 revenue. Diversified addresses add no scanning cost: every `payTo` belongs to one key, and
+the facilitator trial-decrypts the outputs of one transaction per payment, not the chain.
+
+### Carried over from `sapling-proof`
+
+- **Offline-issued addresses** (X-F78, X-F82): the viewing-key node answers `-5` at `payTo` until
+  it has decrypted a note to it; settle step 4 treats that as not yet received. The facilitator's
+  own decryption (rule 5) does not depend on the wallet knowing the address.
+- **The note wait** (X-F33, X-F62): the bounded poll of settle step 4 is in the mechanism, not
+  only in the service; with a mempool policy the note is normally visible within about a second
+  of the broadcast (X-F11).
+- **Receipts** (X-F65): ES256K, low-S emitted, high-S accepted by verifiers.
+- **Memo encoding**: both lines return the 512-byte memo as hex; comparison strips trailing zero
+  bytes, as `sapling-proof` settle step 5.
+
+### Pending
+
+Rule 5's primitives (trial decryption, note commitment, ZIP 212 derivations) are implemented in
+TypeScript and checked against the Zcash test vectors (`vectors/sapling/`); an end-to-end run
+against wallet-built notes on both node lines (`vectors/sapling/generate.ts`) and against
+transactions the Rust light client builds is pending that client. Until it runs, a facilitator
+SHOULD NOT list `sapling` in `/supported` on mainnet.
 
 ## Transaction Fees
 
 The client constructs and signs the complete transaction, so **the client pays the fee**
-(`transparent`) or its wallet does (`sapling-proof`). The facilitator broadcasts an already-signed
+(`transparent`, `sapling`) or its wallet does (`sapling-proof`). The facilitator broadcasts an already-signed
 transaction and needs no funded wallet, only a node. `areFeesSponsored` is `false` for every method
 of this scheme.
 
@@ -682,7 +938,8 @@ XRPL rule), not recommended.
 
 `sapling-proof` extends the key with the issued address, `ycash:<network-suffix>:<txid>@<payTo>`,
 in a restart-durable store kept for the retention bound above, so one transaction paying several
-requests settles each once.
+requests settles each once. `sapling` uses the plain txid key: rule 5 admits exactly one output to
+the merchant's key per transaction, so a transaction is one payment.
 
 ## Error Codes
 
@@ -692,7 +949,7 @@ Scheme-specific codes:
 | Code | Meaning |
 |---|---|
 | `invalid_exact_ycash_requirements_mismatch` | `accepted` differs from the requirements, or a required `extra` field is missing |
-| `invalid_exact_ycash_asset_transfer_method` | the method is unknown, or `sapling` (reserved) |
+| `invalid_exact_ycash_asset_transfer_method` | the method is unknown, or not configured |
 | `invalid_exact_ycash_payment_flow` | `paymentFlow` is not the method's flow |
 | `invalid_exact_ycash_transaction` | not a well-formed transparent v4 transaction (rule 3) |
 | `invalid_exact_ycash_recipient_mismatch` | no output, or more than one, pays `payTo` |
@@ -713,6 +970,8 @@ Scheme-specific codes:
 | `invalid_exact_ycash_not_received` | the merchant's wallet has no note of that txid at `payTo` |
 | `invalid_exact_ycash_memo_mismatch` | the note's memo is not `extra.memo` |
 | `invalid_exact_ycash_underpaid` | the notes sum below `amount` |
+| `invalid_exact_ycash_sapling_output` | `sapling`: no output, or more than one, decrypts under the merchant's key; or it is not to `payTo`; or it is not a ZIP 212 note |
+| `invalid_exact_ycash_sapling_rejected` | `sapling`: the node refused the transaction at relay (proofs, signatures, a duplicate nullifier); the node's reason is carried |
 
 ## Security Considerations
 
@@ -740,8 +999,9 @@ failure.
 
 ### Viewing-key custody
 
-Checking a `sapling-proof` payment needs the merchant's incoming viewing key, and whoever holds it
-learns every payment to that key. A facilitator for `sapling-proof` is therefore self-hosted. A
+Checking a `sapling-proof` or `sapling` payment needs the merchant's incoming viewing key, and
+whoever holds it learns every payment to that key. A facilitator for either method is therefore
+self-hosted; for `sapling` it holds the key itself (it decrypts offline), not only its node. A
 merchant that must delegate uses a key dedicated to x402 revenue and shares only its incoming
 viewing key. A spending key never leaves the merchant's machine.
 
@@ -751,6 +1011,15 @@ The network id is checked against the node's chain (rule 2), and the ZIP-243 sig
 the consensus branch id, so a transaction signed for one Ycash network does not validate on
 another. Ycash and Zcash share genesis blocks, but Ycash's network upgrades carry their own branch
 ids, so a transaction signed at a Ycash branch id does not validate on Zcash.
+
+### Sapling checks happen at relay
+
+For `sapling`, the node verifies proofs, signatures and nullifiers only when the transaction is
+submitted (Appendix A, Z-7), so `/verify` cannot be the full guarantee it is for `transparent`: a
+payload with a bad proof, or spending a note the payer spent elsewhere, passes verify and fails
+settle. The cost falls on the merchant (one handler run) and the mitigation is the same as for the
+transparent method's shared replay primitive: handlers tolerate a failed settle, and a facilitator
+MAY rate-limit payers whose settles fail.
 
 ### Implementation limits
 
@@ -777,7 +1046,7 @@ Checked on 2026-10-03 against `ycash-dd` (Ycash 4.5.0 with the Yellowback overla
 | S-5 | Dust: 3 × relay fee × (output size + 148) = 54 zatoshis for P2PKH and P2SH at the default 100 zatoshis/kB | `src/primitives/transaction.h:460-479`, `src/main.h:68` | `src/primitives/transaction.cpp:67-79`, `src/main.h:72` |
 | S-6 | Fees: `DEFAULT_FEE` 1000 (wallet); relay needs only the 100 zatoshis/kB minimum relay fee. ZIP-317 `MARGINAL_FEE` 500, `GRACE_ACTIONS` 2, logical actions from sizes 150/34; unpaid-action limits off by default, so the ZIP-317 floor is not enforced at relay | `src/policy/fees.h:15`, `src/main.h:68` | `src/zip317.h:16-19,24-42,54`, `src/zip317.cpp:24-35`, `src/mempool_limit.h:24-25`, `src/main.h:72` |
 | S-7 | Low-S, minimal pushes, NULLDUMMY and CLEANSTACK are standard script flags | `src/policy/policy.h:32-40` | `src/policy/policy.h:45-53` |
-| S-8 | Per-Sapling-output relay fee floor (sapling-proof payers) | `src/main.cpp:1501-1512`, `:1668-1673` | `src/policy/policy.cpp:16-38` |
+| S-8 | Per-Sapling-output relay fee floor: 1000 zatoshis for up to 50 Sapling outputs, 1000 per output beyond (shielded payers) | `src/main.cpp:1501-1512`, `:1668-1673`; `src/policy/fees.h:16-17` | `src/policy/policy.cpp:16-38`; `src/policy/policy.h:22-23` |
 | Y-3 | YED output range [100, 10000000] cents (XFER-1); out of range burns everything | `src/yellowback/params.cpp:18-19`, `src/yellowback/state.cpp:447-449` | same |
 | Y-3a | XFER-2 (over-assigned burns everything), partial assignment burns the rest | `src/yellowback/state.cpp:450-473` | same |
 | Y-4 | A YED spend with no valid payload burns its YED | `src/yellowback/state.cpp:860-865`, `:879-883` | same |
@@ -788,6 +1057,8 @@ Checked on 2026-10-03 against `ycash-dd` (Ycash 4.5.0 with the Yellowback overla
 | Y-11 | Payload v3: `YB`, 0x03, type, body; one `OP_RETURN`, any push form ending the script, 4..80 bytes; vouts exist, not the `OP_RETURN`, no duplicate, no zero cents | `src/yellowback/payload.h:21-29,82-83,153-155`; `src/yellowback/payload.cpp:90-99,364-430` | same (the files are identical) |
 | Y-12 | Wallets put `TOKEN_VALUE` = 10,000 zatoshis on a YED output | `src/yellowback/params.h:78` | same |
 | Z-1 | No RPC builds a shielded transaction without broadcasting it | `src/wallet/rpcwallet.cpp:5317-5322` | `src/wallet/wallet.cpp:6633,7409,7630` |
+| Z-6 | ZIP 212: wallets send lead byte 0x02 once Canopy is active, and refuse any other lead byte from three blocks after activation (`ZIP212_GRACE_PERIOD` 3) | `src/transaction_builder.cpp:216-219`, `src/consensus/consensus.h:36`, `src/zcash/Note.hpp:45-52` | `src/consensus/consensus.h:40`, same `Note.hpp` logic |
+| Z-7 | Sapling proofs, spend authorisation and binding signatures are checked in `ContextualCheckTransaction` at relay, from `AcceptToMemoryPool`; `signrawtransaction` runs `VerifyScript` over `vin` only; a spent nullifier is `bad-txns-sapling-duplicate-nullifier`, one in another mempool transaction is refused like a transparent conflict (X-F7) | `src/main.cpp:1142-1197`, `:1540`, `:1592-1594`, `:1626-1634`; `src/rpc/rawtransaction.cpp:1069-1079` | `src/main.cpp:1360-1368` (`ContextualCheckShieldedInputs`), `:1797`, `:176`; `src/rpc/rawtransaction.cpp:1226-1231` |
 | Z-3 | `z_getnewdiversifiedaddress`; `z_listreceivedbyaddress` returns amount, memo (hex) and confirmations, `minconf` 0 includes the mempool | `src/wallet/rpcwallet.cpp:3462-3557`, `:5327`; `src/wallet/rpcdump.cpp:835` | `src/wallet/rpcdump.cpp:1391`, `src/wallet/rpcwallet.cpp:4198-4260`, `src/rpc/server.cpp:615-628` |
 | G-1 | Ycash's genesis blocks are Zcash's | `src/chainparams.cpp:213,475,663` | same values |
 | G-2 | Transparent version bytes P2PKH `1C 28` (`s1…`) and P2SH `1C 2C` (`s2…`/`s3…`) on mainnet; testnet and regtest share `1C 95` (`sm…`) and `1C 2A` (`s2…`), and WIF `0xEF`; `t1`/`t3` are not decoded as destinations; Sapling HRPs `ys`, `ytestsapling`, `yregtestsapling` | `src/chainparams.cpp:149-151,164,409-411,424,613-614,623`; `src/key_io.cpp:165-187` | `src/chainparams.cpp:161-163,456-458,689-690` |
@@ -798,7 +1069,7 @@ Checked on 2026-10-03 against `ycash-dd` (Ycash 4.5.0 with the Yellowback overla
 |---|---|---|
 | Node operator (either line) | nothing | set a flag, upgrade, run a sidecar |
 | Pool operator (`yolo`, any stratum pool, the internal miner) | nothing | change a template policy or whitelist a script |
-| Merchant / facilitator operator | run the facilitator against a node it controls: any `ycashd` for YEC; `-experimentalfeatures -yellowback` for YED; its own wallet for `sapling-proof` | patch the node |
+| Merchant / facilitator operator | run the facilitator against a node it controls: any `ycashd` for YEC; `-experimentalfeatures -yellowback` for YED; its own wallet for `sapling-proof`; its incoming viewing key (and a node that imported it) for `sapling` | patch the node |
 | Agent | run the client with keys or a node wallet | patch the node |
 
 Every transaction of this scheme is a standard transparent v4 transaction or a standard Sapling
