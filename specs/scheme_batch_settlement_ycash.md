@@ -462,7 +462,7 @@ voucher spending an unconfirmed channel shows `yedIn` 0. YED channels therefore 
 The fee is V − 2 × `TOKEN_VALUE` = `closeFee`. Output 1 always exists, so the shape is constant; it
 carries plain YEC when clientCents is 0.
 
-**The dollar floor (X-7).** With charged the server's charged total:
+**The dollar floor.** With charged the server's charged total:
 
 - `cumulative` = max(100, charged + `amount`): it is at least $1.00 from the first voucher on. The
   first voucher pre-pays up to $1.00 that later requests consume; the server keeps its charged

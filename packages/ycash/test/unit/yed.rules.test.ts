@@ -57,7 +57,7 @@ describe("validateTransferAssignments", () => {
   });
 });
 
-describe("yedChannelSplit (the dollar floor, X-7)", () => {
+describe("yedChannelSplit (the dollar floor)", () => {
   it("pays the cumulative to the server and the rest to the client", () => {
     expect(yedChannelSplit(2000, 100)).toEqual({ serverCents: 100, clientCents: 1900 });
     expect(yedChannelSplit(2000, 1900)).toEqual({ serverCents: 1900, clientCents: 100 });

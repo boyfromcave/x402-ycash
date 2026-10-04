@@ -1,8 +1,8 @@
-// X3 acceptance on a live devnet (plan §7 X3, §4.3): YED per request at ≥ $1 (`exact`, through
+// Acceptance on a live devnet (plan §7 X3, §4.3): YED per request at ≥ $1 (`exact`, through
 // @x402/core's client, resource server and facilitator) and YED payment channels
 // (`batch-settlement`), on either node line. Node 0 runs -yellowback: it mints the YED, hosts the
 // facilitator and the channel server. Payments and closes are mined by node 2, a Yellowback pool
-// under the default `strict` template policy (OP-2). The burning voucher goes through node 1 (stock).
+// under the default `strict` template policy. The burning voucher goes through node 1 (stock).
 import { x402Client } from "@x402/core/client";
 import { x402Facilitator } from "@x402/core/facilitator";
 import { x402ResourceServer } from "@x402/core/server";
@@ -82,7 +82,7 @@ async function yedSend(to: string, cents: number): Promise<string> {
   return txid;
 }
 
-/** Mines one block on the Yellowback pool (node 2, `strict`) and checks it carries `txid` (OP-2). */
+/** Mines one block on the Yellowback pool (node 2, `strict`) and checks it carries `txid`. */
 async function mineOnPool(txid: string): Promise<void> {
   await waitFor(async () => (await d.pool.getRawMempool()).includes(txid), { what: `${txid} at the pool` });
   const [hash] = await d.mine(1, d.pool);
@@ -195,7 +195,7 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
     // 5,000 + 300 in; 100 and 2,500 out: the payer keeps 2,700 as YED change
     expect((await tokensOf(payer.yr)).reduce((s, t) => s + t.cents, 0)).toBe(2_700);
     expect(await supply()).toBe(before);
-    record(d.line, "X3 exact YED", results);
+    record(d.line, "exact YED", results);
   });
 
   it("exact YED through the RPC wallet signer (node 0's own YED)", async () => {
@@ -226,7 +226,7 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
     expect(v2.isValid).toBe(false);
     expect([exact.ERR_YED_PAYLOAD, exact.ERR_AMOUNT_MISMATCH]).toContain(v2.invalidReason);
     expect(await supply()).toBe(before);
-    record(d.line, "X3 exact YED $0.50", { overlayVerdict: overlay.verdict, burned: overlay.burned, facilitator50: v.invalidReason, facilitator100: v2.invalidReason });
+    record(d.line, "exact YED $0.50", { overlayVerdict: overlay.verdict, burned: overlay.burned, facilitator50: v.invalidReason, facilitator100: v2.invalidReason });
   });
 
   it("an under-assigning YED payment (it would burn the rest) is refused with yed_verdict; a stock facilitator refuses YED outright", async () => {
@@ -242,7 +242,7 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
     const stock = new exact.ExactYcashFacilitatorScheme(d.stock);
     expect(stock.getExtra(NET)?.assets).toEqual(["YEC"]);
     expect(await stock.verify({ x402Version: 2, accepted: req, payload: { transaction: hex } }, req)).toMatchObject({ isValid: false, invalidReason: exact.ERR_YED_NODE_REQUIRED });
-    record(d.line, "X3 exact YED under-assigned", { overlay: { verdict: overlay.verdict, yedIn: overlay.yedIn, yedOut: overlay.yedOut, burned: overlay.burned }, facilitator: v.invalidReason });
+    record(d.line, "exact YED under-assigned", { overlay: { verdict: overlay.verdict, yedIn: overlay.yedIn, yedOut: overlay.yedOut, burned: overlay.burned }, facilitator: v.invalidReason });
   });
 
   // ------------------------------------------------------------------ channels
@@ -294,7 +294,7 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
     await waitFor(async () => (await d.wallet.call<{ txid: string; vout: number; cents: number }[]>("yed_listunspent")).some((u) => u.txid === txid && u.vout === vout && u.cents === cents), {
       timeoutMs: 15_000, what: `node 0's YED wallet to list ${txid}:${vout}`,
     });
-    record(d.line, "X3 YED remainder home", { channelId, returnAddress: rec.returnAddress, txid, vout, cents });
+    record(d.line, "YED remainder home", { channelId, returnAddress: rec.returnAddress, txid, vout, cents });
   }
 
   /** The open: refused below the funding depth (YED needs a block, X-F14), accepted once mined. */
@@ -344,7 +344,7 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
     await d.syncBlocks();
     expect(await tokensOf(p.payTo.yr)).toMatchObject([{ txid: closeTxid, vout: 0, cents: 2_000 }]);
     expect(await supply()).toBe(before);
-    record(d.line, "X3 YED channel", {
+    record(d.line, "YED channel", {
       requests: N + 1, firstVoucher: first, lastCumulative: "1950", serverReceived: 2_000, clientRemainder: 0, closeTxid, closeAssignments: decoded.assignments,
     });
   });
@@ -404,7 +404,7 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
     expect(await tokensOf(p.payTo.yr)).toEqual([]);
     expect(await p.server.manager.close(channelId)).toBeUndefined(); // spent by the refund
     expect(await supply()).toBe(before);
-    record(d.line, "X3 YED refund", { refundHeight: rec.refundHeight, txid, assignments: (await d.wallet.yedDecodePayload(hex)).assignments });
+    record(d.line, "YED refund", { refundHeight: rec.refundHeight, txid, assignments: (await d.wallet.yedDecodePayload(hex)).assignments });
   });
 
   it("a hand-built burning voucher: refused by the facilitator's verify; skipped by a strict pool's template, mined only by stock node 1", async () => {
@@ -441,7 +441,7 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
     expect((await d.stock.call<{ tx: string[] }>("getblock", [hash])).tx).toContain(burnTxid);
     const after = await supply();
     expect(after).toBe(before - 200);
-    record(d.line, "X3 burning voucher", {
+    record(d.line, "burning voucher", {
       overlay: { verdict: overlay.verdict, yedIn: overlay.yedIn, yedOut: overlay.yedOut, burned: overlay.burned },
       facilitator: { voucher: asVoucher.invalidReason, claim: asClaim.invalidReason },
       strictPoolTemplate: inTemplate ? "included" : "skipped", minedBy: "node 1 (stock)", supplyBefore: before, supplyAfter: after,

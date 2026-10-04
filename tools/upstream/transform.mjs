@@ -32,7 +32,8 @@ function walk(dir) {
 const PLAN_REF = String.raw`(?:plan(?:\s|\/\/|\*)+)?(?:§[\d.]+(?:\s+X\d+[a-z]?)?(?:,?(?:\s|\/\/|\*)*"[^"]*")?|X-F\d+|X-\d+\b|\bX\d+[a-z]?\b(?:\s+hook)?)`;
 // A separator between items, which may wrap onto the next comment line.
 const SEP = String.raw`\s*[,;]\s*(?:(?:\/\/|\*)\s?)?`;
-const LEADING = new RegExp(String.raw`^((?:\s|\/\/|\*)*)${PLAN_REF}(?:${SEP})?`);
+// A leading reference may introduce the rest with a colon: "(X-F8: valid through expiry)".
+const LEADING = new RegExp(String.raw`^((?:\s|\/\/|\*)*)${PLAN_REF}(?:${SEP}|:\s*)?`);
 const INNER = new RegExp(String.raw`${SEP}${PLAN_REF}`, "g");
 
 // Drops plan references from one parenthetical's inner text, in place, so everything else keeps
@@ -52,16 +53,21 @@ function cleanParen(inner) {
 // Every parenthetical that names the plan, on one line or wrapping onto comment lines.
 function rewriteParens(text) {
   text = text.replace(/(?:\n\s*\/\/)?\s*\(docs\/plans\/[^()]*\)/g, "");
-  return text.replace(/(\s?)\(([^()]*)\)/g, (m, sp, inner) => {
+  text = text.replace(/(\s?)\(([^()]*)\)/g, (m, sp, inner) => {
     if (!/\bplan\b|X-F\d/.test(inner)) return m;
     const lines = inner.split("\n");
     if (!lines.slice(1).every((l) => /^\s*(\*|\/\/)/.test(l))) return m;
-    const r = cleanParen(inner);
+    let r = cleanParen(inner).replace(/^[ \t]+/, "");
     if (!r) return "";
+    // ")" left alone on a comment line moves up to the text it closes; the line break follows it
+    const tail = r.match(/\n\s*(?:\/\/|\*)\s?$/)?.[0] ?? "";
+    r = r.slice(0, r.length - tail.length);
     // "(" left alone at the end of a line moves down to the text it opens
     const brk = r.match(/^\n\s*(?:\/\/|\*)\s?/);
-    return brk ? `${brk[0]}(${r.slice(brk[0].length)})` : `${sp}(${r})`;
+    return (brk ? `${brk[0]}(${r.slice(brk[0].length)})` : `${sp}(${r})`) + tail;
   });
+  // a parenthetical removed from the start of a comment line leaves its punctuation there: move it up
+  return text.replace(/\n([ \t]*\/\/)[ \t]*([,;]|:(?!\d)|\.(?!\.))[ \t]*/g, "$2\n$1 ");
 }
 
 // Splits a line into code and comment: a whole-line comment, or code followed by " // …".
@@ -123,8 +129,9 @@ function transformCode(dir) {
       p = p.replace(/(^|\/)batch(?=\/|$)/g, "$1batch-settlement");
       return `${kw}"${p}"`;
     });
-    // vectors: <repo>/vectors/… → <package>/test/vectors/… (tests sit in test/unit/)
+    // vectors: <repo>/vectors/… → <package>/test/vectors/… (tests sit in test/unit/ or one level below)
     s = s.replace(/"(?:\.\.\/){4}vectors\//g, '"../vectors/');
+    s = s.replace(/"(?:\.\.\/){5}vectors\//g, '"../../vectors/');
     // the cross-process store test spawns tsx: pnpm puts it in the package's own node_modules
     s = s.replace('"../../../../../node_modules/.bin/tsx"', '"../../../node_modules/.bin/tsx"');
     s = rewriteParens(s);

@@ -46,7 +46,7 @@ const highSJws = `${h}.${p}.${Buffer.concat([sig.subarray(0, 32), Buffer.from(hi
 
 const doc = {
   description:
-    "sapling-proof (plan X4a): the request record's JCS and SHA-256 request hash, the memo and its z_sendmany hex; JCS edge cases (UTF-16 member order, escapes); ES256K offer-and-receipt JWS (did:jwk kid, JCS payloads, r||s low-S, RFC 6979) for a fixed key. Offline, deterministic.",
+    "sapling-proof: the request record's JCS and SHA-256 request hash, the memo and its z_sendmany hex; JCS edge cases (UTF-16 member order, escapes); ES256K offer-and-receipt JWS (did:jwk kid, JCS payloads, r||s low-S, RFC 6979) for a fixed key. Offline, deterministic.",
   request: { record, jcs: jcs(record), requestHash: requestHash(record), memo: memoForRecord(record), memoHex: memoToHex(memoForRecord(record)) },
   jcs: jcsCases,
   receiptKey: { priv: bytesToHex(receiptPriv), pubCompressed: bytesToHex(secp.getPublicKey(receiptPriv, true)), kid: didJwkFor(secp.getPublicKey(receiptPriv, true)) },

@@ -1,5 +1,5 @@
 {
-  "description": "sapling-proof (plan X4a): the request record's JCS and SHA-256 request hash, the memo and its z_sendmany hex; JCS edge cases (UTF-16 member order, escapes); ES256K offer-and-receipt JWS (did:jwk kid, JCS payloads, r||s low-S, RFC 6979) for a fixed key. Offline, deterministic.",
+  "description": "sapling-proof: the request record's JCS and SHA-256 request hash, the memo and its z_sendmany hex; JCS edge cases (UTF-16 member order, escapes); ES256K offer-and-receipt JWS (did:jwk kid, JCS payloads, r||s low-S, RFC 6979) for a fixed key. Offline, deterministic.",
   "request": {
     "record": {
       "v": 1,

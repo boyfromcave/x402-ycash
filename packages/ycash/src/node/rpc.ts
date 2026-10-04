@@ -41,7 +41,7 @@ export interface ZSendManyOptions {
 }
 
 /**
- * A typed ycashd JSON-RPC client for both node lines (v4.5.0 `ycash-dd`, 6.21.0 `ycash6`). It wraps
+ * A typed ycashd JSON-RPC client for both node lines (v4.5.0 and 6.21.0). It wraps
  * exactly the RPCs the x402 facilitator, server and client use; anything else goes through `call`.
  */
 export class YcashRpc {

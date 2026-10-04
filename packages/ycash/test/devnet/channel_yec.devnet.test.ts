@@ -1,6 +1,6 @@
-// X2 acceptance on a live devnet (plan §7 X2): YEC payment channels as `batch-settlement`, on
+// Acceptance on a live devnet (plan §7 X2): YEC payment channels as `batch-settlement`, on
 // either node line. The server's node is node 1 (stock, no -yellowback): a YEC channel needs no
-// overlay. The client funds from node 0's wallet. Every close is mined by node 1 (OP-1).
+// overlay. The client funds from node 0's wallet. Every close is mined by node 1, the stock seat.
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -75,7 +75,7 @@ describeDevnet("batch-settlement YEC channels on a live devnet", () => {
     return v.channelId;
   }
 
-  /** Mines one block on node 1 (stock) and checks that it carries `txid` (OP-1). */
+  /** Mines one block on node 1 (stock) and checks that it carries `txid`. */
   async function mineOnStock(txid: string): Promise<void> {
     const [hash] = await d.mine(1, d.stock);
     const block = await d.stock.call<{ tx: string[] }>("getblock", [hash]);
@@ -113,7 +113,7 @@ describeDevnet("batch-settlement YEC channels on a live devnet", () => {
       return got === want;
     }, { timeoutMs: 15_000, what: `the client's wallet to receive ${want} at ${rec.returnAddress}` }).catch(() => undefined);
     expect(got).toBe(want);
-    record(d.line, "X2 remainder home", { channelId, returnAddress: rec.returnAddress, txid, remainderZat: want.toString() });
+    record(d.line, "remainder home", { channelId, returnAddress: rec.returnAddress, txid, remainderZat: want.toString() });
   }
 
   /** Mines n blocks in batches: the harness reads every new block at once, and a big batch overflows the RPC work queue. */
@@ -143,7 +143,7 @@ describeDevnet("batch-settlement YEC channels on a live devnet", () => {
     const closeTx = T.parseTx(await d.stock.call<string>("getrawtransaction", [closeTxid]));
     const closeFee = BigInt(state.deposit) + 1500n - closeTx.vout.reduce((s, o) => s + o.value, 0n);
     const fundingTx = T.parseTx(await d.stock.call<string>("getrawtransaction", [fundingTxid]));
-    record(d.line, "X2 chain cost", {
+    record(d.line, "chain cost", {
       requests: N, txs: 2, bytes: sizes[0]! + sizes[1]!, fundingBytes: sizes[0], closeBytes: sizes[1], closeFeeZat: Number(closeFee),
       fundingFeeFloorZat: Number(T.feeFloor(fundingTx)),
       exactEquivalent: { txs: N, bytesAt226: N * 226, feesZat: N * 1000 },
@@ -166,7 +166,7 @@ describeDevnet("batch-settlement YEC channels on a live devnet", () => {
     await mineOnStock(r.transaction);
     expect(await received(p.payTo, total)).toBe(total);
     await remainderHome(p, channelId, r.transaction, 200_000n - total);
-    record(d.line, "X2 dynamic pricing", { charges: charges.map(String), charged: total.toString(), highestVoucher: state.signedCumulative, closePaid: total.toString() });
+    record(d.line, "dynamic pricing", { charges: charges.map(String), charged: total.toString(), highestVoucher: state.signedCumulative, closePaid: total.toString() });
   });
 
   it("refuses a stale voucher and one below charged + amount", async () => {
@@ -200,7 +200,7 @@ describeDevnet("batch-settlement YEC channels on a live devnet", () => {
     expect(await d.tip()).toBeLessThan(rec.refundHeight);
     expect(await received(p.payTo, 2000n)).toBe(2000n);
     await remainderHome(p, channelId, txid, 48_000n);
-    record(d.line, "X2 margin close", { refundHeight: rec.refundHeight, closedAt: await d.tip(), margin: MARGIN });
+    record(d.line, "margin close", { refundHeight: rec.refundHeight, closedAt: await d.tip(), margin: MARGIN });
   });
 
   it("the client refunds alone after t (the node refuses it before)", async () => {
@@ -226,7 +226,7 @@ describeDevnet("batch-settlement YEC channels on a live devnet", () => {
     await remainderHome(p, channelId, txid, T.parseTx(await d.stock.call<string>("getrawtransaction", [txid])).vout[0]!.value);
     // the server's close finds the channel spent by the refund
     expect(await p.server.manager.close(channelId)).toBeUndefined();
-    record(d.line, "X2 refund", { refundHeight: rec.refundHeight, earlyRefusal: (err as SendRawTransactionError).message, refundZat: T.parseTx(T.serializeTxHex(early)).vout[0]!.value.toString() });
+    record(d.line, "refund", { refundHeight: rec.refundHeight, earlyRefusal: (err as SendRawTransactionError).message, refundZat: T.parseTx(T.serializeTxHex(early)).vout[0]!.value.toString() });
   });
 
   it("funding at zero confirmations (server opt-in, YEC only): served before any block, closed with the funding", async () => {
@@ -269,6 +269,6 @@ describeDevnet("batch-settlement YEC channels on a live devnet", () => {
     expect(await d.tip()).toBeLessThan(rec.refundHeight - MARGIN);
     await mineOnStock(closes[0]!.txid!);
     expect(await received(p.payTo, 2000n)).toBe(2000n);
-    record(d.line, "X2 restart close", { refundHeight: rec.refundHeight, closedAt: await d.tip(), margin: MARGIN, msToClose: Date.now() - t0 });
+    record(d.line, "restart close", { refundHeight: rec.refundHeight, closedAt: await d.tip(), margin: MARGIN, msToClose: Date.now() - t0 });
   });
 });

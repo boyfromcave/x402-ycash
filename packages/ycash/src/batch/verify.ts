@@ -402,7 +402,7 @@ export interface VoucherBounds {
   layout?: VoucherLayout;
   /** accept a completed close (the server's slot filled), for a facilitator's `claim` */
   allowCompleted?: boolean;
-  /** the least cumulative (YED: $1.00, the dollar floor X-7) */
+  /** the least cumulative (YED: $1.00, the dollar floor) */
   floor?: bigint;
   /** the channel's bound client script (from `returnAddress`); absent only for a verifier that never saw the open */
   returnScript?: Uint8Array;

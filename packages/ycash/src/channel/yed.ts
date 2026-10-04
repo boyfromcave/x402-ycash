@@ -37,7 +37,7 @@ export function yedChannelValue(closeFee: bigint): bigint {
 
 /**
  * The voucher's TRANSFER at `cumulative` out of D: the server's vout gets serverCents and the
- * client's clientCents, omitted when 0 (yedChannelSplit: the dollar floor, X-7). Σ = D, so nothing burns.
+ * client's clientCents, omitted when 0 (yedChannelSplit: the dollar floor). Σ = D, so nothing burns.
  *
  * @param depositCents - D, cents.
  * @param cumulative - The total paid to the server, cents.

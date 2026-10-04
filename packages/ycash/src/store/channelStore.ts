@@ -1,7 +1,7 @@
 import { JsonFile, type JsonFileOptions } from "./jsonFile.js";
 
 /**
- * A payment channel's facilitator-side state for X2/X3 (plan §5.7): the highest cumulative amount
+ * A payment channel's facilitator-side state for YEC and YED channels (plan §5.7): the highest cumulative amount
  * the payee holds a signature for. `cumulative` only moves through compare-and-set, so two workers
  * redeeming vouchers on one channel cannot both advance it from the same value.
  */

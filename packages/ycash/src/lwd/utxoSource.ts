@@ -1,5 +1,5 @@
 // A local-key client's coins through lightwalletd instead of a node: the light-client UtxoSource
-// (plan C-1, X5). Coins come from GetAddressUtxos, YED outputs from GetAddressTokens, the tip and
+// (plan X5). Coins come from GetAddressUtxos, YED outputs from GetAddressTokens, the tip and
 // branch id from GetLightdInfo.
 //
 // The mempool-spend guard is weaker than RpcUtxoSource's: both lightwalletd listings read the

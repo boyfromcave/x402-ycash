@@ -1,4 +1,4 @@
-// X4a acceptance on either node line: `sapling-proof` end to end against a real merchant wallet
+// Acceptance on either node line (plan X4a): `sapling-proof` end to end against a real merchant wallet
 // (node 0) and a real payer wallet (the pool, node 2), tiers P1 (z→z) and P0 (t→z).
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,7 +21,7 @@ import { describeDevnet, devnet, record, waitFor, type Devnet } from "./harness.
 const RESOURCE = "https://merchant.example/x402/report";
 const AMOUNT = 1_500_000n; // 0.015 YEC
 
-describeDevnet("sapling-proof (X4a) on the devnet", () => {
+describeDevnet("sapling-proof on the devnet", () => {
   let d: Devnet;
   let handler: SaplingProofHandler;
   let receiptPub: Uint8Array;
@@ -96,7 +96,7 @@ describeDevnet("sapling-proof (X4a) on the devnet", () => {
     const { payload } = await client.createPaymentPayload(2, req);
     const res = await settleSeen(req, payload.txid);
     const shape = await chainShape(payload.txid);
-    record(d.line, "X4a-P1-0conf", { res: { ...res, extensions: undefined }, shape });
+    record(d.line, "sapling-proof P1-0conf", { res: { ...res, extensions: undefined }, shape });
     expect(res).toMatchObject({ success: true, transaction: payload.txid, network: YCASH_REGTEST, extra: { status: "mempool", confirmations: -1, receivedZat: AMOUNT.toString() } });
     expect(res.payer).toBeUndefined();
     // Nothing public: no transparent input or output at all, the value moves inside the pool.
@@ -117,7 +117,7 @@ describeDevnet("sapling-proof (X4a) on the devnet", () => {
     expect(pending).toMatchObject({ success: false, errorReason: ERR.settlementPending, transaction: payload.txid, extra: { status: "pending", confirmations: -1 } });
     await d.mine(1);
     const res = await handler.settle(payloadFor(req, payload.txid), req);
-    record(d.line, "X4a-P1-1conf", { pending, res: { ...res, extensions: undefined } });
+    record(d.line, "sapling-proof P1-1conf", { pending, res: { ...res, extensions: undefined } });
     expect(res).toMatchObject({ success: true, extra: { status: "confirmed", confirmations: 1 } });
     expect(verifyReceipt(receiptOf(res), { trustedPublicKeys: [receiptPub] }).transaction).toBe(payload.txid);
     // the receipt names only the merchant's key
@@ -132,7 +132,7 @@ describeDevnet("sapling-proof (X4a) on the devnet", () => {
     await d.mine(1);
     const res = await settleSeen(req, payload.txid);
     const shape = await chainShape(payload.txid);
-    record(d.line, "X4a-P0", { amount: req.amount, quote, res: { ...res, extensions: undefined }, shape });
+    record(d.line, "sapling-proof P0", { amount: req.amount, quote, res: { ...res, extensions: undefined }, shape });
     expect(res).toMatchObject({ success: true, extra: { status: "confirmed" } });
     expect(shape.vin).toBeGreaterThan(0); // the payer's transparent coins are visible
     expect(shape.merchantTransparentOutputs).toBe(0); // only the payer's change, if any, is transparent
@@ -153,7 +153,7 @@ describeDevnet("sapling-proof (X4a) on the devnet", () => {
     const rUnder = await settleSeen(under, txUnder);
     const rOver = await settleSeen(over, txOver);
     const rWrong = await settleSeen(wrong, txWrong);
-    record(d.line, "X4a-amounts", { rUnder, rOver: { ...rOver, extensions: undefined }, rWrong });
+    record(d.line, "sapling-proof amounts", { rUnder, rOver: { ...rOver, extensions: undefined }, rWrong });
     expect(rUnder).toMatchObject({ success: false, errorReason: ERR.underpaid });
     expect(rOver).toMatchObject({ success: true, extra: { receivedZat: (AMOUNT + 12_345n).toString() } });
     expect(rWrong).toMatchObject({ success: false, errorReason: ERR.memoMismatch });
@@ -167,7 +167,7 @@ describeDevnet("sapling-proof (X4a) on the devnet", () => {
     const first = await settleSeen(a, tx);
     const replay = await handler.settle(payloadFor(a, tx), a);
     const elsewhere = await handler.settle(payloadFor(b, tx), b);
-    record(d.line, "X4a-replay", { first: first.success, replay, elsewhere });
+    record(d.line, "sapling-proof replay", { first: first.success, replay, elsewhere });
     expect(first.success).toBe(true);
     expect(replay).toMatchObject({ success: false, errorReason: ERR.duplicateSettlement });
     expect(elsewhere).toMatchObject({ success: false, errorReason: ERR.notReceived });
@@ -183,7 +183,7 @@ describeDevnet("sapling-proof (X4a) on the devnet", () => {
     await d.mine(1);
     const ra = await settleSeen(a, tx);
     const rb = await settleSeen(b, tx);
-    record(d.line, "X4a-two-requests-one-tx", { ra: ra.success, rb });
+    record(d.line, "sapling-proof two-requests-one-tx", { ra: ra.success, rb });
     expect(ra.success).toBe(true);
     expect(rb.success).toBe(true);
     expect(await settleSeen(a, tx)).toMatchObject({ success: false, errorReason: ERR.duplicateSettlement });

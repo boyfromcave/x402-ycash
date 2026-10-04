@@ -15,6 +15,8 @@ const baseConfig = {
   },
   sourcemap: true,
   target: "es2020",
+  // src/lwd finds its vendored protos from import.meta.url, which the CJS build must shim
+  shims: true,
 };
 
 export default defineConfig([
