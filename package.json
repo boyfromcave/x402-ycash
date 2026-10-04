@@ -10,6 +10,7 @@
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "test:devnet": "npm run test:devnet --workspaces --if-present"
+    "test:devnet": "npm run test:devnet --workspaces --if-present",
+    "test:devnet:http": "npm run test:devnet -w x402-ycash-example-merchant-express"
   }
 }
