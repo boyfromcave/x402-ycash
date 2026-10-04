@@ -1,0 +1,843 @@
+diff --git a/.github/labeler-networks.json b/.github/labeler-networks.json
+index c623f22b..26c5b061 100644
+--- a/.github/labeler-networks.json
++++ b/.github/labeler-networks.json
+@@ -16,6 +16,7 @@
+     "sui",
+     "svm",
+     "tvm",
+-    "xrpl"
++    "xrpl",
++    "ycash"
+   ]
+ }
+diff --git a/.github/labeler.yml b/.github/labeler.yml
+index 1292a9ec..dd9ee75f 100644
+--- a/.github/labeler.yml
++++ b/.github/labeler.yml
+@@ -179,6 +179,14 @@ xrpl:
+           - 'go/signers/xrpl/**'
+           - 'python/x402/mechanisms/xrpl/**'
+           - 'specs/schemes/**/scheme_*_xrpl.md'
++ycash:
++  - changed-files:
++      - any-glob-to-any-file:
++          - 'typescript/packages/mechanisms/ycash/**'
++          - 'go/mechanisms/ycash/**'
++          - 'go/signers/ycash/**'
++          - 'python/x402/mechanisms/ycash/**'
++          - 'specs/schemes/**/scheme_*_ycash.md'
+ # END GENERATED NETWORK LABELS
+ 
+ # Examples
+diff --git a/.github/workflows/publish_npm_scoped_x402_all.yml b/.github/workflows/publish_npm_scoped_x402_all.yml
+index 5b9f5c84..af59f6e8 100644
+--- a/.github/workflows/publish_npm_scoped_x402_all.yml
++++ b/.github/workflows/publish_npm_scoped_x402_all.yml
+@@ -83,6 +83,7 @@ jobs:
+           publish_package "packages/mechanisms/near"
+           publish_package "packages/mechanisms/tvm"
+           publish_package "packages/mechanisms/xrpl"
++          publish_package "packages/mechanisms/ycash"
+           publish_package "packages/http/paywall"
+           publish_package "packages/http/axios"
+           publish_package "packages/http/fetch"
+diff --git a/.github/workflows/publish_npm_scoped_x402_ycash.yml b/.github/workflows/publish_npm_scoped_x402_ycash.yml
+new file mode 100644
+index 00000000..17c0d826
+--- /dev/null
++++ b/.github/workflows/publish_npm_scoped_x402_ycash.yml
+@@ -0,0 +1,53 @@
++name: Publish @x402/ycash package to NPM
++
++on:
++  workflow_dispatch:
++
++jobs:
++  publish-npm-x402-ycash:
++    if: github.repository == 'x402-foundation/x402' && github.ref == 'refs/heads/main'
++    runs-on: ubuntu-latest
++    environment: npm
++    permissions:
++      contents: read
++      id-token: write
++    steps:
++      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
++
++      - name: Setup pnpm
++        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
++        with:
++          version: 11.1.1
++
++      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
++        with:
++          node-version: "24"
++          registry-url: "https://registry.npmjs.org"
++
++      - name: Update npm for OIDC trusted publishing
++        run: npm install -g npm@11.14.1 --ignore-scripts
++
++      - name: Configure npm for trusted publishing
++        run: npm config delete always-auth 2>/dev/null || true
++
++      - name: Install and build
++        working-directory: ./typescript
++        run: |
++          pnpm install --frozen-lockfile --ignore-scripts
++          pnpm -r --filter=@x402/core --filter=@x402/ycash run build
++
++      - name: Verify package exports
++        working-directory: ./typescript
++        run: pnpm verify:exports
++
++      - name: Publish @x402/ycash package
++        working-directory: ./typescript/packages/mechanisms/ycash
++        run: |
++          # Get package information directly
++          PACKAGE_NAME=$(node -p "require('./package.json').name")
++          PACKAGE_VERSION=$(node -p "require('./package.json').version")
++
++          echo "Package: $PACKAGE_NAME@$PACKAGE_VERSION"
++
++          echo "Publishing to NPM (main branch)"
++          pnpm publish --provenance --access public
+diff --git a/e2e/.env-local b/e2e/.env-local
+index 21bf175f..f1639b20 100644
+--- a/e2e/.env-local
++++ b/e2e/.env-local
+@@ -19,6 +19,7 @@ SERVER_TVM_ADDRESS=
+ SERVER_NEAR_ADDRESS=
+ SERVER_XRPL_ADDRESS=
+ SERVER_CARDANO_ADDRESS=
++SERVER_YCASH_ADDRESS=
+ 
+ # Client wallets
+ CLIENT_EVM_PRIVATE_KEY=
+@@ -43,6 +44,7 @@ CLIENT_NEAR_ACCOUNT_ID=
+ CLIENT_NEAR_PRIVATE_KEY=
+ CLIENT_XRPL_SEED=
+ CLIENT_CARDANO_MNEMONIC=
++CLIENT_YCASH_WIF=
+ 
+ # Facilitator wallets (XRPL facilitator is keyless — no FACILITATOR_XRPL_*)
+ FACILITATOR_EVM_PRIVATE_KEY=
+@@ -71,3 +73,11 @@ SERVER_CARDANO_SELLER_MNEMONIC=
+ # SERVER_CARDANO_SCRIPT_ADDRESS=
+ # SERVER_CARDANO_SCRIPT_CODE=
+ # SERVER_CARDANO_SCRIPT_DATUM=
++
++# Ycash: the facilitator is keyless (payer-signed transactions). Ycash testnet has no reachable
++# seeds today, so run against a regtest node: YCASH_NETWORK=ycash:regtest and the node's RPC
++# (credentials as userinfo) in YCASH_TESTNET_RPC_URL. See README "Ycash (regtest)".
++# YCASH_NETWORK=ycash:regtest
++YCASH_TESTNET_RPC_URL=
++# YCASH_ZERO_CONF_CAP_ZAT=1000000
++# YCASH_CONFIRMATIONS_MIN=-1
+diff --git a/e2e/README.md b/e2e/README.md
+index 044bc95b..b1891e72 100644
+--- a/e2e/README.md
++++ b/e2e/README.md
+@@ -216,6 +216,7 @@ CLIENT_TVM_PRIVATE_KEY=...          # TVM private key for client payments
+ CLIENT_NEAR_ACCOUNT_ID=...          # NEAR payer account id that owns the access key
+ CLIENT_NEAR_PRIVATE_KEY=ed25519:... # NEAR private key for that payer account
+ CLIENT_XRPL_SEED=s...               # XRPL seed for client payments (payer signs and pays fees)
++CLIENT_YCASH_WIF=...                # Ycash transparent key (WIF) for client payments (payer signs and pays the fee)
+ 
+ # Server payment addresses
+ SERVER_EVM_ADDRESS=0x...            # Where servers receive EVM payments
+@@ -230,6 +231,7 @@ SERVER_STELLAR_ADDRESS=...          # Where servers receive Stellar payments
+ SERVER_TVM_ADDRESS=...              # Where servers receive TVM payments
+ SERVER_NEAR_ADDRESS=...             # Where servers receive NEAR payments (merchant account)
+ SERVER_XRPL_ADDRESS=r...            # Where servers receive XRPL payments
++SERVER_YCASH_ADDRESS=sm...          # Where servers receive Ycash payments (s1... on mainnet)
+ 
+ # Facilitator wallets (⚠️ TEST WALLETS ONLY — used to fund/drain client between tests)
+ FACILITATOR_EVM_PRIVATE_KEY=0x...   # EVM private key for facilitator
+@@ -249,6 +251,7 @@ FACILITATOR_NEAR_ACCOUNT_ID=...     # NEAR relayer account id (submits meta-tx,
+ FACILITATOR_NEAR_PRIVATE_KEY=ed25519:... # NEAR relayer private key
+ FACILITATOR_CARDANO_MNEMONIC=...    # Optional: the Cardano facilitator only broadcasts, so it runs provider-only without a mnemonic
+ # XRPL needs no facilitator wallet — the facilitator is keyless (payer signs and pays fees)
++# Ycash needs no facilitator wallet either: it verifies and relays payer-signed transactions through YCASH_RPC_URL
+ 
+ # Casper CEP-18 support
+ CASPER_ASSET=...                    # CEP-18 contract package hash (64 hex chars, no 0x/hash-)
+@@ -393,6 +396,27 @@ CSPR is required for gas on Casper Testnet.
+ Use [testnet.cspr.trade](https://testnet.cspr.trade) to get wrapped CSPR (WCSPR) or csprUSD for
+ the client payments.
+ 
++#### Ycash (regtest)
++
++Ycash testnet had no reachable seeds when this binding was written, so the Ycash family runs
++against a **regtest** node. Every role talks to it through `YCASH_RPC_URL`, which the harness
++fills from `YCASH_TESTNET_RPC_URL`.
++
++1. Start a regtest `ycashd` (a 4.5.0 or 6.21.0 build; YEC needs no Ycash-specific flag), with
++   Overwinter and Sapling active from block 1 as the node's own test harness does:
++   `ycashd -regtest -server -daemon -rpcuser=x402 -rpcpassword=x402 -rpcport=18232 -nuparams=5ba81b19:1 -nuparams=76b809bb:1`,
++   then mature some coinbase: `ycash-cli -regtest -rpcuser=x402 -rpcpassword=x402 -rpcport=18232 generate 101`.
++2. Make a payer key and fund it with several separate coins (one per scenario: a payment's change
++   is unconfirmed until the next block): `getnewaddress`, `dumpprivkey <addr>` → `CLIENT_YCASH_WIF`,
++   then `sendtoaddress <addr> 0.1` ten times and `generate 1`.
++3. Set `SERVER_YCASH_ADDRESS` to another `getnewaddress`, and
++   `YCASH_NETWORK=ycash:regtest`, `YCASH_TESTNET_RPC_URL=http://x402:x402@127.0.0.1:18232/`.
++
++The `/exact/ycash` route charges 0.001 YEC (`SERVER_YCASH_AMOUNT` overrides it). Payments up to
++`YCASH_ZERO_CONF_CAP_ZAT` (default 0.01 YEC) settle at the mempool, so no block is needed per
++payment. Once Ycash testnet has seeds again, leave `YCASH_NETWORK` unset and point
++`YCASH_TESTNET_RPC_URL` at a testnet node.
++
+ #### Cardano Preprod
+ 
+ 1. Create a preprod wallet (CIP-30 wallet or `PrivateKey.generateMnemonic()` from `@evolution-sdk/evolution`) and set `CLIENT_CARDANO_MNEMONIC` plus `SERVER_CARDANO_ADDRESS` (the client's `addr_test1...` works).
+diff --git a/e2e/clients/typescript/client.ts b/e2e/clients/typescript/client.ts
+index f69947bb..4b9f5b29 100644
+--- a/e2e/clients/typescript/client.ts
++++ b/e2e/clients/typescript/client.ts
+@@ -30,6 +30,12 @@ import { ExactNearScheme as ExactNearClientScheme } from "@x402/near/exact/clien
+ import { createXrplWalletSigner } from "@x402/xrpl";
+ import { ExactXrplScheme as ExactXrplClientScheme } from "@x402/xrpl/exact/client";
+ import { Wallet } from "xrpl";
++import { stripUserinfo, YcashRpc } from "@x402/ycash";
++import {
++  ExactYcashScheme as ExactYcashClientScheme,
++  LocalKeySigner as YcashLocalKeySigner,
++  RpcUtxoSource as YcashRpcUtxoSource,
++} from "@x402/ycash/exact/client";
+ import { ExactAvmScheme as ExactAvmClientScheme } from "@x402/avm/exact/client";
+ import { toClientAvmSigner } from "@x402/avm";
+ import { ExactConcordiumScheme } from "@x402/concordium/exact/client";
+@@ -381,6 +387,21 @@ export async function createE2EClient(): Promise<E2EClientContext> {
+     });
+   }
+ 
++  if (process.env.CLIENT_YCASH_WIF && process.env.YCASH_RPC_URL) {
++    // The payer signs with its own key; a node it trusts lists the key's coins (watch-only
++    // import with rescan on first use) and reports the tip and branch id.
++    const { url, user, password } = stripUserinfo(process.env.YCASH_RPC_URL);
++    const rpc = new YcashRpc({ url, user: user ?? "", password: password ?? "" });
++    const signer = new YcashLocalKeySigner(
++      process.env.CLIENT_YCASH_WIF,
++      new YcashRpcUtxoSource(rpc, { importAddress: "rescan" }),
++    );
++    schemes.push({
++      network: networkCaip2Pattern("ycash"),
++      client: new ExactYcashClientScheme(signer),
++    });
++  }
++
+   // E2e exercises custom assets and amounts above the default $1 USD cap.
+   const client = x402Client.fromConfig({
+     schemes,
+diff --git a/e2e/clients/typescript/package.json b/e2e/clients/typescript/package.json
+index e1d0adb9..e7cfd095 100644
+--- a/e2e/clients/typescript/package.json
++++ b/e2e/clients/typescript/package.json
+@@ -38,6 +38,7 @@
+     "@x402/svm": "workspace:*",
+     "@x402/tvm": "workspace:*",
+     "@x402/xrpl": "workspace:*",
++    "@x402/ycash": "workspace:*",
+     "axios": "1.12.2",
+     "viem": "^2.48.11",
+     "ws": "^8.18.0",
+diff --git a/e2e/config/mechanisms_ycash.json b/e2e/config/mechanisms_ycash.json
+new file mode 100644
+index 00000000..040a0b3e
+--- /dev/null
++++ b/e2e/config/mechanisms_ycash.json
+@@ -0,0 +1,60 @@
++{
++  "env": {
++    "SERVER_YCASH_ADDRESS": {
++      "required": true,
++      "roles": [
++        "server"
++      ]
++    },
++    "SERVER_YCASH_AMOUNT": {
++      "required": false,
++      "roles": [
++        "server"
++      ]
++    },
++    "YCASH_ZERO_CONF_CAP_ZAT": {
++      "required": false,
++      "roles": [
++        "server"
++      ]
++    },
++    "CLIENT_YCASH_WIF": {
++      "required": true,
++      "roles": [
++        "client"
++      ]
++    },
++    "YCASH_CONFIRMATIONS_MIN": {
++      "required": false,
++      "roles": [
++        "facilitator"
++      ]
++    }
++  },
++  "testnet": {
++    "name": "Ycash Testnet (or a regtest devnet: YCASH_NETWORK=ycash:regtest, see README)",
++    "caip2": "ycash:testnet",
++    "rpcUrlRequired": true
++  },
++  "mainnet": {
++    "name": "Ycash Mainnet",
++    "caip2": "ycash:mainnet",
++    "rpcUrlRequired": true
++  },
++  "routes": {
++    "/exact/ycash": {
++      "scheme": "exact",
++      "sdks": [
++        "typescript"
++      ],
++      "price": {
++        "amount": "100000",
++        "amountEnv": "SERVER_YCASH_AMOUNT",
++        "asset": "YEC"
++      },
++      "extensions": [
++        "bazaar"
++      ]
++    }
++  }
++}
+diff --git a/e2e/facilitators/typescript/index.ts b/e2e/facilitators/typescript/index.ts
+index 67c34ad4..49bc5f85 100644
+--- a/e2e/facilitators/typescript/index.ts
++++ b/e2e/facilitators/typescript/index.ts
+@@ -100,6 +100,8 @@ import {
+ } from "@x402/near";
+ import { ExactNearScheme as ExactNearFacilitatorScheme } from "@x402/near/exact/facilitator";
+ import { ExactXrplScheme as ExactXrplFacilitatorScheme } from "@x402/xrpl/exact/facilitator";
++import { stripUserinfo, YcashRpc } from "@x402/ycash";
++import { ExactYcashFacilitatorScheme } from "@x402/ycash/exact/facilitator";
+ import * as KeetaNet from "@keetanetwork/keetanet-client";
+ import crypto from "crypto";
+ import dotenv from "dotenv";
+@@ -138,6 +140,8 @@ const CASPER_NETWORK = resolveNetworkCaip2("casper");
+ const NEAR_RPC_URL = process.env.NEAR_RPC_URL;
+ const XRPL_NETWORK = resolveNetworkCaip2("xrpl");
+ const XRPL_RPC_URL = process.env.XRPL_RPC_URL;
++const YCASH_NETWORK = resolveNetworkCaip2("ycash");
++const YCASH_RPC_URL = process.env.YCASH_RPC_URL;
+ const CCD_NETWORK = resolveNetworkCaip2("ccd");
+ const CARDANO_NETWORK = resolveNetworkCaip2("cardano");
+ const CARDANO_RPC_URL = process.env.CARDANO_RPC_URL;
+@@ -203,6 +207,7 @@ const hasFacilitatorCredential = [
+   process.env.FACILITATOR_CCD_PRIVATE_KEY &&
+     process.env.FACILITATOR_CCD_ADDRESS,
+   process.env.XRPL_NETWORK, // keyless XRPL facilitator
++  process.env.YCASH_RPC_URL, // keyless Ycash facilitator: relays payer-signed transactions
+   process.env.BLOCKFROST_PROJECT_ID, // Cardano runs provider-only without a mnemonic
+ ].some(Boolean);
+ 
+@@ -757,6 +762,19 @@ if (process.env.XRPL_NETWORK) {
+     `XRPL facilitator enabled on ${XRPL_NETWORK} (payer-signed; no facilitator signer)`,
+   );
+ }
++if (YCASH_RPC_URL) {
++  // Keyless: the payer signs a complete transaction and funds its fee; the facilitator verifies
++  // it against its own node and relays it. YCASH_CONFIRMATIONS_MIN=0 refuses mempool settlement.
++  const { url, user, password } = stripUserinfo(YCASH_RPC_URL);
++  const minimum = Number(process.env.YCASH_CONFIRMATIONS_MIN ?? "-1");
++  facilitator.register(
++    YCASH_NETWORK as Network,
++    new ExactYcashFacilitatorScheme(new YcashRpc({ url, user: user ?? "", password: password ?? "" }), {
++      confirmations: { minimum, maximum: 20 },
++    }),
++  );
++  console.info(`Ycash facilitator enabled on ${YCASH_NETWORK} (payer-signed; no facilitator signer)`);
++}
+ if (concordiumSigner) {
+   facilitator.register(
+     CCD_NETWORK as Network,
+@@ -1129,6 +1147,7 @@ app.get("/health", (req, res) => {
+     xrplNetwork: process.env.XRPL_NETWORK ? XRPL_NETWORK : "(not configured)",
+     ccdNetwork: concordiumSigner ? CCD_NETWORK : "(not configured)",
+     cardanoNetwork: cardanoSigner ? CARDANO_NETWORK : "(not configured)",
++    ycashNetwork: YCASH_RPC_URL ? YCASH_NETWORK : "(not configured)",
+     facilitator: "typescript",
+     version: "2.0.0",
+     extensions: [BAZAAR.key],
+diff --git a/e2e/facilitators/typescript/package.json b/e2e/facilitators/typescript/package.json
+index 3737767d..9dbdb040 100644
+--- a/e2e/facilitators/typescript/package.json
++++ b/e2e/facilitators/typescript/package.json
+@@ -32,6 +32,7 @@
+     "@x402/svm": "workspace:*",
+     "@x402/tvm": "workspace:*",
+     "@x402/xrpl": "workspace:*",
++    "@x402/ycash": "workspace:*",
+     "dotenv": "^16.4.5",
+     "express": "^4.19.2",
+     "viem": "^2.48.11"
+diff --git a/e2e/servers/typescript/config.ts b/e2e/servers/typescript/config.ts
+index 351ea0cb..12eba733 100644
+--- a/e2e/servers/typescript/config.ts
++++ b/e2e/servers/typescript/config.ts
+@@ -18,6 +18,7 @@ import { ExactXrplScheme } from "@x402/xrpl/exact/server";
+ import { ExactConcordiumScheme } from "@x402/concordium/exact/server";
+ import { ExactCardanoScheme } from "@x402/cardano/exact/server";
+ import { toMasumiSellerSigner } from "@x402/cardano";
++import { ExactYcashServerScheme } from "@x402/ycash/exact/server";
+ import { bazaarResourceServerExtension, declareDiscoveryExtension } from "@x402/extensions/bazaar";
+ import {
+   declareEip2612GasSponsoringExtension,
+@@ -158,6 +159,13 @@ async function registerFamilySchemes(
+     case "xrpl":
+       server.register(pattern, new ExactXrplScheme());
+       return;
++    case "ycash": {
++      // Payments up to the cap settle at the mempool (confirmation policy -1); the default,
++      // 0.01 YEC, covers the catalog price so a regtest run needs no block per payment.
++      const zeroConfCapZat = BigInt(process.env.YCASH_ZERO_CONF_CAP_ZAT ?? "1000000");
++      server.register(pattern, new ExactYcashServerScheme({ zeroConfCapZat }));
++      return;
++    }
+   }
+ }
+ 
+diff --git a/e2e/servers/typescript/http/next/package.json b/e2e/servers/typescript/http/next/package.json
+index b04adb1b..0a414424 100644
+--- a/e2e/servers/typescript/http/next/package.json
++++ b/e2e/servers/typescript/http/next/package.json
+@@ -25,6 +25,7 @@
+     "@x402/svm": "workspace:*",
+     "@x402/tvm": "workspace:*",
+     "@x402/xrpl": "workspace:*",
++    "@x402/ycash": "workspace:*",
+     "next": "^16.2.6",
+     "react": "^19.2.6",
+     "react-dom": "^19.2.6",
+diff --git a/e2e/servers/typescript/package.json b/e2e/servers/typescript/package.json
+index 6eebb523..ebe7f1cd 100644
+--- a/e2e/servers/typescript/package.json
++++ b/e2e/servers/typescript/package.json
+@@ -29,6 +29,7 @@
+     "@x402/svm": "workspace:*",
+     "@x402/tvm": "workspace:*",
+     "@x402/xrpl": "workspace:*",
++    "@x402/ycash": "workspace:*",
+     "express": "^4.18.2",
+     "fastify": "^5.3.3",
+     "hono": "^4.7.1",
+diff --git a/examples/typescript/clients/advanced/.env-local b/examples/typescript/clients/advanced/.env-local
+index d1d093a9..9b3760cc 100644
+--- a/examples/typescript/clients/advanced/.env-local
++++ b/examples/typescript/clients/advanced/.env-local
+@@ -14,5 +14,8 @@ HEDERA_PRIVATE_KEY=
+ HEDERA_NETWORK=
+ XRPL_SEED=
+ XRPL_NETWORK=
++YCASH_WIF=
++YCASH_NETWORK=ycash:testnet
++YCASH_RPC_URL=
+ RESOURCE_SERVER_URL=http://localhost:4021
+ ENDPOINT_PATH=/weather
+diff --git a/examples/typescript/clients/advanced/README.md b/examples/typescript/clients/advanced/README.md
+index 748fa7cf..fcd39526 100644
+--- a/examples/typescript/clients/advanced/README.md
++++ b/examples/typescript/clients/advanced/README.md
+@@ -55,6 +55,9 @@ and fill required environment variables:
+ - `KEETA_MNEMONIC` - Keeta mnemonic for Keeta payments
+ - `XRPL_SEED` - XRPL family seed (starts with `s`) for XRPL payments (optional; `all-networks`)
+ - `XRPL_NETWORK` - XRPL network CAIP-2 (optional, defaults to `xrpl:1` XRPL Testnet)
++- `YCASH_WIF` - Ycash transparent key (WIF) for YEC payments (optional; `all-networks`)
++- `YCASH_NETWORK` - Ycash network (optional, defaults to `ycash:testnet`; `ycash:regtest` for a local regtest node)
++- `YCASH_RPC_URL` - `ycashd` JSON-RPC URL with credentials, e.g. `http://user:pass@127.0.0.1:8232/` (required when `YCASH_WIF` is set; the node lists the key's coins)
+ - `XRPL_WS_URL` - Custom XRPL WebSocket endpoint (optional, defaults to the public endpoint for `XRPL_NETWORK`)
+ 
+ 2. Install and build all packages from the typescript examples root:
+diff --git a/examples/typescript/clients/advanced/all_networks.ts b/examples/typescript/clients/advanced/all_networks.ts
+index 85ff66f2..0a06e25b 100644
+--- a/examples/typescript/clients/advanced/all_networks.ts
++++ b/examples/typescript/clients/advanced/all_networks.ts
+@@ -5,7 +5,7 @@
+  * optional chain configuration via environment variables.
+  *
+  * New chain support should be added here in alphabetic order by network prefix
+- * (e.g., "algorand" before "aptos" before "ccd" before "eip155" before "hedera" before "near" before "solana" before "stellar" before "tvm" before "xrpl").
++ * (e.g., "algorand" before "aptos" before "ccd" before "eip155" before "hedera" before "near" before "solana" before "stellar" before "tvm" before "xrpl" before "ycash").
+  */
+ 
+ import {
+@@ -47,6 +47,13 @@ import { keyPairFromSeed, type KeyPair } from "@ton/crypto";
+ import { createXrplWalletSigner, XRPL_TESTNET } from "@x402/xrpl";
+ import { ExactXrplScheme } from "@x402/xrpl/exact/client";
+ import { Wallet } from "xrpl";
++import { stripUserinfo, YcashRpc, type YcashNetwork } from "@x402/ycash";
++import {
++  ExactYcashScheme,
++  LocalKeySigner,
++  RpcUtxoSource,
++  yecSpendControl,
++} from "@x402/ycash/exact/client";
+ import { buildBasicAccountSigner, AccountAddress } from "@concordium/web-sdk";
+ import { base58 } from "@scure/base";
+ import { createKeyPairSignerFromBytes } from "@solana/kit";
+@@ -85,6 +92,9 @@ const tvmProvider = (process.env.TVM_PROVIDER || TVM_PROVIDER_TONCENTER).toLower
+ const xrplSeed = process.env.XRPL_SEED as string | undefined;
+ const xrplNetwork = (process.env.XRPL_NETWORK || XRPL_TESTNET) as Network;
+ const xrplWsUrl = process.env.XRPL_WS_URL as string | undefined;
++const ycashWif = process.env.YCASH_WIF as string | undefined;
++const ycashNetwork = (process.env.YCASH_NETWORK || "ycash:testnet") as YcashNetwork;
++const ycashRpcUrl = process.env.YCASH_RPC_URL as string | undefined;
+ const baseURL = process.env.RESOURCE_SERVER_URL || "http://localhost:4021";
+ const endpointPath = process.env.ENDPOINT_PATH || "/weather";
+ const url = `${baseURL}${endpointPath}`;
+@@ -128,10 +138,11 @@ async function main(): Promise<void> {
+     !stellarPrivateKey &&
+     !(hederaAccountId && hederaPrivateKey) &&
+     !tvmPrivateKey &&
+-    !xrplSeed
++    !xrplSeed &&
++    !ycashWif
+   ) {
+     console.error(
+-      "❌ At least one of AVM_PRIVATE_KEY, APTOS_PRIVATE_KEY, CARDANO_MNEMONIC, CASPER_PRIVATE_KEY, CCD_PRIVATE_KEY + CCD_ADDRESS, EVM_PRIVATE_KEY, KEETA_MNEMONIC, NEAR_ACCOUNT_ID + NEAR_PRIVATE_KEY, SVM_PRIVATE_KEY, STELLAR_PRIVATE_KEY, HEDERA_ACCOUNT_ID + HEDERA_PRIVATE_KEY, TVM_PRIVATE_KEY, or XRPL_SEED is required",
++      "❌ At least one of AVM_PRIVATE_KEY, APTOS_PRIVATE_KEY, CARDANO_MNEMONIC, CASPER_PRIVATE_KEY, CCD_PRIVATE_KEY + CCD_ADDRESS, EVM_PRIVATE_KEY, KEETA_MNEMONIC, NEAR_ACCOUNT_ID + NEAR_PRIVATE_KEY, SVM_PRIVATE_KEY, STELLAR_PRIVATE_KEY, HEDERA_ACCOUNT_ID + HEDERA_PRIVATE_KEY, TVM_PRIVATE_KEY, XRPL_SEED, or YCASH_WIF is required",
+     );
+     process.exit(1);
+   }
+@@ -140,6 +151,8 @@ async function main(): Promise<void> {
+     allowedAssets: [
+       { network: "xrpl:*", asset: "XRP" },
+       { network: "ccd:*", asset: "CCD" },
++      // YEC is not USD-pegged: cap each payment in zatoshis (0.01 YEC)
++      yecSpendControl(ycashNetwork, 1_000_000n),
+     ],
+   });
+ 
+@@ -284,6 +297,23 @@ async function main(): Promise<void> {
+     console.log(`Initialized XRPL account: ${xrplSigner.classicAddress} on ${xrplNetwork}`);
+   }
+ 
++  // Register Ycash scheme if a key is provided: the payer signs with its own key, and a node
++  // it trusts (YCASH_RPC_URL, credentials as userinfo) lists the key's coins and the tip
++  if (ycashWif) {
++    if (!ycashRpcUrl) {
++      console.error("❌ YCASH_WIF requires YCASH_RPC_URL");
++      process.exit(1);
++    }
++    const { url, user, password } = stripUserinfo(ycashRpcUrl);
++    const rpc = new YcashRpc({ url, user: user ?? "", password: password ?? "" });
++    const signer = new LocalKeySigner(
++      ycashWif,
++      new RpcUtxoSource(rpc, { importAddress: "rescan" }),
++    );
++    client.register("ycash:*", new ExactYcashScheme(signer));
++    console.log(`Initialized Ycash signer on ${ycashNetwork}`);
++  }
++
+   // Wrap fetch with payment handling
+   const fetchWithPayment = wrapFetchWithPayment(fetch, client);
+ 
+diff --git a/examples/typescript/clients/advanced/package.json b/examples/typescript/clients/advanced/package.json
+index b674ab8d..f923bb6d 100644
+--- a/examples/typescript/clients/advanced/package.json
++++ b/examples/typescript/clients/advanced/package.json
+@@ -32,6 +32,7 @@
+     "@x402/hedera": "workspace:*",
+     "@x402/tvm": "workspace:*",
+     "@x402/xrpl": "workspace:*",
++    "@x402/ycash": "workspace:*",
+     "@x402/fetch": "workspace:*",
+     "@ton/crypto": "^3.3.0",
+     "@concordium/web-sdk": "^12.0.0",
+diff --git a/examples/typescript/facilitator/advanced/.env-local b/examples/typescript/facilitator/advanced/.env-local
+index c9ac8113..d0e06049 100644
+--- a/examples/typescript/facilitator/advanced/.env-local
++++ b/examples/typescript/facilitator/advanced/.env-local
+@@ -24,3 +24,5 @@ TONAPI_API_KEY=
+ TONAPI_BASE_URL=
+ XRPL_NETWORK=
+ XRPL_WS_URL=
++YCASH_NETWORK=ycash:testnet
++YCASH_RPC_URL=
+diff --git a/examples/typescript/facilitator/advanced/README.md b/examples/typescript/facilitator/advanced/README.md
+index d3ef47be..d30f9391 100644
+--- a/examples/typescript/facilitator/advanced/README.md
++++ b/examples/typescript/facilitator/advanced/README.md
+@@ -13,6 +13,7 @@ Express.js facilitator service demonstrating advanced x402 patterns including al
+ - Keeta mnemonic (seed phrase) and wallet with Testnet KTA for transaction fees (create wallet on [Keeta Testnet Wallet](https://wallet.test.keeta.com/) and fund via [Keeta Testnet Faucet](https://faucet.test.keeta.com/))
+ - Cardano: a Blockfrost project id (preprod/preview) for chain queries and submission, plus an optional facilitator mnemonic — the facilitator only broadcasts the client's signed transaction, so it needs **no funds**
+ - No XRPL account or key: the XRPL facilitator is keyless (the payer signs and pays transaction fees); set `XRPL_NETWORK` to enable it (optional)
++- No Ycash account or key: the Ycash facilitator is keyless (the payer signs and pays the fee); set `YCASH_RPC_URL` to a `ycashd` it trusts to enable it (optional)
+ - Casper private key with testnet CSPR for transaction fees (fund via the [CSPR.live testnet faucet](https://testnet.cspr.live/tools/faucet))
+ 
+ ## Setup
+@@ -46,6 +47,8 @@ and fill required environment variables:
+ - `BLOCKFROST_PROJECT_ID` / `BLOCKFROST_PREPROD_URL` - Blockfrost project id + endpoint (required for Cardano chain queries and submission)
+ - `XRPL_NETWORK` - XRPL network CAIP-2 (e.g., `xrpl:1` for XRPL Testnet); set to enable the keyless XRPL scheme (optional; `all-networks`)
+ - `XRPL_WS_URL` - Custom XRPL WebSocket endpoint (optional, defaults to the public endpoint for `XRPL_NETWORK`)
++- `YCASH_RPC_URL` - `ycashd` JSON-RPC URL with credentials, e.g. `http://user:pass@127.0.0.1:8232/`; set to enable the keyless Ycash scheme (optional; `all-networks`)
++- `YCASH_NETWORK` - Ycash network (optional, defaults to `ycash:testnet`; must match the node's chain)
+ - `PORT` - Server port (optional, defaults to 4022)
+ 
+ 2. Install and build all packages from the typescript examples root:
+diff --git a/examples/typescript/facilitator/advanced/all_networks.ts b/examples/typescript/facilitator/advanced/all_networks.ts
+index 797a652c..2a204267 100644
+--- a/examples/typescript/facilitator/advanced/all_networks.ts
++++ b/examples/typescript/facilitator/advanced/all_networks.ts
+@@ -5,7 +5,7 @@
+  * optional chain configuration via environment variables.
+  *
+  * New chain support should be added here in alphabetic order by network prefix
+- * (e.g., "algorand" before "aptos" before "ccd" before "eip155" before "hedera" before "near" before "solana" before "stellar" before "tvm" before "xrpl").
++ * (e.g., "algorand" before "aptos" before "ccd" before "eip155" before "hedera" before "near" before "solana" before "stellar" before "tvm" before "xrpl" before "ycash").
+  */
+ 
+ import {
+@@ -79,6 +79,8 @@ import {
+ import { ExactTvmScheme } from "@x402/tvm/exact/facilitator";
+ import { XRPL_TESTNET } from "@x402/xrpl";
+ import { ExactXrplScheme } from "@x402/xrpl/exact/facilitator";
++import { stripUserinfo, YcashRpc } from "@x402/ycash";
++import { ExactYcashFacilitatorScheme } from "@x402/ycash/exact/facilitator";
+ import dotenv from "dotenv";
+ import express from "express";
+ import { createWalletClient, http, publicActions } from "viem";
+@@ -126,6 +128,9 @@ const hederaPrivateKey = process.env.HEDERA_PRIVATE_KEY;
+ // XRPL is keyless for the facilitator: the payer signs and pays fees.
+ const xrplNetwork = process.env.XRPL_NETWORK || XRPL_TESTNET;
+ const xrplWsUrl = process.env.XRPL_WS_URL as string | undefined;
++// Ycash is keyless for the facilitator too: it verifies the payer-signed transaction against its
++// own node (YCASH_RPC_URL, credentials as userinfo) and relays it.
++const ycashRpcUrl = process.env.YCASH_RPC_URL as string | undefined;
+ 
+ // Validate at least one private key is provided
+ if (
+@@ -140,10 +145,11 @@ if (
+   !svmPrivateKey &&
+   !stellarPrivateKey &&
+   !tvmPrivateKey &&
+-  !(hederaAccountId && hederaPrivateKey)
++  !(hederaAccountId && hederaPrivateKey) &&
++  !ycashRpcUrl
+ ) {
+   console.error(
+-    "❌ At least one of AVM_PRIVATE_KEY, APTOS_PRIVATE_KEY, CARDANO_MNEMONIC, CASPER_PRIVATE_KEY, CCD_FACILITATOR_PRIVATE_KEY + CCD_FACILITATOR_ADDRESS, EVM_PRIVATE_KEY, KEETA_MNEMONIC, NEAR_RELAYER_ACCOUNT_ID + NEAR_RELAYER_PRIVATE_KEY, SVM_PRIVATE_KEY, STELLAR_PRIVATE_KEY, TVM_PRIVATE_KEY, or HEDERA_ACCOUNT_ID + HEDERA_PRIVATE_KEY is required",
++    "❌ At least one of AVM_PRIVATE_KEY, APTOS_PRIVATE_KEY, CARDANO_MNEMONIC, CASPER_PRIVATE_KEY, CCD_FACILITATOR_PRIVATE_KEY + CCD_FACILITATOR_ADDRESS, EVM_PRIVATE_KEY, KEETA_MNEMONIC, NEAR_RELAYER_ACCOUNT_ID + NEAR_RELAYER_PRIVATE_KEY, SVM_PRIVATE_KEY, STELLAR_PRIVATE_KEY, TVM_PRIVATE_KEY, HEDERA_ACCOUNT_ID + HEDERA_PRIVATE_KEY, or YCASH_RPC_URL is required",
+   );
+   process.exit(1);
+ }
+@@ -163,6 +169,7 @@ const SVM_NETWORK = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"; // Solana Devnet
+ const STELLAR_NETWORK = "stellar:testnet"; // Stellar Testnet
+ const TVM_NETWORK = (process.env.TVM_NETWORK || "tvm:-3") as Network; // TON Testnet
+ const XRPL_NETWORK = xrplNetwork as Network; // XRPL Testnet
++const YCASH_NETWORK = (process.env.YCASH_NETWORK || "ycash:testnet") as Network; // Ycash Testnet (or ycash:regtest)
+ 
+ // Initialize the x402 Facilitator
+ const facilitator = new x402Facilitator()
+@@ -457,6 +464,20 @@ if (process.env.XRPL_NETWORK) {
+   );
+ }
+ 
++// Register Ycash scheme if YCASH_RPC_URL is set. The facilitator holds no keys and pays no fee.
++if (ycashRpcUrl) {
++  const { url, user, password } = stripUserinfo(ycashRpcUrl);
++  facilitator.register(
++    YCASH_NETWORK,
++    new ExactYcashFacilitatorScheme(
++      new YcashRpc({ url, user: user ?? "", password: password ?? "" }),
++    ),
++  );
++  console.info(
++    `Ycash facilitator enabled on ${YCASH_NETWORK} (payer-signed transactions; no facilitator signer)`,
++  );
++}
++
+ // Initialize Express app
+ const app = express();
+ app.use(express.json());
+diff --git a/examples/typescript/facilitator/advanced/package.json b/examples/typescript/facilitator/advanced/package.json
+index 9cea8586..7863db64 100644
+--- a/examples/typescript/facilitator/advanced/package.json
++++ b/examples/typescript/facilitator/advanced/package.json
+@@ -34,6 +34,7 @@
+     "@x402/stellar": "workspace:*",
+     "@x402/tvm": "workspace:*",
+     "@x402/xrpl": "workspace:*",
++    "@x402/ycash": "workspace:*",
+     "@concordium/web-sdk": "^12.0.0",
+     "dotenv": "^16.4.5",
+     "express": "^4.19.2",
+diff --git a/examples/typescript/servers/advanced/.env-local b/examples/typescript/servers/advanced/.env-local
+index 65336a9b..d085d7eb 100644
+--- a/examples/typescript/servers/advanced/.env-local
++++ b/examples/typescript/servers/advanced/.env-local
+@@ -7,4 +7,6 @@ SVM_ADDRESS=
+ STELLAR_ADDRESS=
+ HEDERA_ACCOUNT_ID=
+ XRPL_ADDRESS=
++YCASH_ADDRESS=
++YCASH_NETWORK=ycash:testnet
+ FACILITATOR_URL=
+\ No newline at end of file
+diff --git a/examples/typescript/servers/advanced/README.md b/examples/typescript/servers/advanced/README.md
+index 48b1be9d..7bf12562 100644
+--- a/examples/typescript/servers/advanced/README.md
++++ b/examples/typescript/servers/advanced/README.md
+@@ -87,6 +87,9 @@ and fill required environment variables:
+ - `XRPL_ADDRESS` - XRPL classic address (starts with `r`) to receive payments (optional for `all-networks`)
+ - `XRPL_NETWORK` - XRPL network CAIP-2 (optional, defaults to `xrpl:1` XRPL Testnet)
+ - `XRPL_AMOUNT` - XRPL price in drops (optional, defaults to `1000` = 0.001 XRP)
++- `YCASH_ADDRESS` - Ycash transparent address (`s1...` on mainnet, `sm...` on testnet and regtest) to receive YEC (optional for `all-networks`)
++- `YCASH_NETWORK` - Ycash network (optional, defaults to `ycash:testnet`)
++- `YCASH_AMOUNT` - YEC price in zatoshis (optional, defaults to `100000` = 0.001 YEC)
+ 
+ > **Hedera Testnet:** Get testnet HBAR from the [Hedera Faucet](https://portal.hedera.com/faucet).
+ >
+diff --git a/examples/typescript/servers/advanced/all_networks.ts b/examples/typescript/servers/advanced/all_networks.ts
+index 8e4ce8a5..d6b3ae9f 100644
+--- a/examples/typescript/servers/advanced/all_networks.ts
++++ b/examples/typescript/servers/advanced/all_networks.ts
+@@ -5,7 +5,7 @@
+  * optional chain configuration via environment variables.
+  *
+  * New chain support should be added here in alphabetic order by network prefix
+- * (e.g., "algorand" before "aptos" before "ccd" before "eip155" before "hedera" before "near" before "solana" before "stellar" before "tvm" before "xrpl").
++ * (e.g., "algorand" before "aptos" before "ccd" before "eip155" before "hedera" before "near" before "solana" before "stellar" before "tvm" before "xrpl" before "ycash").
+  */
+ 
+ import { config } from "dotenv";
+@@ -29,6 +29,7 @@ import { ExactStellarScheme } from "@x402/stellar/exact/server";
+ import { ExactTvmScheme } from "@x402/tvm/exact/server";
+ import { XRPL_TESTNET } from "@x402/xrpl";
+ import { ExactXrplScheme } from "@x402/xrpl/exact/server";
++import { ExactYcashServerScheme } from "@x402/ycash/exact/server";
+ import { HTTPFacilitatorClient } from "@x402/core/server";
+ import type { Network, Price } from "@x402/core/types";
+ 
+@@ -48,6 +49,7 @@ const svmAddress = process.env.SVM_ADDRESS as string | undefined;
+ const stellarAddress = process.env.STELLAR_ADDRESS as string | undefined;
+ const tvmAddress = process.env.TVM_ADDRESS as string | undefined;
+ const xrplAddress = process.env.XRPL_ADDRESS as string | undefined;
++const ycashAddress = process.env.YCASH_ADDRESS as string | undefined;
+ 
+ // Validate at least one address is provided
+ if (
+@@ -63,10 +65,11 @@ if (
+   !stellarAddress &&
+   !hederaAddress &&
+   !tvmAddress &&
+-  !xrplAddress
++  !xrplAddress &&
++  !ycashAddress
+ ) {
+   console.error(
+-    "❌ At least one of AVM_ADDRESS, APTOS_ADDRESS, CARDANO_ADDRESS, CASPER_ADDRESS, CCD_ADDRESS, EVM_ADDRESS, KEETA_ADDRESS, NEAR_ADDRESS, SVM_ADDRESS, STELLAR_ADDRESS, HEDERA_ACCOUNT_ID, TVM_ADDRESS, or XRPL_ADDRESS is required",
++    "❌ At least one of AVM_ADDRESS, APTOS_ADDRESS, CARDANO_ADDRESS, CASPER_ADDRESS, CCD_ADDRESS, EVM_ADDRESS, KEETA_ADDRESS, NEAR_ADDRESS, SVM_ADDRESS, STELLAR_ADDRESS, HEDERA_ACCOUNT_ID, TVM_ADDRESS, XRPL_ADDRESS, or YCASH_ADDRESS is required",
+   );
+   process.exit(1);
+ }
+@@ -98,6 +101,7 @@ const HEDERA_HBAR_ASSET = "0.0.0" as const; // Native HBAR asset id
+ const HEDERA_WEATHER_PRICE_TINYBARS = "100000" as const; // 0.001 HBAR
+ const TVM_NETWORK = (process.env.TVM_NETWORK || "tvm:-3") as Network; // TON Testnet
+ const XRPL_NETWORK = (process.env.XRPL_NETWORK || XRPL_TESTNET) as Network; // XRPL Testnet
++const YCASH_NETWORK = (process.env.YCASH_NETWORK || "ycash:testnet") as Network; // Ycash Testnet (or ycash:regtest)
+ const CCD_WEATHER_PRICE_MICRO_CCD = "1000" as const; // 0.001 CCD
+ 
+ // Build accepts array dynamically based on configured addresses
+@@ -237,6 +241,17 @@ if (xrplAddress) {
+     payTo: xrplAddress,
+   });
+ }
++if (ycashAddress) {
++  accepts.push({
++    scheme: "exact",
++    price: {
++      amount: process.env.YCASH_AMOUNT || "100000", // zatoshis: 0.001 YEC
++      asset: "YEC",
++    },
++    network: YCASH_NETWORK,
++    payTo: ycashAddress,
++  });
++}
+ 
+ // Create facilitator client
+ const facilitatorClient = new HTTPFacilitatorClient({ url: facilitatorUrl });
+@@ -282,6 +297,10 @@ if (tvmAddress) {
+ if (xrplAddress) {
+   server.register(XRPL_NETWORK, new ExactXrplScheme());
+ }
++if (ycashAddress) {
++  // Up to 0.01 YEC settles at the mempool (confirmation policy -1); larger payments wait a block.
++  server.register(YCASH_NETWORK, new ExactYcashServerScheme({ zeroConfCapZat: 1_000_000n }));
++}
+ 
+ // Create Express app
+ const app = express();
+@@ -358,6 +377,9 @@ app.listen(port, () => {
+   if (xrplAddress) {
+     console.log(`   XRPL: ${xrplAddress} on ${XRPL_NETWORK}`);
+   }
++  if (ycashAddress) {
++    console.log(`   Ycash: ${ycashAddress} on ${YCASH_NETWORK}`);
++  }
+   console.log(`   Facilitator: ${facilitatorUrl}`);
+   console.log();
+ });
+diff --git a/examples/typescript/servers/advanced/package.json b/examples/typescript/servers/advanced/package.json
+index 790711db..cfe88711 100644
+--- a/examples/typescript/servers/advanced/package.json
++++ b/examples/typescript/servers/advanced/package.json
+@@ -35,6 +35,7 @@
+     "@x402/stellar": "workspace:*",
+     "@x402/tvm": "workspace:*",
+     "@x402/xrpl": "workspace:*",
++    "@x402/ycash": "workspace:*",
+     "@x402/extensions": "workspace:*"
+   },
+   "devDependencies": {
+diff --git a/typescript/.changeset/config.json b/typescript/.changeset/config.json
+index 60707342..55e4e21d 100644
+--- a/typescript/.changeset/config.json
++++ b/typescript/.changeset/config.json
+@@ -20,6 +20,7 @@
+       "@x402/near",
+       "@x402/concordium",
+       "@x402/xrpl",
++      "@x402/ycash",
+       "@x402/express",
+       "@x402/fastify",
+       "@x402/hono",
+diff --git a/typescript/.changeset/ycash-mechanism.md b/typescript/.changeset/ycash-mechanism.md
+new file mode 100644
+index 00000000..0c48ad74
+--- /dev/null
++++ b/typescript/.changeset/ycash-mechanism.md
+@@ -0,0 +1,5 @@
++---
++"@x402/ycash": minor
++---
++
++Added `@x402/ycash`, the Ycash mechanism: `exact` (payer-signed transparent YEC, YED at $1.00 or more, and client-submitted shielded YEC with `sapling-proof`) and `batch-settlement` (YEC and YED payment channels over a one-way CLTV P2SH output).
+diff --git a/typescript/README.md b/typescript/README.md
+index c01b0bf7..8d5c989c 100644
+--- a/typescript/README.md
++++ b/typescript/README.md
+@@ -31,4 +31,5 @@ This folder contains Typescript packages to help developers implement the x402 p
+ | **Casper** - [`@x402/casper`](./packages/mechanisms/casper) | Casper implementation of x402 using CEP-18 / CEP-3009 exact transfers with EIP-712 authorization. | [![npm version](https://img.shields.io/npm/v/%40x402%2Fcasper.svg)](https://www.npmjs.com/package/@x402/casper) |
+ | **Stellar** - [`@x402/stellar`](./packages/mechanisms/stellar) | Stellar implementation of x402 using Soroban token transfers. | [![npm version](https://img.shields.io/npm/v/%40x402%2Fstellar.svg)](https://www.npmjs.com/package/@x402/stellar) |
+ | **Solana** - [`@x402/svm`](./packages/mechanisms/svm) | SVM implementation of x402 using SPL token transfers. | [![npm version](https://img.shields.io/npm/v/%40x402%2Fsvm.svg)](https://www.npmjs.com/package/@x402/svm) |
++| **Ycash** - [`@x402/ycash`](./packages/mechanisms/ycash) | Ycash implementation of x402: `exact` with payer-signed transparent YEC and YED transfers, and `batch-settlement` over one-way CLTV payment channels. | [![npm version](https://img.shields.io/npm/v/%40x402%2Fycash.svg)](https://www.npmjs.com/package/@x402/ycash) |
+ 
+diff --git a/typescript/package.json b/typescript/package.json
+index 3cdaf1ea..2ef90b0f 100644
+--- a/typescript/package.json
++++ b/typescript/package.json
+@@ -17,7 +17,7 @@
+     "lint:check": "turbo run lint:check",
+     "format:check": "turbo run format:check",
+     "test": "turbo run test",
+-    "test:integration": "pnpm --filter @x402/core --filter @x402/evm --filter @x402/svm --filter @x402/avm --filter @x402/aptos --filter @x402/casper --filter @x402/hedera --filter @x402/keeta --filter @x402/near --filter @x402/stellar --filter @x402/xrpl --filter @x402/cardano test:integration",
++    "test:integration": "pnpm --filter @x402/core --filter @x402/evm --filter @x402/svm --filter @x402/avm --filter @x402/aptos --filter @x402/casper --filter @x402/hedera --filter @x402/keeta --filter @x402/near --filter @x402/stellar --filter @x402/xrpl --filter @x402/cardano --filter @x402/ycash test:integration",
+     "test:all": "pnpm test && pnpm test:integration",
+     "verify:exports": "node scripts/verify-package-exports.mjs"
+   },

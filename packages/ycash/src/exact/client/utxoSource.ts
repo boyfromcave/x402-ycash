@@ -1,7 +1,7 @@
 // Where a local-key client finds its coins and its tip. The RPC source reads a node the agent
 // trusts; a light-client source (lightwalletd GetAddressUtxos + GetAddressTokens) fits the same
 // interface.
-import { RPC_METHOD_NOT_FOUND, RpcError, yecToZat, type YcashRpc } from "../../node/index.js";
+import { RPC_METHOD_NOT_FOUND, RPC_WALLET_ERROR, RpcError, yecToZat, type YcashRpc } from "../../node/index.js";
 import { heldOutpoints, InMemoryCoinReservationStore, type CoinReservationStore } from "../../store/coinReservations.js";
 import { addressToScript, hexToBytes, type OutPoint } from "../../tx/index.js";
 import type { TokenCoin } from "../../yed/index.js";
@@ -124,7 +124,13 @@ export class RpcUtxoSource implements UtxoSource {
   private async ensureImported(address: string): Promise<void> {
     const mode = this.options.importAddress;
     if (!mode || this.imported.has(address)) return;
-    await this.rpc.call("importaddress", [address, "", mode === "rescan"]);
+    try {
+      await this.rpc.call("importaddress", [address, "", mode === "rescan"]);
+    } catch (e) {
+      // The wallet holds the key itself, so listunspent already sees the coins (RPC_WALLET_ERROR,
+      // ycash-dd/src/wallet/rpcdump.cpp:230, ycash6/src/wallet/rpcdump.cpp:189).
+      if (!(e instanceof RpcError && e.code === RPC_WALLET_ERROR && /already contains the private key/.test(e.message))) throw e;
+    }
     this.imported.add(address);
   }
 
