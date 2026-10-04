@@ -899,10 +899,11 @@ the facilitator trial-decrypts the outputs of one transaction per payment, not t
 ### Pending
 
 Rule 5's primitives (trial decryption, note commitment, ZIP 212 derivations) are implemented in
-TypeScript and checked against the Zcash test vectors (`vectors/sapling/`); an end-to-end run
-against wallet-built notes on both node lines (`vectors/sapling/generate.ts`) and against
-transactions the Rust light client builds is pending that client. Until it runs, a facilitator
-SHOULD NOT list `sapling` in `/supported` on mainnet.
+TypeScript and checked against the Zcash test vectors and against notes built by the wallets of
+both node lines (`vectors/sapling/`). End to end, on regtest networks of both node lines, the
+facilitator has verified and settled node-built transactions and transactions built by a Sapling
+light client (2026-10-04). Until the method has also run on mainnet, a facilitator SHOULD NOT list
+`sapling` in `/supported` on mainnet.
 
 ## Transaction Fees
 
