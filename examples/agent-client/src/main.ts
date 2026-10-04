@@ -12,7 +12,7 @@ let paid = 0;
 for (let i = 1; i <= config.requests; i++) {
   const r = await agent.call();
   if (r.settlement?.success) paid++;
-  console.log(JSON.stringify({ i, status: r.status, ms: r.ms, transaction: r.settlement?.transaction, settlement: r.settlement, body: r.body }));
+  console.log(JSON.stringify({ i, status: r.status, ms: r.ms, transaction: r.settlement?.transaction, settlement: r.settlement, ...(r.paymentError ? { paymentError: r.paymentError } : {}), body: r.body }));
   if (r.status >= 400) process.exitCode = 1;
 }
 console.log(JSON.stringify({ msg: "done", requests: config.requests, paid }));

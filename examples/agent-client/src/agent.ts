@@ -1,6 +1,7 @@
 // The agent: @x402/fetch wraps fetch so a 402 is answered by building a payment with the registered
 // scheme and retrying with PAYMENT-SIGNATURE; the merchant's PAYMENT-RESPONSE carries the settlement.
 import { decodePaymentResponseHeader, wrapFetchWithPayment, x402Client } from "@x402/fetch";
+import { decodePaymentRequiredHeader } from "@x402/core/http";
 import type { SettleResponse } from "@x402/core/types";
 import { exact } from "x402-ycash-mechanism";
 import type { AgentConfig } from "./config.js";
@@ -11,6 +12,8 @@ export interface PaidResult {
   body: unknown;
   /** The decoded PAYMENT-RESPONSE header, when the merchant settled a payment. */
   settlement?: SettleResponse;
+  /** On a 402 after paying: the reason the merchant gave (PAYMENT-REQUIRED `error`). */
+  paymentError?: string;
   ms: number;
 }
 
@@ -45,6 +48,13 @@ export function createAgent(config: AgentConfig, register: RegisterClientSchemes
       const t0 = performance.now();
       const res = await paidFetch(url, { method: "GET" });
       const header = res.headers.get("PAYMENT-RESPONSE");
+      const required = res.status === 402 ? res.headers.get("PAYMENT-REQUIRED") : null;
+      let paymentError: string | undefined;
+      try {
+        paymentError = required ? decodePaymentRequiredHeader(required).error : undefined;
+      } catch {
+        // an undecodable header: leave the reason out
+      }
       const text = await res.text();
       let body: unknown = text;
       try {
@@ -56,6 +66,7 @@ export function createAgent(config: AgentConfig, register: RegisterClientSchemes
         status: res.status,
         body,
         ...(header ? { settlement: decodePaymentResponseHeader(header) } : {}),
+        ...(paymentError ? { paymentError } : {}),
         ms: Math.round(performance.now() - t0),
       };
     },

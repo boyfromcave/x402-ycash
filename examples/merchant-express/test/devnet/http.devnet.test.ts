@@ -13,7 +13,7 @@ import { promisify } from "node:util";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { tx, verifyReceipt, type DecodedTransaction, type ZSendManyOptions } from "x402-ycash-mechanism";
 import { DEVNET_JSON, describeDevnet, devnet, record, waitFor, type Devnet } from "../../../../packages/ycash/test/devnet/harness.js";
-import { REPO, runAgent, runCli, startService, type Proc } from "./procs.js";
+import { REPO, runAgent, runCli, startCli, startService, type Proc } from "./procs.js";
 
 const NETWORK = "ycash:regtest";
 const WORKSPACE = process.env.YELLOWBACK_WORKSPACE ?? resolve(REPO, "../..");
@@ -216,6 +216,33 @@ describeDevnet("HTTP end to end: facilitator, merchant and agent as processes", 
     record(d.line, "HTTP channel session", { requests: 100, sessionMs, msPerRequest: Math.round(sessionMs / 100), channelId, fundingTxid, closeTxid, chainTxs: 2, received: (100n * PRICE.channel).toString() });
   });
 
+  it("the CLI: pay an exact route, then channel open (funding mined by the stock node), status and close", async () => {
+    const store = join(dir, "cli-channels.json");
+    const node = ["--devnet", devnetJson, "--node", "2", "--channels", store];
+    const paid = await runCli(["pay", `${shop.url}/exact/ticker`, "--count", "2", ...node]);
+    expect(paid.code, paid.stderr).toBe(0);
+    expect(paid.lines.map((l) => (l.settlement as { success?: boolean } | undefined)?.success)).toEqual([true, true]);
+    await d.syncMempools();
+
+    const url = `${shop.url}/channel/search?q=cli`;
+    const open = startCli(["channel", "open", url, "--deposit", "20000", ...node]);
+    procs.push(open);
+    await mineWhenSeen(open, 3); // the two ticker payments and the funding transaction
+    expect(await open.exited, open.stderr.join("")).toBe(0);
+    const ch = open.lines.find((l) => l.msg === "channel") as { channelId: string; status: string; charged: string; deposit: string };
+    expect(ch).toMatchObject({ status: "open", charged: PRICE.channel.toString(), deposit: "20000" });
+    const more = await runCli(["pay", url, "--count", "4", ...node]);
+    expect(more.code, more.stderr).toBe(0);
+    const before = await receivedBy(payTo);
+    const close = await runCli(["channel", "close", url, ch.channelId, ...node]);
+    expect(close.code, close.stderr + JSON.stringify(close.lines)).toBe(0);
+    await d.mine(1, d.stock);
+    await waitFor(async () => (await receivedBy(payTo)) - before === 5n * PRICE.channel, { timeoutMs: 20_000, what: "the CLI channel's close" });
+    const status = await runCli(["channel", "status", ...node]);
+    expect(status.lines).toEqual([expect.objectContaining({ channelId: ch.channelId, status: "closed", unspent: false })]);
+    record(d.line, "HTTP CLI", { channelId: ch.channelId, closeTxid: close.lines.at(-1)?.transaction, charged: (5n * PRICE.channel).toString() });
+  });
+
   it("a shielded P1 payment (z→z) with the merchant's signed receipt", async () => {
     const [r] = await agent(`${shop.url}/shielded/report`, { AGENT_DEVNET_NODE: "2", AGENT_SIGNER: "node", AGENT_SHIELDED_FROM: zFrom });
     expect(r).toMatchObject({ status: 200, body: { paidWith: "exact/sapling-proof" }, settlement: { success: true, extra: { status: "mempool", confirmations: -1, receivedZat: PRICE.shielded.toString() } } });
@@ -248,6 +275,9 @@ describeDevnet("HTTP end to end: facilitator, merchant and agent as processes", 
     try {
       const [fast] = await agent(`${shop2.url}/exact/ticker`, { AGENT_DEVNET_NODE: "0", AGENT_WIF: wif });
       expect(fast).toMatchObject({ status: 200, settlement: { success: true, extra: { status: "mempool" } } });
+      // The agent's coin source (node 0) must see the first payment's spend before it picks coins
+      // again, or it re-selects a coin that node 1's mempool already spends (rule 6).
+      await d.syncMempools();
       let mined: string | undefined;
       const [slow] = await agent(`${shop2.url}/exact/quote`, { AGENT_DEVNET_NODE: "0", AGENT_WIF: wif }, async (p) => {
         mined = await mineWhenSeen(p, 2); // the ticker payment is still in the mempool

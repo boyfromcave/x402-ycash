@@ -80,9 +80,14 @@ export function runAgent(env: Record<string, string>): Proc {
   return start("agent", PACKAGES.agent, ["src/main.ts"], env);
 }
 
+/** Starts `x402-ycash <args>`, for a caller that acts while it runs (mines its funding). */
+export function startCli(args: string[], env: Record<string, string> = {}): Proc {
+  return start("cli", PACKAGES.cli, ["src/main.ts", ...args], env);
+}
+
 /** Runs `x402-ycash <args>`; resolves with exit code and output. */
 export async function runCli(args: string[], env: Record<string, string> = {}): Promise<{ code: number; lines: Record<string, unknown>[]; stderr: string }> {
-  const p = start("cli", PACKAGES.cli, ["src/main.ts", ...args], env);
+  const p = startCli(args, env);
   const code = await p.exited;
   return { code, lines: p.lines, stderr: p.stderr.join("") };
 }
