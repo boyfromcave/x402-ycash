@@ -17,6 +17,7 @@ from x402.schemas import PaymentPayload, PaymentRequirements, SettleResponse, Ve
 from ..constants import ASSET_YEC, YCASH_NETWORKS
 from ..exact.policy import json_equal
 from ..node import yec_to_zat
+from ..node.errors import RPC_INVALID_ADDRESS_OR_KEY, RpcError
 from ..store import RETAIN_FOREVER, SettlementStore, consumption_key
 from .constants import (
     ASSET_TRANSFER_METHOD_SAPLING_PROOF,
@@ -206,7 +207,15 @@ class ShieldedExactFacilitator:
             return _Refused(ERR_TXID_MALFORMED, "payload.txid is not 64 lowercase hex characters")
 
         # 4. Notes of this txid at payTo, mempool included (minconf 0).
-        notes = [n for n in await self._rpc.z_list_received_by_address(req.pay_to, 0) if n.get("txid") == txid]
+        # A viewing-key-only wallet refuses (-5) an offline-issued address until it has decrypted a
+        # note to it (ycash-dd/src/wallet/rpcwallet.cpp:3514-3515, ycash6 :4278-4279): no note yet.
+        try:
+            received = await self._rpc.z_list_received_by_address(req.pay_to, 0)
+        except RpcError as e:
+            if e.transport or e.code != RPC_INVALID_ADDRESS_OR_KEY:
+                raise
+            received = []
+        notes = [n for n in received if n.get("txid") == txid]
         if not notes:
             return _Refused(ERR_NOT_RECEIVED, f"the merchant wallet has no note of {txid} at payTo (yet)", txid)
 
