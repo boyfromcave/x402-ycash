@@ -6,7 +6,7 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { x402Facilitator } from "@x402/core/facilitator";
 import { decodePaymentRequiredHeader } from "@x402/core/http";
-import { tx, type NodeCapabilities } from "x402-ycash-mechanism";
+import { tx, YcashRpc, type NodeCapabilities } from "x402-ycash-mechanism";
 import { createApp as createFacilitatorApp, silentLogger } from "x402-ycash-facilitator";
 import { createAgent } from "../../agent-client/src/agent.js";
 import { createMerchant, PAID_ROUTES } from "../src/app.js";
@@ -66,10 +66,10 @@ describe("agent → merchant → facilitator", () => {
 
   it("pays automatically: verify, handler, settle, PAYMENT-RESPONSE", async () => {
     const agent = createAgent(
-      { url: `${shop.url}/exact/quote`, requests: 1, network: NETWORK, signer: { kind: "wif", privKey: new Uint8Array(32).fill(1), address: "smAgent" }, maxPaymentZat: "1000000" },
+      { url: `${shop.url}/exact/quote`, requests: 1, network: NETWORK, node: new YcashRpc({ url: "http://127.0.0.1:1", user: "u", password: "p" }), signer: { kind: "node" }, maxPaymentZat: "1000000" },
       (client, deps) => {
         client.register(deps.network, clientScheme);
-        return ["exact"];
+        return { names: ["exact"] };
       },
     );
     const before = facScheme.calls.length;
@@ -82,10 +82,10 @@ describe("agent → merchant → facilitator", () => {
 
   it("refuses to pay above the agent's cap", async () => {
     const agent = createAgent(
-      { url: `${shop.url}/exact/quote`, requests: 1, network: NETWORK, signer: { kind: "wif", privKey: new Uint8Array(32).fill(1), address: "smAgent" }, maxPaymentZat: "1000" },
+      { url: `${shop.url}/exact/quote`, requests: 1, network: NETWORK, node: new YcashRpc({ url: "http://127.0.0.1:1", user: "u", password: "p" }), signer: { kind: "node" }, maxPaymentZat: "1000" },
       (client, deps) => {
         client.register(deps.network, new FakeExactClient());
-        return ["exact"];
+        return { names: ["exact"] };
       },
     );
     await expect(agent.call()).rejects.toThrow(/spendControls|maxAmountPerPayment|exceeds/i);

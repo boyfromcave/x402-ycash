@@ -2,8 +2,9 @@
 // scheme and retrying with PAYMENT-SIGNATURE; the merchant's PAYMENT-RESPONSE carries the settlement.
 import { decodePaymentResponseHeader, wrapFetchWithPayment, x402Client } from "@x402/fetch";
 import type { SettleResponse } from "@x402/core/types";
+import { exact } from "x402-ycash-mechanism";
 import type { AgentConfig } from "./config.js";
-import { registerClientSchemes, type RegisterClientSchemes } from "./schemes.js";
+import { registerClientSchemes, type ClientSchemes, type RegisterClientSchemes } from "./schemes.js";
 
 export interface PaidResult {
   status: number;
@@ -15,20 +16,30 @@ export interface PaidResult {
 
 export interface Agent {
   schemes: string[];
+  /** The channel client (status, close, refund), when batch-settlement is registered. */
+  batch?: ClientSchemes["batch"];
   fetch: typeof fetch;
   call(url?: string): Promise<PaidResult>;
 }
 
 export function createAgent(config: AgentConfig, register: RegisterClientSchemes = registerClientSchemes, baseFetch: typeof fetch = fetch): Agent {
   const client = new x402Client();
-  // YEC is not one of the SDK's default assets, so it must be allowed explicitly, with a cap in
-  // zatoshis; without this the client refuses every Ycash 402.
-  client.setSpendControls({ allowedAssets: [{ network: config.network, asset: "YEC", maxAmountPerPayment: config.maxPaymentZat }] });
-  const schemes = register(client, { network: config.network, signer: config.signer });
+  // YEC is not USD-pegged, so it is not a default asset: it is allowed explicitly with a cap in
+  // zatoshis (YED, a dollar, falls under core's USD cap). Without this the client refuses every YEC 402.
+  client.setSpendControls({ allowedAssets: [exact.yecSpendControl(config.network, BigInt(config.maxPaymentZat))] });
+  const registered = register(client, {
+    network: config.network,
+    node: config.node,
+    signer: config.signer,
+    ...(config.shieldedFrom ? { shieldedFrom: config.shieldedFrom } : {}),
+    ...(config.channelStorePath ? { channelStorePath: config.channelStorePath } : {}),
+    ...(config.channelDepositZat !== undefined ? { channelDepositZat: config.channelDepositZat } : {}),
+  });
   const paidFetch = wrapFetchWithPayment(baseFetch, client);
 
   return {
-    schemes,
+    schemes: registered.names,
+    ...(registered.batch ? { batch: registered.batch } : {}),
     fetch: paidFetch,
     async call(url = config.url): Promise<PaidResult> {
       const t0 = performance.now();
