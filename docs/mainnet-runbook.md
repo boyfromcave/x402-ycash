@@ -119,14 +119,21 @@ export MERCHANT_MAX_DEPOSIT_CENTS=200               # at most $2 per YED channel
 The merchant re-reads the facilitator's `/supported` every minute, so the YED routes come on when
 the facilitator's node starts listing YED.
 
-Shielded (X4a), self-hosted: see [Keys](#4-keys) for the two-node layout, then
+Shielded (X4a), self-hosted, in the recommended viewing-key layout (set up as in
+[Keys](#4-keys), "Shielded layout"): the merchant needs no node for this route.
 
 ```bash
 export MERCHANT_ISSUED_REGISTRY=/var/lib/x402/issued.json      # the same file the facilitator reads
-export MERCHANT_SAPLING_BASE_ADDRESS=ys1...                    # the dedicated x402 revenue key
+export MERCHANT_SAPLING_ISSUER=offline
+export MERCHANT_SAPLING_VIEWING_KEY=$(cat /etc/x402/merchant.zxviews)   # zxviews1…, z_exportviewingkey
+export MERCHANT_SAPLING_INDEX_FILE=/var/lib/x402/sapling-index.json     # back it up with the registry
+# MERCHANT_SAPLING_START_INDEX defaults to 1099511627776 (2^40)
 export PRICE_SHIELDED_ZAT=100000 MERCHANT_SHIELDED_CONFIRMATIONS=1
-# and on the facilitator: X402_RECEIPT_KEY, X402_ISSUED_REGISTRY, X402_SAPLING_BASE_ADDRESS (the same ys1…)
 ```
+
+The alternative, issuing from a spending-key wallet with `z_getnewdiversifiedaddress`, is
+`MERCHANT_SAPLING_BASE_ADDRESS=ys1…` plus `MERCHANT_RPC_*` pointing at that wallet (no
+`MERCHANT_SAPLING_ISSUER`).
 
 Check: `curl -si http://127.0.0.1:4021/exact/ticker` answers `402` with a `PAYMENT-REQUIRED` header;
 `curl -s http://127.0.0.1:4021/` lists the routes that are on.
@@ -140,30 +147,76 @@ Check: `curl -si http://127.0.0.1:4021/exact/ticker` answers `402` with a `PAYME
 | **Merchant channel key S** (`MERCHANT_CHANNEL_KEY`) | a file on the merchant's host, `chmod 600`, backed up | in a node wallet; in logs (the merchant prints `(set)`) | the merchant cannot close; open channels end by the client's refund after the refund height, and the merchant loses the charged amounts |
 | **Receipt key** (`X402_RECEIPT_KEY`, `sapling-proof` only) | the self-hosted facilitator's env, `chmod 600` | shared with anyone; reused as a payment key | receipts already issued stay verifiable with the old public key; generate a new key and publish its public key |
 | **Merchant Sapling spending key** (the dedicated x402 revenue key) | a wallet **off the request path**, swept to treasury | on the settlement node | the revenue at that key; keep its seed backed up like any wallet |
-| **Merchant viewing key** (`zxviews…`) | the settlement node only (`z_importviewingkey <key> "no"`) | handed to a hosted facilitator or a customer (it reveals all revenue at the key) | rotate the revenue key |
+| **Merchant viewing key** (`zxviews…`) | the settlement node (`z_importviewingkey <key> "no"`) and the merchant's and facilitator's env (`MERCHANT_SAPLING_VIEWING_KEY`, `X402_SAPLING_VIEWING_KEY`; never logged), `chmod 600` | handed to a hosted facilitator or a customer (it reveals all revenue at the key) | rotate the revenue key |
+| **Offline issuer index file** (`MERCHANT_SAPLING_INDEX_FILE`) | the merchant's host, backed up with the registry | shared between two keys (it refuses) | safe while the registry survives; with both lost, an address could be reissued |
 | `X402_API_KEY` | facilitator and merchant env | in a URL or logs | rotate both sides |
 
 Generate secrets on the host that uses them: `openssl rand -hex 32 > /etc/x402/merchant-channel.key`.
 
 **Shielded layout (the X4-M verdict, `docs/x4m-measurements.md`).** One dedicated Sapling key for
-x402 revenue, separate from treasury. The facilitator settles on a node that holds **only the
-viewing key**: on both lines a viewing-key wallet sees payments to any diversified address of the
-key, in the mempool and after a block, and refuses to spend them (X4-M (b), (f)).
+x402 revenue, separate from treasury. Three places hold three different things:
 
-1. On the spending-key wallet: `z_getnewaddress sapling` → `B`, then `z_exportviewingkey B`.
-2. On the settlement node: `z_importviewingkey <zxview…> "no"`. Set the facilitator's
-   `X402_SAPLING_BASE_ADDRESS=B` (without it, a facilitator asked to issue would create a new key on
-   that node).
-3. Per-request addresses: today the merchant issues them with `z_getnewdiversifiedaddress B`, which
-   needs the **spending** key on both lines (X4-M (b)). So the issuing wallet holds the dedicated
-   revenue key and nothing else, and you sweep it often. Issuing from the viewing key alone works
-   offline (X4-M (f), index range from 2^40) but is not in the SDK yet.
-4. Prove a payment with the `offer-and-receipt` JWS the settlement returns. Never hand over the
+| Host | Holds | Does |
+|---|---|---|
+| **Node A**, the revenue wallet | the spending key, nothing else | offline; started only to sweep |
+| **Node B**, the settlement node | the viewing key only | the facilitator's node: sees every payment, mempool included |
+| **The merchant server** | the viewing key (as config) and its index file | issues per-request addresses offline; no node, no spending key |
+
+On both lines a viewing-key wallet sees payments to any diversified address of the key, in the
+mempool and after a block, and cannot spend them; neither can it issue addresses through RPC, which
+is why the merchant derives them itself (X4-M (b), (f)).
+
+1. **Node A** (any wallet node, ideally a fresh one; it can stay offline afterwards):
+   `z_getnewaddress sapling` → `B`, then `z_exportviewingkey B` → `zxviews1…`. Back up node A's
+   wallet. Stop node A.
+2. **Node B**: `z_importviewingkey <zxviews1…> "no"` (no rescan: the key is new; use `"yes"` and a
+   start height for an older key). It answers `{type: "sapling", address: B}`. Check that it holds
+   the viewing key and not the spending key: `z_validateaddress B` shows `ismine: false`, and
+   `z_getnewdiversifiedaddress B` is refused.
+3. **Facilitator on node B** (`X402_RPC_*` → node B), with the receipt key and the registry as above
+   and:
+
+   ```bash
+   export X402_SAPLING_ISSUER=offline
+   export X402_SAPLING_VIEWING_KEY=$(cat /etc/x402/merchant.zxviews)
+   ```
+
+   At startup it checks that node B holds the key (`z_listreceivedbyaddress B 0` answers) and logs a
+   warning if node B also holds the spending key. Do not set `X402_SAPLING_BASE_ADDRESS` with it.
+4. **Merchant**: the `MERCHANT_SAPLING_*` variables in [section 3](#3-merchant). It derives each
+   address from the viewing key at the next valid diversifier index from `2^40`, a range neither
+   wallet's `z_getnewdiversifiedaddress` walk reaches (v4.5.0 walks from 1, 6.21.0 from the base
+   address's index). It writes the next index to `MERCHANT_SAPLING_INDEX_FILE` before handing an
+   address out; the file is bound to the key and refuses another one. Losing the file is safe as
+   long as the registry survives (an address the registry already issued is never reused); losing
+   both risks reissuing an address, so back them up together.
+5. **Sweep** from node A: start it, let it catch up (it finds the notes at the offline addresses
+   while connecting the blocks, with no rescan, since the key predates them), `z_sendmany` from each
+   address that holds notes (`z_listreceivedbyaddress <address> 1`) to treasury, stop it again.
+6. Prove a payment with the `offer-and-receipt` JWS the settlement returns. Never hand over the
    viewing key to prove one payment.
 
-The facilitator half of this layout is verified at the node level by X4-M. Run it once end to end
-on a regtest devnet (merchant issuing on node 0, facilitator on a viewing-key-only node) before
-mainnet.
+Node B knows an offline-issued address only once it has decrypted a note to it: before that, both
+lines answer `z_listreceivedbyaddress` for it with `-5` ("does not belong to this node"), which the
+facilitator reads as "not received yet" and keeps waiting (up to `X402_SAPLING_NOTE_WAIT_MS`).
+
+**Rehearsed on both lines (2026-10-03).** `examples/merchant-express/test/devnet/viewkey.http.devnet.test.ts`
+runs this layout on a regtest devnet: node A (an extra ycashd, stopped after export), node B the
+stock node 1, the merchant with no node, the facilitator on node B; an agent paid P1 (z→z) and P0
+(t→z); both receipts verified; each address was the next valid index from 2^40; node A came back,
+found both notes and swept them (2,960,000 zat), and node B's own attempt to spend was refused.
+
+| | v4.5.0 (seed 291) | 6.21.0 (seed 293) |
+|---|---|---|
+| P1 / P0 paid and settled, agent wall time | 4.3 s / 1.5 s | 3.3 s / 2.2 s |
+| node B's refusal to spend | "zaddr spending key not found" | "no payment source found for address" |
+| node A's sweep fee | the node's default | the node's default (6.21.0 refuses a fee above 4× its ZIP-317 conventional fee) |
+
+```bash
+scripts/devnet.sh up dd 291   # or: up 6 293
+X402_DEVNET_JSON=…/dd-291/devnet.json npx vitest run --dir test/devnet viewkey \
+  --testTimeout=600000 --hookTimeout=600000      # in examples/merchant-express
+```
 
 ## 5. Agent and the smoke test
 
@@ -205,7 +258,11 @@ Order of runs:
    with `X402_DEVNET_JSON`. A slow miner (`generate 1` every 15 s on node 1) stands in for mainnet
    blocks. This was done on the 4.5.0 line on 2026-10-03: exact settled at the mempool in 117 ms,
    a five-request channel opened, closed and was mined, the merchant received 15,000 zat and the
-   remainder (995,000 zat) returned to the agent's address.
+   remainder (995,000 zat) returned to the agent's address. On the 6.21.0 line (seed 293, the
+   same day; facilitator and merchant on node 0, the payer node 2's wallet), `--dry-run` and the
+   real run passed unchanged: exact settled at the mempool in 226 ms, the channel closed with
+   5,000 zat charged, the merchant received 15,000 zat at two confirmations, and 995,000 zat
+   returned to the agent. No difference between the lines needed a fix.
 2. **Mainnet YEC on the 4.5.0 node**: `--dry-run`, then the real run.
 3. **Mainnet YEC on the 6.21.0 node**: the same, with the facilitator and merchant pointed at it.
 4. **YED** after height 3,075,000: restart the facilitator's node with
@@ -215,8 +272,8 @@ Order of runs:
    `x402-ycash channel open <merchant>/yed/stream --asset YED --deposit 200`, a few
    `pay --asset YED`, then `channel close … --asset YED`. smoke.sh covers YEC only.
 5. **X4a** (shielded): one `sapling-proof` payment from a Sapling address of the agent's wallet
-   (`X402_SHIELDED_FROM=ys1…`, `x402-ycash pay <merchant>/shielded/report`), in the two-node layout
-   of [Keys](#4-keys).
+   (`X402_SHIELDED_FROM=ys1…`, `x402-ycash pay <merchant>/shielded/report`), in the viewing-key
+   layout of [Keys](#4-keys), then one sweep from node A.
 
 ## 6. What to check
 

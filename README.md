@@ -145,6 +145,7 @@ be used, with the same keys in camelCase; the environment wins over the file.
 | `X402_CHANNEL_STORE` | `x402-ycash-channels.json` | batch-settlement's record of the channels it relayed (audit). |
 | `X402_RECEIPT_KEY` + `X402_ISSUED_REGISTRY` | (unset) | Both turn on `sapling-proof`: the receipt key (64 hex, a secp256k1 private key; never logged) and the issued-address registry file shared with the merchant. |
 | `X402_SAPLING_BASE_ADDRESS`, `X402_SAPLING_NOTE_WAIT_MS` | (wallet's), `10000` | The merchant's base Sapling address; how long settle waits for a just-sent note to reach the wallet. |
+| `X402_SAPLING_ISSUER`, `X402_SAPLING_VIEWING_KEY`, `X402_SAPLING_START_INDEX`, `X402_SAPLING_INDEX_FILE` | `node-wallet`, (unset), `1099511627776` (2^40), `x402-ycash-sapling-index.json` | `offline` is the viewing-key setup: addresses are issued from the merchant's `zxview…` key, and the node holds only that key (checked at startup). See docs/mainnet-runbook.md, "Shielded layout". |
 | `X402_API_KEY` | (unset) | When set, `/verify` and `/settle` require `Authorization: Bearer <key>`. |
 | `X402_BODY_LIMIT`, `X402_LOG_LEVEL`, `X402_SHUTDOWN_TIMEOUT_MS`, `X402_NODE_WAIT_MS`, `X402_RPC_TIMEOUT_MS` | `512kb`, `info`, `30000`, `60000`, `30000` | |
 
@@ -158,9 +159,10 @@ be used, with the same keys in camelCase; the environment wins over the file.
   node (`MERCHANT_DEVNET_JSON` or `MERCHANT_RPC_*`) and `MERCHANT_CHANNEL_KEY` (the server key S,
   64 hex), with `MERCHANT_MAX_DEPOSIT_ZAT`, `MERCHANT_CHANNEL_STORE`, `MERCHANT_MIN_LOCK_BLOCKS`,
   `MERCHANT_CLOSE_MARGIN_BLOCKS`, `MERCHANT_CHANNEL_CONFIRMATIONS` and `MERCHANT_CHANNEL_IDLE_MS`.
-  The shielded route needs the node's wallet and `MERCHANT_ISSUED_REGISTRY` (the facilitator's
-  `X402_ISSUED_REGISTRY`), with `MERCHANT_SAPLING_BASE_ADDRESS` and
-  `MERCHANT_SHIELDED_CONFIRMATIONS`. A route whose mode is not configured answers 501.
+  The shielded route needs `MERCHANT_ISSUED_REGISTRY` (the facilitator's `X402_ISSUED_REGISTRY`)
+  and `MERCHANT_SHIELDED_CONFIRMATIONS`, plus either the node's wallet (with
+  `MERCHANT_SAPLING_BASE_ADDRESS`) or, with no node at all, `MERCHANT_SAPLING_ISSUER=offline`,
+  `MERCHANT_SAPLING_VIEWING_KEY`, `MERCHANT_SAPLING_START_INDEX` and `MERCHANT_SAPLING_INDEX_FILE`. A route whose mode is not configured answers 501.
 - `examples/agent-client` calls a paid route `REQUESTS` times with `@x402/fetch` and pays each 402
   automatically, capped at `MAX_PAYMENT_ZAT` per payment (YEC is allowed explicitly; it is not a
   USD asset). It reads its node (`AGENT_DEVNET_JSON` or `AGENT_RPC_*`) and signs with a key it
