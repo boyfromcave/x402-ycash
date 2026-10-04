@@ -1,0 +1,111 @@
+# The x402 Foundation contribution
+
+x402 adds a chain in three steps (`CONTRIBUTING.md`, "Adding a New Chain Family" in
+`x402-foundation/x402`): PR 1 is the spec only, PR 2 is a reference implementation in one SDK with
+tests, e2e, examples, a changeset and a publishing workflow, and PR 3 adds other SDKs. This
+repository is where the Ycash bindings are built and proved. The upstream contribution is
+**generated** from it, so it can be refreshed after every change here.
+
+**Status (2026-10-03): staged locally, not published.** No issue, PR or package has been opened or
+pushed. The owner decides when (plan X-9). The staged branches, the upstream checks that pass and
+fail, the drafted PR bodies and the owner's open decisions are in
+`wt/scratch/x402-upstream-prep/PUBLISHING.md` in the Yellowback workspace.
+
+## Where it lives
+
+- **The staged fork:** `wt/scratch/x402-upstream-prep/x402-fork`, a local clone of `x402-foundation/x402`
+  at `751590a2` with no remote. Branch `ycash-spec` holds PR 1 (one commit), and `ycash-binding`
+  holds PR 2 on top of it. The fork stays in scratch and is never committed here.
+- **The generator, here:** `tools/upstream/`.
+
+| File | Role |
+|---|---|
+| `stage.sh` | Copies and transforms this repository into a fork; `--check` then runs the upstream checks |
+| `transform.mjs` | Rewrites the copied TypeScript and specs into upstream's layout and style |
+| `overlay/package/` | The package files upstream needs: `package.json` (`@x402/ycash`, `workspace:~` core, the export map), tsup, eslint, prettier, vitest configs, `README.md` |
+| `overlay/scheme_exact_ycash_section.md` | The Ycash section added to upstream's `scheme_exact.md` |
+| `fork.patch` | Edits outside the package: e2e catalog and registrations, `all_networks` examples, publish workflow, changeset, labeler, README rows |
+
+## What `stage.sh` does
+
+```
+specs/scheme_exact_ycash.md            → specs/schemes/exact/scheme_exact_ycash.md
+specs/scheme_batch_settlement_ycash.md → specs/schemes/batch-settlement/scheme_batch_settlement_ycash.md
+packages/ycash/src                     → typescript/packages/mechanisms/ycash/src   (batch/ → batch-settlement/)
+packages/ycash/test/unit               → …/test/unit             (unit/flow/*.test.ts → test/integrations/)
+packages/ycash/test/devnet             → …/test/integrations/*.devnet.test.ts   (not the x4m measurement)
+vectors/**/*.json                      → …/test/vectors/
+tools/upstream/overlay/package/        → package metadata and configs
+tools/upstream/fork.patch              → git apply (skipped when already applied)
+```
+
+`transform.mjs` makes these rewrites:
+
+- **Imports.** Relative imports lose `.js`, since upstream resolves with `"bundler"`. `batch` becomes
+  `batch-settlement`, the evm and svm directory name.
+- **Paths.** Vector paths and spec paths become the upstream ones.
+- **Comments and test titles.** References to this repository's plan are dropped: sections, phases,
+  decisions and findings (`plan §5.7`, `X4a`, `X-F14`). Node-behaviour ids stay, because they are
+  the specs' Appendix A rows. Node checkouts are named by release: `ycash-dd/src/…` becomes
+  `Ycash 4.5.0 src/…`, and `ycash6/src/…` becomes `Ycash 6.21.0 src/…`. Code and data are not
+  touched.
+- **Specs.** Exact, asserted replacements: relative links, the plan references, and Appendix A's
+  preamble, which now cites the public node trees (`boyfromcave/ycash-dd@795f29b1e` and
+  `boyfromcave/ycash6@e6c49d743`, on `ycashfoundation/ycash` `v4.5.0` and `miodragpop/ycash`).
+
+If a spec sentence it expects has changed, the run fails instead of staging half a rewrite. It
+also prints every line that still names the plan or a node checkout.
+
+Formatting is upstream's. `--check` runs prettier twice (prettier 3.5 moves some trailing comments
+only on its second pass), so this repository keeps its own ~160-column style.
+
+## Refresh after a change here
+
+```bash
+# once: a clone of upstream (never the read-only reference wt/x402-upstream) and its toolchain
+git clone ../x402-upstream ../scratch/x402-upstream-prep/x402-fork          # from wt/x402-<name>
+npm install --prefix ../scratch/x402-upstream-prep/toolchain pnpm@11.1.1    # local pnpm, no global install
+# each time: node 24 (pnpm 11 needs node:sqlite), the local pnpm, then stage and check
+source ~/.nvm/nvm.sh && nvm use 24
+export PATH=$PWD/../scratch/x402-upstream-prep/toolchain/node_modules/.bin:$PATH
+PNPM_INSTALL_FLAGS=--config.minimum-release-age-strict=false tools/upstream/stage.sh --check ../scratch/x402-upstream-prep/x402-fork
+```
+
+`--part spec` stages PR 1 alone and `--part impl` stages PR 2 alone. `stage.sh` refuses to write
+into `wt/x402-upstream`. It never commits, pushes or publishes; committing in the fork and
+everything after it is in `PUBLISHING.md`.
+
+`PNPM_INSTALL_FLAGS`: pnpm 11's strict `minimumReleaseAge` check fails on this machine with
+`ERR_PNPM_MISSING_TIME`, because the registry's abbreviated metadata lacks a `time` field. The
+non-strict flag skips that check only for the packages concerned.
+
+A fresh clone staged with `--check` is identical to the committed `ycash-binding`, except for
+lockfile ordering. That was checked on 2026-10-03.
+
+When `fork.patch` no longer applies (upstream moved): stage onto the older base, rebase the fork
+branch onto the new upstream, resolve the conflicts there, and regenerate the patch:
+`git -C <fork> diff main ycash-binding -- .github e2e examples typescript/.changeset typescript/README.md typescript/package.json > tools/upstream/fork.patch`.
+
+## Upstream checks (2026-10-03)
+
+| Check | Result |
+|---|---|
+| install, build (tsup ESM/CJS/d.ts), `tsc --noEmit`, `format:check`, `verify:exports` | pass |
+| `test` (560 tests; coverage 94% lines, 90% branches, thresholds 80%) | pass |
+| `test:integration` (in-process flows; devnet suites skip without `X402_DEVNET_JSON`) | pass |
+| `test:integration` on a ycash-dd regtest devnet | 57 pass, 1 skipped (the stratum-pool case needs this workspace) |
+| `lint:check` | **fail**: 1,028 errors. Upstream requires JSDoc with `@param` and `@returns` on every function and method (970 errors), plus `member-ordering` (52) and `_`-only unused arguments (6) |
+
+The lint gap blocks PR 2's CI. It belongs here, not in the transform. Enable
+`jsdoc/require-jsdoc`, `jsdoc/require-param`, `jsdoc/require-returns` and
+`@typescript-eslint/member-ordering` in `eslint.config.js`, fix the source, and restage.
+
+## Differences from upstream conventions, kept on purpose
+
+- **Class names.** Ours are `ExactYcashScheme`, `ExactYcashServerScheme`, `ExactYcashFacilitatorScheme`
+  and `BatchYcashScheme`. Cardano names all three of its classes `ExactCardanoScheme`, and EVM uses
+  `BatchSettlementEvmScheme`. The subpath exports follow upstream; renaming the classes is a
+  reviewer's call.
+- **e2e scope.** e2e covers `exact` only. Upstream's `batch-settlement` e2e is a multi-phase
+  orchestration built for EVM and SVM, so channels are covered by the package's integration and
+  devnet suites.
