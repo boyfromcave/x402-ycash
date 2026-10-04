@@ -10,7 +10,7 @@ import { equalBytes, hexToBytes } from "../../tx/bytes.js";
 import { hash160 } from "../../tx/hash.js";
 import { pubkeyFromPriv } from "../../tx/keys.js";
 import { p2pkhHash, p2pkhScript } from "../../tx/script.js";
-import { serializeTxHex } from "../../tx/tx.js";
+import { serializeTxHex, txid as txidOf } from "../../tx/tx.js";
 
 export interface FundingRequest {
   network: YcashNetwork;
@@ -70,6 +70,8 @@ export function localKeyFunder(coins: readonly FundingInput[], privKeys: readonl
 /** Where `utxoSourceFunder` lists the key's coins (exact's RpcUtxoSource fits). */
 export interface FundingCoinSource {
   listCoins(address: string): Promise<{ txid: string; vout: number; value: bigint; scriptPubKey: Uint8Array }[]>;
+  /** As UtxoSource.reserve: holds the funding's coins (it never expires, so 0); false = select again. */
+  reserve?(coins: readonly { txid: string; vout: number }[], spend: { txid: string; expiryHeight: number }): Promise<boolean>;
 }
 
 /**
@@ -82,26 +84,35 @@ export function utxoSourceFunder(privKey: Uint8Array, source: FundingCoinSource,
   const pub = pubkeyFromPriv(privKey, compressed);
   const script = p2pkhScript(hash160(pub));
   const used = new Set<string>();
+  /** One selection; undefined when another spend took one of the picked coins meanwhile. */
+  const fundOnce = async (req: FundingRequest): Promise<string | undefined> => {
+    const address = encodeAddress(req.network, "p2pkh", hash160(pub));
+    const coins = (await source.listCoins(address))
+      .filter((c) => equalBytes(c.scriptPubKey, script) && !used.has(`${c.txid}:${c.vout}`))
+      .sort((a, b) => (a.value > b.value ? -1 : a.value < b.value ? 1 : 0))
+      .map((c) => ({ outpoint: { txid: c.txid, vout: c.vout }, value: c.value, scriptPubKey: c.scriptPubKey }));
+    for (let n = 1; n <= coins.length; n++) {
+      const picked = coins.slice(0, n);
+      let hex: string;
+      try {
+        hex = await localKeyFunder(picked, picked.map(() => privKey), script).fund(req);
+      } catch (e) {
+        if (/cannot pay/.test((e as Error).message)) continue;
+        throw e;
+      }
+      if (source.reserve && !(await source.reserve(picked.map((c) => c.outpoint), { txid: txidOf(hexToBytes(hex)), expiryHeight: 0 }))) return undefined;
+      for (const c of picked) used.add(`${c.outpoint.txid}:${c.outpoint.vout}`);
+      return hex;
+    }
+    throw new Error(`the coins of ${address} cannot fund ${req.value} zatoshis`);
+  };
   return {
     async fund(req) {
-      const address = encodeAddress(req.network, "p2pkh", hash160(pub));
-      const coins = (await source.listCoins(address))
-        .filter((c) => equalBytes(c.scriptPubKey, script) && !used.has(`${c.txid}:${c.vout}`))
-        .sort((a, b) => (a.value > b.value ? -1 : a.value < b.value ? 1 : 0))
-        .map((c) => ({ outpoint: { txid: c.txid, vout: c.vout }, value: c.value, scriptPubKey: c.scriptPubKey }));
-      for (let n = 1; n <= coins.length; n++) {
-        const picked = coins.slice(0, n);
-        let hex: string;
-        try {
-          hex = await localKeyFunder(picked, picked.map(() => privKey), script).fund(req);
-        } catch (e) {
-          if (/cannot pay/.test((e as Error).message)) continue;
-          throw e;
-        }
-        for (const c of picked) used.add(`${c.outpoint.txid}:${c.outpoint.vout}`);
-        return hex;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const hex = await fundOnce(req);
+        if (hex !== undefined) return hex;
       }
-      throw new Error(`the coins of ${address} cannot fund ${req.value} zatoshis`);
+      throw new Error("coins kept being taken by another spend of this key; try again");
     },
   };
 }

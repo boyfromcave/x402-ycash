@@ -50,4 +50,12 @@ describe.each(stores)("%s", (_name, make) => {
     (r!.data as { k: number }).k = 2;
     expect((await s.get("c"))?.data).toEqual({ k: 1 });
   });
+
+  it("lists every record id, and forgets a deleted one", async () => {
+    const s = make();
+    expect(await s.list()).toEqual([]);
+    for (const id of ["a", "a#state", "b"]) await s.open({ channelId: id, cumulative: 0n });
+    await s.delete("b");
+    expect((await s.list()).sort()).toEqual(["a", "a#state"]);
+  });
 });

@@ -53,6 +53,15 @@ export class LocalKeySigner implements YcashClientSigner {
   }
 
   async signPayment(order: PaymentOrder): Promise<SignedPayment> {
+    for (let attempt = 1; ; attempt++) {
+      const signed = await this.signOnce(order);
+      // The source's durable hold: another process may have taken one of these coins meanwhile.
+      if (!this.source.reserve || (await this.source.reserve(signed.inputs, { txid: signed.txid, expiryHeight: order.expiryHeight }))) return signed;
+      if (attempt >= 3) throw new Error("coins kept being taken by another spend of this key; try again");
+    }
+  }
+
+  private async signOnce(order: PaymentOrder): Promise<SignedPayment> {
     const payToScript = addressToScript(order.payTo, order.network);
     for (const [k, expiry] of this.reserved) if (expiry < order.tip) this.reserved.delete(k);
     const coins = (await this.source.listCoins(this.address(order.network))).filter(

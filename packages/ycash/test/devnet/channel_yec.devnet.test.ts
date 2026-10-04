@@ -2,9 +2,13 @@
 // either node line. The server's node is node 1 (stock, no -yellowback): a YEC channel needs no
 // overlay. The client funds from node 0's wallet. Every close is mined by node 1 (OP-1).
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeAll, expect, it } from "vitest";
 import {
-  batch, channel, tx as T, BatchYcashClientScheme, BatchYcashServerScheme, SendRawTransactionError, rpcWalletFunder, zatToYecString,
+  batch, channel, tx as T, BatchYcashClientScheme, BatchYcashServerScheme, FileChannelStore, SendRawTransactionError, rpcWalletFunder, zatToYecString,
+  type ChannelStore,
 } from "../../src/index.js";
 import { describeDevnet, devnet, record, waitFor, type Devnet } from "./harness.js";
 
@@ -32,10 +36,10 @@ describeDevnet("batch-settlement YEC channels on a live devnet", () => {
     await d.mine(1);
   });
 
-  async function party(o: { amount: bigint; deposit: bigint; confirmations?: number }): Promise<Party> {
+  async function party(o: { amount: bigint; deposit: bigint; confirmations?: number; store?: ChannelStore; serverPrivKey?: Uint8Array }): Promise<Party> {
     const closes: Party["closes"] = [];
     const server = new BatchYcashServerScheme({
-      chain: d.stock, serverPrivKey: T.randomPrivKey(), maxDeposit: 100_000_000n, minLockBlocks: MIN_LOCK, closeMarginBlocks: MARGIN,
+      chain: d.stock, serverPrivKey: o.serverPrivKey ?? T.randomPrivKey(), ...(o.store ? { store: o.store } : {}), maxDeposit: 100_000_000n, minLockBlocks: MIN_LOCK, closeMarginBlocks: MARGIN,
       confirmations: o.confirmations ?? 1, onClose: (e) => closes.push(e),
     });
     const payTo = await d.stock.getNewAddress();
@@ -211,5 +215,34 @@ describeDevnet("batch-settlement YEC channels on a live devnet", () => {
     const block = await d.stock.call<{ tx: string[] }>("getblock", [await d.stock.call<string>("getbestblockhash")]);
     expect(block.tx).toContain(fundingTxid);
     expect(await received(p.payTo, 2000n)).toBe(2000n);
+  });
+
+  it("a merchant restart mid-session: the restarted server re-tracks the channel from its store and closes it on idle, before t − margin", async () => {
+    const path = join(mkdtempSync(join(tmpdir(), "x402-restart-")), "channels.json");
+    const serverPrivKey = T.randomPrivKey();
+    const p = await party({ amount: 1000n, deposit: 50_000n, store: new FileChannelStore(path), serverPrivKey });
+    const channelId = await open(p);
+    await request(p);
+    const rec = (await p.client.storage.get(channelId))!;
+    // The first process is gone (never swept); a fresh one starts on the same key and store file.
+    const closes: Party["closes"] = [];
+    const again = new BatchYcashServerScheme({
+      chain: d.stock, serverPrivKey, store: new FileChannelStore(path), maxDeposit: 100_000_000n, minLockBlocks: MIN_LOCK, closeMarginBlocks: MARGIN,
+      idleMs: 2_000, onClose: (e) => closes.push(e),
+    });
+    expect(again.manager.tracked()).toEqual([]);
+    const t0 = Date.now();
+    const w = again.manager.watcher({ pollMs: 500, warn: () => undefined });
+    w.start();
+    try {
+      await waitFor(async () => closes.length > 0, { timeoutMs: 30_000, what: "the restarted server's idle close" });
+    } finally {
+      await w.stop();
+    }
+    expect(closes.map((c) => [c.channelId, c.reason, c.cumulative])).toEqual([[channelId, "idle", 2000n]]);
+    expect(await d.tip()).toBeLessThan(rec.refundHeight - MARGIN);
+    await mineOnStock(closes[0]!.txid!);
+    expect(await received(p.payTo, 2000n)).toBe(2000n);
+    record(d.line, "X2 restart close", { refundHeight: rec.refundHeight, closedAt: await d.tip(), margin: MARGIN, msToClose: Date.now() - t0 });
   });
 });
