@@ -12,16 +12,16 @@ jobs:
       - run: npm run typecheck
       - run: npm test
   light:
-    # The Rust Sapling light client (light/). Its zcash_* crates are path dependencies on the
-    # librustzcash6 fork at ../../../librustzcash6 relative to light/, so clone it alongside.
+    # The Ycash Sapling light client (light/). Its librustzcash6 crates are path dependencies at
+    # ../../librustzcash6 relative to light/, i.e. a sibling of this repo; actions/checkout cannot
+    # write outside the workspace, so a plain git clone puts it there.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: boyfromcave/librustzcash6
-          ref: ec525fae828ff67af0bf5d1995acfe445340ce66
-          path: ../librustzcash6
+      - name: clone librustzcash6 beside the repo
+        run: |
+          git clone --filter=blob:none https://github.com/boyfromcave/librustzcash6.git "$GITHUB_WORKSPACE/../librustzcash6"
+          git -C "$GITHUB_WORKSPACE/../librustzcash6" checkout --quiet ec525fae828ff67af0bf5d1995acfe445340ce66
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - uses: dtolnay/rust-toolchain@stable
         with: { components: "rustfmt, clippy" }
