@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "noEmit": true,
+    "types": ["node"],
+    // Read the workspace packages from source, so the example runs (tsx) and typechecks without a build.
+    "paths": {
+      "x402-ycash-mechanism": ["../../packages/ycash/src/index.ts"],
+      "x402-ycash-facilitator": ["../../packages/facilitator/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*", "test/**/*"]
+}
