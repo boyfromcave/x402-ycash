@@ -414,7 +414,10 @@ Any failure is a rejection with the reason in parentheses.
 1. **Envelope.** `x402Version` is 2. `accepted.scheme`, `network`, `asset`, `amount`, `payTo` and
    `maxTimeoutSeconds` equal the requirements; `extra.assetTransferMethod` resolves to
    `transparent` on both sides; every other server-declared `extra` field has the same value in
-   `accepted` (`invalid_exact_ycash_requirements_mismatch`).
+   `accepted` (`invalid_exact_ycash_requirements_mismatch`). Values are compared as JSON values,
+   types included: `0` is not `false`, and `"1"` is not `1`. A field this spec calls an integer
+   (`confirmations`, `maxTimeoutSeconds`, …) is written without a fraction or exponent, so `1.0` is
+   refused.
 2. **Network.** The facilitator node's `getblockchaininfo.chain` matches `network` (`network_mismatch`).
 3. **Decoding.** `payload.transaction` is lowercase hex that decodes to exactly one v4 Sapling
    transaction with no trailing bytes, no Sapling spends or outputs, no JoinSplits,
