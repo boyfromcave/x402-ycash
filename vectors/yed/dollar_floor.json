@@ -1,0 +1,22 @@
+{
+  "description": "YED channel dollar floor (plan X-7): the TRANSFER split of a voucher at cumulativeCents out of a channel deposit depositCents. serverCents + clientCents = depositCents; clientCents is 0 or >= 100; a client remainder in (0, 100) goes to the server. throws: the voucher is invalid (cumulative < 100 or > deposit, or a deposit outside XFER-1 [100, 10000000]).",
+  "source": "plan docs/plans/x402-agent-payments-plan.md §5.8 (X-7); XFER-1 at ycash-dd/src/yellowback/params.cpp:18-19, state.cpp:447-449",
+  "split": [
+    { "depositCents": 2000, "cumulativeCents": 100, "serverCents": 100, "clientCents": 1900 },
+    { "depositCents": 2000, "cumulativeCents": 101, "serverCents": 101, "clientCents": 1899 },
+    { "depositCents": 2000, "cumulativeCents": 1900, "serverCents": 1900, "clientCents": 100 },
+    { "depositCents": 2000, "cumulativeCents": 1901, "serverCents": 2000, "clientCents": 0 },
+    { "depositCents": 2000, "cumulativeCents": 1999, "serverCents": 2000, "clientCents": 0 },
+    { "depositCents": 2000, "cumulativeCents": 2000, "serverCents": 2000, "clientCents": 0 },
+    { "depositCents": 100, "cumulativeCents": 100, "serverCents": 100, "clientCents": 0 },
+    { "depositCents": 199, "cumulativeCents": 100, "serverCents": 199, "clientCents": 0 },
+    { "depositCents": 200, "cumulativeCents": 100, "serverCents": 100, "clientCents": 100 },
+    { "depositCents": 10000000, "cumulativeCents": 9999900, "serverCents": 9999900, "clientCents": 100 },
+    { "depositCents": 10000000, "cumulativeCents": 9999901, "serverCents": 10000000, "clientCents": 0 },
+    { "depositCents": 2000, "cumulativeCents": 99, "throws": true },
+    { "depositCents": 2000, "cumulativeCents": 0, "throws": true },
+    { "depositCents": 2000, "cumulativeCents": 2001, "throws": true },
+    { "depositCents": 99, "cumulativeCents": 99, "throws": true },
+    { "depositCents": 10000001, "cumulativeCents": 100, "throws": true }
+  ]
+}
