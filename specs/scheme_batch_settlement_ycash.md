@@ -181,8 +181,10 @@ sequenceDiagram
 | `extra.assetTransferMethod` | no | not used: the binding has one method |
 
 `closeFee` is the [fee rule](./scheme_exact_ycash.md#transaction-construction-transparent) applied
-to the close transaction: one input with a ~265-byte scriptSig (3 logical actions) and two
-outputs, plus an `OP_RETURN` for YED, so 1,500 zatoshis on both node lines. A server MAY set more.
+to the close transaction: one input of about 308 bytes (a ~265-byte scriptSig, so 3 logical
+actions) and two outputs, plus an `OP_RETURN` for YED, so 1,500 zatoshis on both node lines. Like
+the `exact` floor it is SDK and server policy, not a node rule (neither line enforces ZIP-317 at
+relay). A server MAY set more.
 The client reserves it inside the channel output, so the client pays both the funding fee and the
 close fee.
 
