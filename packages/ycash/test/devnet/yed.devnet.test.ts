@@ -52,13 +52,14 @@ async function ensureYed(cents: number): Promise<void> {
   const balance = async () => (await d.wallet.call<{ confirmedCents: number }>("yed_getbalance")).confirmedCents;
   if ((await balance()) >= cents) return;
   // Blocks mined by the stock node carry no pool quote; after a run of them the price window is
-  // empty and the mint refuses (mintpol-no-price). Pool blocks carry quotes: mine there until it mints.
+  // empty and the mint refuses (mintpol-no-price), or miner participation drops and minting halts
+  // (mintpol-participation, ACT-4). Pool blocks carry quotes and participate: mine there until it mints.
   await waitFor(async () => {
     try {
       await d.wallet.call("yed_mint", [cents, 48, "", "", false]);
       return true;
     } catch (e) {
-      if (!/no-price|price/i.test((e as Error).message)) throw e;
+      if (!/price|participation/i.test((e as Error).message)) throw e;
       await d.mine(4, d.pool);
       return false;
     }

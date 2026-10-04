@@ -72,7 +72,7 @@ describeDevnet("YED over HTTP: exact at ≥ $1 and YED channels through the merc
         await d.wallet.call("yed_mint", [cents, 48, "", "", false]);
         return true;
       } catch (e) {
-        if (!/no-price|price/i.test((e as Error).message)) throw e;
+        if (!/price|participation/i.test((e as Error).message)) throw e;
         await d.mine(4, d.pool);
         return false;
       }

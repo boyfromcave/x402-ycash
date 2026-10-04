@@ -123,7 +123,7 @@ async def overlay_deposit(chain: Any, voucher_hex: str) -> int:
     node = yed_chain(chain)
     v = await _overlay(lambda: node.yed_validate_raw_transaction(voucher_hex))
     if v.get("unconfirmedInputs"):
-        raise BatchSettlementError(BatchError.FUNDING_DEPTH, "the channel's funding is not in a block (plan X-F14)")
+        raise BatchSettlementError(BatchError.FUNDING_DEPTH, "the channel's funding is not in a block")
     yed_in = v.get("yedIn")
     if not isinstance(yed_in, int) or yed_in < YED_MIN_OUTPUT_CENTS:
         raise BatchSettlementError(BatchError.YED_VERDICT, f"the channel output holds {yed_in} cents of YED")
