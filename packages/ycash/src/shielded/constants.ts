@@ -4,7 +4,7 @@ import { YCASH_MAINNET, YCASH_REGTEST, YCASH_TESTNET, type YcashNetwork } from "
 
 export const SCHEME_EXACT = "exact" as const;
 export const ASSET_TRANSFER_METHOD_SAPLING_PROOF = "sapling-proof" as const;
-/** Reserved (plan X4b) and refused until specified. */
+/** The facilitator-submitted shielded method (spec, "sapling"; plan X4b), implemented in saplingFacilitator.ts. */
 export const ASSET_TRANSFER_METHOD_SAPLING = "sapling" as const;
 export const PAYMENT_FLOW_UPFRONT = "upfront" as const;
 

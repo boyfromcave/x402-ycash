@@ -1,6 +1,7 @@
 // Types shared by the exact client, server and facilitator (specs/scheme_exact_ycash.md).
 import type {
   FacilitatorContext,
+  PaymentFlowName,
   PaymentPayload,
   PaymentRequirements,
   SettleResponse,
@@ -13,10 +14,12 @@ export const SCHEME_EXACT = "exact" as const;
 /** `extra.assetTransferMethod` values. Absent means `transparent`. */
 export const ATM_TRANSPARENT = "transparent" as const;
 export const ATM_SAPLING_PROOF = "sapling-proof" as const;
-/** Reserved, not yet specified (plan X4b): a facilitator MUST reject it. */
-export const ATM_SAPLING_RESERVED = "sapling" as const;
+/** The facilitator-submitted shielded method (plan X4b), implemented in `src/shielded/` beside `sapling-proof`. */
+export const ATM_SAPLING = "sapling" as const;
+/** @deprecated the method is specified; kept for callers of the old name. */
+export const ATM_SAPLING_RESERVED = ATM_SAPLING;
 
-/** The flows the spec names per method (`transparent`: authorization; `sapling-proof`: upfront). */
+/** The flows the spec names per method (`transparent`, `sapling`: authorization; `sapling-proof`: upfront). */
 export const FLOW_AUTHORIZATION = "authorization" as const;
 export const FLOW_UPFRONT = "upfront" as const;
 
@@ -38,10 +41,13 @@ export interface ExactYcashSettleExtra {
 }
 
 /**
- * The `sapling-proof` method (plan X4a) is implemented in `src/shielded/`. The exact server and
- * facilitator only route to it, so the transparent code never grows shielded logic.
+ * The shielded methods (`sapling-proof`, plan X4a; `sapling`, plan X4b) are implemented in
+ * `src/shielded/`. The exact server and facilitator only route to this hook, so the transparent
+ * code never grows shielded logic.
  */
 export interface ShieldedExactHandler {
+  /** Flow per method the handler serves; absent means `sapling-proof` upfront only. */
+  readonly flows?: Readonly<Record<string, PaymentFlowName>>;
   /** Issues the per-request instrument (fresh diversified `payTo`, `memo`, `expiresAt`). */
   enhanceRequirements(
     requirements: PaymentRequirements,

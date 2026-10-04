@@ -11,3 +11,5 @@ export * from "./server.js";
 export * from "./facilitator.js";
 export * from "./client.js";
 export * from "./handler.js";
+export * from "./saplingFacilitator.js";
+export * from "./saplingHandler.js";

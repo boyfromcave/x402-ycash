@@ -79,7 +79,7 @@ describe("ExactYcashScheme with a LocalKeySigner", () => {
     const client = new exact.ExactYcashScheme(new exact.LocalKeySigner(payer.wif, new FakeUtxoSource(node)));
     await expect(client.createPaymentPayload(2, requirements(merchant.address, "53"))).rejects.toThrow(/dust/);
     await expect(client.createPaymentPayload(2, requirements(merchant.address, "1000", { areFeesSponsored: true }))).rejects.toThrow(/areFeesSponsored/);
-    await expect(client.createPaymentPayload(2, requirements(merchant.address, "1000", { assetTransferMethod: "sapling" }))).rejects.toThrow(/reserved/);
+    await expect(client.createPaymentPayload(2, requirements(merchant.address, "1000", { assetTransferMethod: "sapling" }))).rejects.toThrow(/shielded method/);
     await expect(client.createPaymentPayload(2, { ...requirements(merchant.address), network: "ycash:nonet" })).rejects.toThrow(/network/);
   });
 
