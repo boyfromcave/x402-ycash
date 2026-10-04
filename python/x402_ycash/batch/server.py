@@ -36,7 +36,7 @@ from x402.schemas import (
 from ..channel import DEFAULT_CLOSE_FEE, DEFAULT_CLOSE_MARGIN_BLOCKS, DEFAULT_MIN_LOCK_BLOCKS, close_fee_floor
 from ..constants import ASSET_YEC, ASSET_YED, YED_MAX_OUTPUT_CENTS
 from ..node import yec_to_zat
-from ..store import ChannelStore
+from ..store import DEFAULT_CLOSED_RETENTION_MS, ChannelStore
 from ..tx import TxOut
 from .errors import BatchError, reason_of
 from .manager import ChannelManager, CloseEvent, VerifiedVoucher
@@ -73,10 +73,11 @@ class BatchYcashServerScheme:
                  close_margin_blocks: int = DEFAULT_CLOSE_MARGIN_BLOCKS, close_fee: int = DEFAULT_CLOSE_FEE, confirmations: int = 1,
                  max_deposit_cents: int = YED_MAX_OUTPUT_CENTS, usd_asset: str | None = None, store: ChannelStore | None = None,
                  idle: float = 600.0, funding_wait: float = 0.0, funding_poll: float = 0.5, inflight_ttl_ms: int = 60_000,
-                 on_close: Any = None) -> None:
+                 closed_retention_ms: int = DEFAULT_CLOSED_RETENTION_MS, on_close: Any = None) -> None:
         """``max_deposit`` is the largest D of a YEC channel (zatoshis), ``max_deposit_cents`` of a YED
         one; ``confirmations`` the funding policy depth (−1 = mempool, a YEC-only opt-in);
-        ``usd_asset="YED"`` prices "$0.01" as YED cents at par (without it a USD price is refused)."""
+        ``usd_asset="YED"`` prices "$0.01" as YED cents at par (without it a USD price is refused);
+        ``closed_retention_ms`` keeps a closed channel's records that long (default 30 days)."""
         if close_margin_blocks >= min_lock_blocks:
             raise ValueError("close_margin_blocks must be below min_lock_blocks")
         if close_fee < _CLOSE_FLOOR:
@@ -91,7 +92,8 @@ class BatchYcashServerScheme:
         self.confirmations = confirmations
         self.usd_asset = usd_asset
         self.manager = ChannelManager(chain, server_priv_key, store=store, idle=idle, funding_wait=funding_wait,
-                                      funding_poll=funding_poll, inflight_ttl_ms=inflight_ttl_ms, on_close=on_close)
+                                      funding_poll=funding_poll, inflight_ttl_ms=inflight_ttl_ms,
+                                      closed_retention_ms=closed_retention_ms, on_close=on_close)
         self._verified: dict[int, tuple[weakref.ref[PaymentPayload], VerifiedVoucher]] = {}
 
     # ------------------------------------------------------------------ SchemeNetworkServer

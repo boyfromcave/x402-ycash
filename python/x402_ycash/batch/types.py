@@ -34,14 +34,15 @@ def _voucher_fields(v: dict[str, Any]) -> bool:
 
 
 def is_batch_payload(v: Any) -> bool:
-    """``open`` {fundingTx, vout, redeemScript, voucher{tx, cumulative}}; ``voucher``, ``close`` and
-    ``claim`` {channelId, tx, cumulative}."""
+    """``open`` {fundingTx, vout, redeemScript, returnAddress, voucher{tx, cumulative}}; ``voucher``,
+    ``close`` and ``claim`` {channelId, tx, cumulative}."""
     if not isinstance(v, dict):
         return False
     t = v.get("type")
     if t == "open":
         voucher = v.get("voucher")
         return (_is_hex(v.get("fundingTx")) and is_int(v.get("vout")) and v["vout"] >= 0 and _is_hex(v.get("redeemScript"))
+                and isinstance(v.get("returnAddress"), str) and len(v["returnAddress"]) > 0
                 and isinstance(voucher, dict) and _voucher_fields(voucher))
     if t in ("voucher", "close", "claim"):
         return isinstance(v.get("channelId"), str) and _voucher_fields(v)

@@ -17,7 +17,7 @@ from x402.schemas import PaymentPayload, PaymentRequirements, SettleResponse
 from ..channel import Channel, channel_id_of, commitment_id_of, complete_voucher, parse_channel_id
 from ..constants import ASSET_YED
 from ..node import SendRawTransactionError
-from ..store import ChannelStore, InMemoryChannelStore
+from ..store import DEFAULT_CLOSED_RETENTION_MS, ChannelStore, InMemoryChannelStore
 from ..tx import OutPoint, address_to_script, parse_tx, pubkey_from_priv, txid
 from .errors import BatchError, BatchSettlementError
 from .ledger import CHANNEL_OPEN, ChannelLedger, LedgerChannel
@@ -79,14 +79,15 @@ class ClosedChannel:
 class ChannelManager:
     def __init__(self, chain: ChainView, server_priv_key: bytes, *, store: ChannelStore | None = None, idle: float = 600.0,
                  funding_wait: float = 0.0, funding_poll: float = 0.5, inflight_ttl_ms: int = 60_000,
-                 on_close: Callable[[CloseEvent], None] | None = None) -> None:
+                 closed_retention_ms: int = DEFAULT_CLOSED_RETENTION_MS, on_close: Callable[[CloseEvent], None] | None = None) -> None:
         """``chain`` is the server's node (any line; stock is enough for YEC). ``idle`` closes a channel
         after that many seconds without a request; ``funding_wait`` is how long an ``open`` waits for
-        the funding depth before answering funding_depth."""
+        the funding depth before answering funding_depth; ``closed_retention_ms`` how long a closed
+        channel's records are kept before the store prunes them (default 30 days, plan X-F51)."""
         self.chain = chain
         self._priv = server_priv_key
         self.server_pubkey = pubkey_from_priv(server_priv_key)
-        self.ledger = ChannelLedger(store or InMemoryChannelStore(), inflight_ttl_ms)
+        self.ledger = ChannelLedger(store or InMemoryChannelStore(), inflight_ttl_ms, closed_retention_ms)
         self._idle = idle
         self._funding_wait = funding_wait
         self._funding_poll = funding_poll
@@ -131,7 +132,8 @@ class ChannelManager:
                 channel_id = v.channel_id
                 if not v.already_broadcast:
                     await self._relay_funding(p["fundingTx"], v.funding_txid, int(p["vout"]))
-                await self.ledger.open(_terms_of(v.channel, channel_id, p["fundingTx"], terms, v.deposit))
+                await self.ledger.open({**_terms_of(v.channel, channel_id, p["fundingTx"], terms, v.deposit),
+                                        "returnScript": v.return_script.hex()})
                 log.info("open %s V=%s D=%s t=%s", channel_id, v.channel.value, v.deposit, v.channel.refund_height)
             self.track(channel_id)
             await self._wait_for_depth(channel_id)
@@ -178,6 +180,9 @@ class ChannelManager:
             asset = ch.terms["asset"]
             bounds: dict[str, Any] = {"deposit": deposit, "branch_id": ctx.branch_id, "layout": layout_for(asset, deposit),
                                       "floor": cumulative_floor(asset)}
+            # every voucher returns the client's remainder to the open's returnAddress
+            if isinstance(ch.terms.get("returnScript"), str):
+                bounds["return_script"] = bytes.fromhex(ch.terms["returnScript"])
             if kind == "close":
                 # At the charged total, or the pre-paid $1.00 for YED (the dollar floor).
                 want = close_cumulative(asset, ch.charged_cumulative)

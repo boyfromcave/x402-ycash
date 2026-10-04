@@ -3,7 +3,9 @@ no channel state and no server key: it verifies what is checkable from the chain
 voucher's shape and client signature against the live channel output), relays the funding
 transaction, and broadcasts closes the server completed (``claim``). The charged total, the stored
 voucher and the in-flight lock stay with the server (specs/scheme_batch_settlement_ycash.md,
-"Settlement"). A YED channel needs a Yellowback node: D is the channel's token record as the overlay
+"Settlement"). It records the return address of each open it relays and binds it in that channel's
+later vouchers and claims; a channel it never saw open is checked against the voucher's own vout 1.
+A YED channel needs a Yellowback node: D is the channel's token record as the overlay
 reports it, and every voucher must burn nothing. Mirrors packages/ycash/src/batch/facilitator/scheme.ts.
 """
 
@@ -27,9 +29,18 @@ from ..channel import (
 )
 from ..constants import ASSET_YED, YCASH_CAIP_FAMILY
 from ..node import SendRawTransactionError
-from ..store import RETAIN_FOREVER, ChannelRecord, ChannelStore, InMemoryChannelStore, SettlementStore, txid_key
+from ..store import (
+    DEFAULT_CLOSED_RETENTION_MS,
+    RETAIN_FOREVER,
+    ChannelRecord,
+    ChannelStore,
+    InMemoryChannelStore,
+    SettlementStore,
+    txid_key,
+)
 from ..tx import Tx, address_to_script, txid
 from .errors import BatchError, BatchSettlementError, reason_of
+from .return_address import return_script_of
 from .types import BATCH_SETTLEMENT_SCHEME, BatchTerms, is_batch_payload, parse_terms, required_depth, same_offer
 from .verify import (
     ChainView,
@@ -54,16 +65,20 @@ class BatchYcashFacilitatorScheme:
     caip_family = YCASH_CAIP_FAMILY
 
     def __init__(self, rpc: ChainView, *, settlement_store: SettlementStore | None = None, channel_store: ChannelStore | None = None,
-                 confirmations: tuple[int, int] = (-1, 20), funding_wait: float = 0.0, funding_poll: float = 0.5) -> None:
+                 confirmations: tuple[int, int] = (-1, 20), funding_wait: float = 0.0, funding_poll: float = 0.5,
+                 closed_retention_ms: int = DEFAULT_CLOSED_RETENTION_MS) -> None:
         """``settlement_store`` deduplicates relays of a close by its txid (plan X-F6); ``channel_store``
-        records the channels relayed and the cumulative of each close, for audit (the facilitator
-        decides nothing from it). ``funding_wait`` is how long settle waits for the funding depth."""
+        records the channels relayed (with their return script, which later vouchers must pay) and the
+        cumulative of each close; the charged total and the voucher watermark are the server's.
+        ``funding_wait`` is how long settle waits for the funding depth; ``closed_retention_ms`` how
+        long the record of a channel whose close it relayed is kept (default 30 days, plan X-F51)."""
         self._chain = rpc
         self._settlements = settlement_store
         self.channels: ChannelStore = channel_store or InMemoryChannelStore()
         self._limits = confirmations
         self._funding_wait = funding_wait
         self._funding_poll = funding_poll
+        self._retention = closed_retention_ms
 
     def get_extra(self, network: Network) -> dict[str, Any] | None:
         """The funding depths it settles, as the ``exact`` facilitator advertises its range."""
@@ -97,11 +112,15 @@ class BatchYcashFacilitatorScheme:
             # YED: D is the channel output's token record, read through the voucher's yedIn.
             deposit = await overlay_deposit(self._chain, p["tx"]) if yed else channel.yec_deposit
             cumulative = int(p["cumulative"])
+            # The return script is bound when this facilitator relayed the open; a stateless one checks the rest.
+            record = await self.channels.get(p["channelId"])
+            recorded = (record.data or {}).get("returnScript") if record is not None else None
             check_voucher(tx, channel, cumulative,
                           charged=0,  # the server's charged total is not known here; it applies rule 5 in full
                           amount=terms.amount if p["type"] == "voucher" else 0, deposit=deposit, branch_id=ctx.branch_id,
                           layout=layout_for(terms.asset, deposit), allow_completed=p["type"] == "claim",
-                          floor=cumulative_floor(terms.asset))
+                          floor=cumulative_floor(terms.asset),
+                          return_script=bytes.fromhex(recorded) if isinstance(recorded, str) else None)
             if p["type"] == "claim":
                 await check_completed(self._chain, tx)
             # A voucher's server slot is empty, so only a claim's scripts can verify.
@@ -128,7 +147,12 @@ class BatchYcashFacilitatorScheme:
                 if not await self._wait_for_depth(funding_txid, int(p["vout"]), required_depth(parse_terms(requirements).confirmations)):
                     return SettleResponse(success=False, error_reason=BatchError.SETTLEMENT_PENDING, error_message="funding below the policy depth",
                                           transaction=funding_txid, network=network, payer=channel_id)
-                await self.channels.open(ChannelRecord(channel_id, 0, {"fundingTxid": funding_txid, "vout": int(p["vout"])}))
+                # The return script, so this facilitator binds it in the channel's later vouchers and claims.
+                terms = parse_terms(requirements)
+                return_script = return_script_of(p["returnAddress"], terms.network, terms.asset,
+                                                 address_to_script(terms.pay_to, terms.network))
+                await self.channels.open(ChannelRecord(channel_id, 0, {"fundingTxid": funding_txid, "vout": int(p["vout"]),
+                                                                       "returnScript": return_script.hex()}))
                 return SettleResponse(success=True, transaction=funding_txid, network=network, payer=channel_id, amount="",
                                       extra={"commitmentId": commitment_id_of(channel_id, cumulative)})
             if p["type"] == "voucher":
@@ -181,11 +205,12 @@ class BatchYcashFacilitatorScheme:
         return channel, tx
 
     async def _record_claim(self, channel_id: str, cumulative: int) -> None:
-        if await self.channels.open(ChannelRecord(channel_id, cumulative)):
-            return
-        r = await self.channels.get(channel_id)
-        if r is not None and r.cumulative < cumulative:
-            await self.channels.compare_and_set_cumulative(channel_id, r.cumulative, cumulative)
+        """Records the relayed close's cumulative, and retires the channel's record: it is spent now."""
+        if not await self.channels.open(ChannelRecord(channel_id, cumulative)):
+            r = await self.channels.get(channel_id)
+            if r is not None and r.cumulative < cumulative:
+                await self.channels.compare_and_set_cumulative(channel_id, r.cumulative, cumulative)
+        await self.channels.retire([channel_id], int(time.time() * 1000) + self._retention)
 
     async def _relay(self, hex_tx: str) -> None:
         try:

@@ -7,6 +7,7 @@ from .facilitator import BatchYcashFacilitatorScheme
 from .ledger import CHANNEL_CLOSED, CHANNEL_CLOSING, CHANNEL_OPEN, ChannelLedger, LedgerChannel
 from .manager import ChannelManager, ClosedChannel, CloseEvent, VerifiedVoucher
 from .register import register_batch_ycash_facilitator, register_batch_ycash_server
+from .return_address import return_script_of
 from .server import BatchYcashServerScheme, cents_of
 from .types import BATCH_SETTLEMENT_SCHEME, BatchTerms, is_batch_payload, parse_terms, required_depth, same_offer
 from .verify import (
@@ -22,6 +23,7 @@ from .verify import (
     decode_tx,
     is_exhausted,
     layout_for,
+    min_funding_expiry,
     overlay_deposit,
     verify_open,
 )
@@ -59,12 +61,14 @@ __all__ = [
     "is_batch_payload",
     "is_exhausted",
     "layout_for",
+    "min_funding_expiry",
     "overlay_deposit",
     "parse_terms",
     "reason_of",
     "register_batch_ycash_facilitator",
     "register_batch_ycash_server",
     "required_depth",
+    "return_script_of",
     "same_offer",
     "verify_open",
 ]

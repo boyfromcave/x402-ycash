@@ -8,6 +8,10 @@ One channel is several records (packages/ycash/src/batch/server/ledger.ts):
     <id>#inflight   cumulative = 0 when free, else the lock's expiry (ms): one voucher in flight
     <id>#state      cumulative = 0 open, 1 closing, 2 closed
     <id>#close      data.txid = the close transaction
+
+A closed channel's records are retired for ``closed_retention_ms`` and then pruned by the store (plan
+X-F51), so list() and resume() stay as fast as the open channels; an open or closing channel is never
+retired.
 """
 
 from __future__ import annotations
@@ -16,7 +20,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from ..store import ChannelRecord, ChannelStore
+from ..store import DEFAULT_CLOSED_RETENTION_MS, ChannelRecord, ChannelStore
 
 CHANNEL_OPEN = 0
 CHANNEL_CLOSING = 1
@@ -31,7 +35,8 @@ def now_ms() -> int:
 class LedgerChannel:
     terms: dict[str, Any]
     """The channel's fixed terms (JSON: channelId, network, asset, fundingTxid, vout, fundingTx,
-    redeemScript, value, closeFee, deposit, payTo, refundHeight, closeMarginBlocks, confirmations, amount)."""
+    redeemScript, value, closeFee, deposit, payTo, refundHeight, closeMarginBlocks, confirmations, amount,
+    returnScript: the client's output script in every voucher, hex, from the open's ``returnAddress``)."""
     signed_cumulative: int
     charged_cumulative: int
     state: int
@@ -40,9 +45,10 @@ class LedgerChannel:
 
 
 class ChannelLedger:
-    def __init__(self, store: ChannelStore, inflight_ttl_ms: int = 60_000) -> None:
+    def __init__(self, store: ChannelStore, inflight_ttl_ms: int = 60_000, closed_retention_ms: int = DEFAULT_CLOSED_RETENTION_MS) -> None:
         self.store = store
         self._ttl = inflight_ttl_ms
+        self._retention = closed_retention_ms
 
     async def open(self, terms: dict[str, Any]) -> bool:
         """Records a new channel; False if it is already known. Auxiliary records first: a reader that
@@ -131,13 +137,18 @@ class ChannelLedger:
         """Moves the channel from open to closing; False if it was not open (one closer wins)."""
         return await self.store.compare_and_set_cumulative(f"{channel_id}#state", CHANNEL_OPEN, CHANNEL_CLOSING)
 
-    async def mark_closed(self, channel_id: str, txid: str | None) -> None:
-        """Records the close transaction and marks the channel closed."""
+    async def mark_closed(self, channel_id: str, txid: str | None, now: int | None = None) -> None:
+        """Records the close transaction, marks the channel closed and retires its records."""
         if txid:
             await self.store.open(ChannelRecord(f"{channel_id}#close", 0, {"txid": txid}))
         state = await self.store.get(f"{channel_id}#state")
         if state is not None and state.cumulative != CHANNEL_CLOSED:
             await self.store.compare_and_set_cumulative(f"{channel_id}#state", state.cumulative, CHANNEL_CLOSED)
+        main = await self.store.get(channel_id)
+        ids = [channel_id, f"{channel_id}#charged", f"{channel_id}#inflight", f"{channel_id}#state", f"{channel_id}#close"]
+        if main is not None and main.cumulative > 0:
+            ids.append(f"{channel_id}@{main.cumulative}")
+        await self.store.retire(ids, (now_ms() if now is None else now) + self._retention)
 
     async def reopen(self, channel_id: str) -> bool:
         """Back to open after a close that could not be broadcast (so a later trigger retries)."""
