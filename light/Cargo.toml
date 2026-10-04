@@ -45,7 +45,6 @@ clap = { version = "4", features = ["derive", "env"] }
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-nonempty = "0.11"
 
 # Mirror of ref/ycash6/Cargo.toml:122-133 so every transitive zcash_* crate resolves to the same
 # Ycash-aware source as ycashd 6.21.0 (one revision, one set of branch ids and HRPs).

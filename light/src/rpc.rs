@@ -71,7 +71,9 @@ fn code_for(e: &Error) -> i64 {
         | Error::Memo(_)
         | Error::Hex(_)
         | Error::Birthday(_)
-        | Error::Key(_) => INVALID_PARAMS,
+        | Error::Key(_)
+        | Error::Expiry(_)
+        | Error::FeeBelowFloor { .. } => INVALID_PARAMS,
         _ => WALLET_ERROR,
     }
 }
@@ -323,5 +325,41 @@ mod tests {
         let minimal: BuildRequest = params_req(&json!({ "to": "ys1x", "amountZat": 1 })).unwrap();
         assert!(minimal.fee_zat.is_none() && minimal.memo_hex.is_none());
         assert!(params_req::<BuildRequest>(&json!({ "to": "ys1x" })).is_err());
+    }
+
+    #[test]
+    fn build_params_accept_the_sdk_builder_contract() {
+        // packages/ycash/src/shielded/builder.ts: build {to, amountZat (decimal string), memoHex, expiryHeight?}.
+        let r: BuildRequest = params_req(&json!({ "to": "ys1x", "amountZat": "1500000", "memoHex": "6869", "expiryHeight": 117 })).unwrap();
+        assert_eq!(r.amount_zat, 1_500_000);
+        assert_eq!(r.expiry_height, Some(117));
+        assert_eq!(r.memo_hex.as_deref(), Some("6869"));
+        let r: BuildRequest =
+            params_req(&json!({ "to": "ys1x", "amountZat": "7", "memoHex": "" })).unwrap();
+        assert!(r.expiry_height.is_none());
+        for bad in ["", "01", "1.5", "-1", " 1", "1e3", "18446744073709551616"] {
+            assert!(
+                params_req::<BuildRequest>(&json!({ "to": "ys1x", "amountZat": bad })).is_err(),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn schema_documents_the_contract_fields() {
+        let schema: Value = serde_json::from_str(include_str!("../schema.json")).unwrap();
+        let p = &schema["methods"]["build"]["params"];
+        for k in ["to", "amountZat", "memoHex", "expiryHeight", "fee"] {
+            assert!(
+                p.get(k).is_some(),
+                "build.params.{k} missing from schema.json"
+            );
+        }
+        for k in ["txid", "txHex", "expiryHeight", "feeZat"] {
+            assert!(
+                schema["methods"]["build"]["result"].get(k).is_some(),
+                "build.result.{k} missing"
+            );
+        }
     }
 }

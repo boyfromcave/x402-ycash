@@ -11,14 +11,13 @@ use std::fs;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 
-use nonempty::NonEmpty;
 use rand::rngs::OsRng;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use zcash_client_backend::data_api::chain::ChainState;
 use zcash_client_backend::data_api::wallet::input_selection::GreedyInputSelector;
 use zcash_client_backend::data_api::wallet::{
-    create_proposed_transactions, propose_standard_transfer_to_address, propose_transfer,
-    ConfirmationsPolicy, SpendingKeys, TargetHeight,
+    decrypt_and_store_transaction, propose_standard_transfer_to_address, propose_transfer,
+    ConfirmationsPolicy, TargetHeight,
 };
 use zcash_client_backend::data_api::{
     AccountBirthday, AccountPurpose, InputSource, NullifierQuery, TargetValue, WalletRead,
@@ -26,16 +25,14 @@ use zcash_client_backend::data_api::{
 };
 use zcash_client_backend::fees::StandardFeeRule;
 use zcash_client_backend::proto::compact_formats::CompactTx;
-use zcash_client_backend::wallet::OvkPolicy;
 use zcash_client_sqlite::chain::init::init_blockmeta_db;
 use zcash_client_sqlite::util::SystemClock;
 use zcash_client_sqlite::wallet::init::init_wallet_db;
 use zcash_client_sqlite::{AccountUuid, FsBlockDb, WalletDb};
 use zcash_keys::address::Address;
-use zcash_keys::keys::UnifiedSpendingKey;
 use zcash_primitives::transaction::components::sapling::zip212_enforcement;
 use zcash_primitives::transaction::fees::fixed::FeeRule as FixedFeeRule;
-use zcash_primitives::transaction::TxId;
+use zcash_primitives::transaction::{Transaction, TxId};
 use zcash_proofs::prover::LocalTxProver;
 use zcash_protocol::consensus::{BlockHeight, Parameters};
 use zcash_protocol::memo::MemoBytes;
@@ -50,6 +47,7 @@ use zip32::Scope;
 use crate::keys;
 use crate::lwd::{self, Client};
 use crate::net::YcashNetwork;
+use crate::spend;
 
 pub type Db = WalletDb<rusqlite::Connection, YcashNetwork, SystemClock, OsRng>;
 
@@ -125,10 +123,6 @@ impl Wallet {
 
     fn extsk(&self) -> Result<&ExtendedSpendingKey, Error> {
         self.extsk.as_ref().ok_or(Error::NoKey)
-    }
-
-    fn usk(&self) -> Result<UnifiedSpendingKey, Error> {
-        Ok(keys::usk_from_extsk(self.extsk()?))
     }
 
     pub fn account(&self) -> Result<AccountUuid, Error> {
@@ -386,7 +380,6 @@ impl Wallet {
     pub async fn build(&mut self, req: &BuildRequest) -> Result<Built, Error> {
         let account = self.account()?;
         let server = lwd::branch_info(&mut self.client, &self.channel).await?;
-        let usk = self.usk()?;
         let to =
             Address::decode(&self.params, &req.to).ok_or_else(|| Error::Address(req.to.clone()))?;
         if !matches!(to, Address::Sapling(_)) {
@@ -435,35 +428,45 @@ impl Wallet {
         }
 
         let params = self.params;
+        let Address::Sapling(to_pa) = &to else {
+            unreachable!("checked above")
+        };
+        let extsk = self.extsk()?.clone();
+        let payment = spend::Payment {
+            to: to_pa,
+            amount,
+            memo: memo.clone(),
+        };
         let prover = self.take_prover()?;
-        let created: Result<NonEmpty<TxId>, Error> = match req.fee_zat {
-            None => {
-                let proposal = propose_standard_transfer_to_address::<_, _, Error>(
+        // Note selection, fee and change come from librustzcash's proposal; the transaction itself is
+        // assembled in `spend` so nExpiryHeight can be the caller's (create_proposed_transactions
+        // fixes it at target + 40).
+        let assembled: Result<Transaction, Error> = match req.fee_zat {
+            None => propose_standard_transfer_to_address::<_, _, Error>(
+                &mut self.db,
+                &params,
+                StandardFeeRule::Zip317,
+                account,
+                policy,
+                &to,
+                amount,
+                memo,
+                None,
+                ShieldedProtocol::Sapling,
+                None,
+            )
+            .map_err(|e| Error::Propose(format!("{e}")))
+            .and_then(|proposal| {
+                spend::assemble(
                     &mut self.db,
                     &params,
-                    StandardFeeRule::Zip317,
-                    account,
-                    policy,
-                    &to,
-                    amount,
-                    memo,
-                    None,
-                    ShieldedProtocol::Sapling,
-                    None,
-                )
-                .map_err(|e| Error::Propose(format!("{e}")))?;
-                let created = create_proposed_transactions::<_, _, Error, _, Error, _>(
-                    &mut self.db,
-                    &params,
+                    &extsk,
                     &prover,
-                    &prover,
-                    &SpendingKeys::from_unified_spending_key(usk),
-                    OvkPolicy::Sender,
                     &proposal,
-                    None,
-                );
-                created.map_err(|e| Error::Create(format!("{e}")))
-            }
+                    &payment,
+                    req.expiry_height,
+                )
+            }),
             Some(fee) => {
                 let fee = Zatoshis::from_u64(fee).map_err(|_| Error::Amount(fee))?;
                 let change_strategy =
@@ -484,7 +487,7 @@ impl Wallet {
                 )
                 .map_err(|e| Error::Propose(format!("{e:?}")))?])
                 .map_err(|e| Error::Propose(format!("{e:?}")))?;
-                let proposal = propose_transfer::<_, _, _, _, Error>(
+                propose_transfer::<_, _, _, _, Error>(
                     &mut self.db,
                     &params,
                     account,
@@ -494,41 +497,48 @@ impl Wallet {
                     policy,
                     None,
                 )
-                .map_err(|e| Error::Propose(format!("{e}")))?;
-                let created = create_proposed_transactions::<_, _, Error, _, Error, _>(
-                    &mut self.db,
-                    &params,
-                    &prover,
-                    &prover,
-                    &SpendingKeys::from_unified_spending_key(usk),
-                    OvkPolicy::Sender,
-                    &proposal,
-                    None,
-                );
-                created.map_err(|e| Error::Create(format!("{e}")))
+                .map_err(|e| Error::Propose(format!("{e}")))
+                .and_then(|proposal| {
+                    spend::assemble(
+                        &mut self.db,
+                        &params,
+                        &extsk,
+                        &prover,
+                        &proposal,
+                        &payment,
+                        req.expiry_height,
+                    )
+                })
             }
         };
         self.prover = Some(prover);
-        let txids = created?;
-        if txids.len() != 1 {
-            return Err(Error::Create(format!(
-                "expected one transaction, built {}",
-                txids.len()
-            )));
+        let tx = assembled?;
+        let txid = tx.txid();
+        let sapling = tx.sapling_bundle();
+        let (n_spends, n_outputs, value_balance) = sapling.map_or((0, 0, 0), |b| {
+            (
+                b.shielded_spends().len(),
+                b.shielded_outputs().len(),
+                i64::from(*b.value_balance()),
+            )
+        });
+        // Shielded-only: the fee is the Sapling value balance.
+        let fee = u64::try_from(value_balance)
+            .map_err(|_| Error::Create(format!("negative value balance {value_balance}")))?;
+        let floor = spend::fee_floor(n_spends, n_outputs);
+        if fee < floor {
+            return Err(Error::FeeBelowFloor { fee, floor });
         }
-        let txid = txids.head;
-        let tx = self
-            .db
-            .get_transaction(txid)?
-            .ok_or_else(|| Error::Create("built tx not stored".into()))?;
+        if let Some(e) = req.expiry_height {
+            debug_assert_eq!(u32::from(tx.expiry_height()), e);
+        }
         let mut raw = Vec::new();
         tx.write(&mut raw)
             .map_err(|e| Error::Create(e.to_string()))?;
-        let fee = tx
-            .fee_paid(|_| Ok::<_, zcash_protocol::value::BalanceError>(None))
-            .ok()
-            .flatten()
-            .map(|z| z.into_u64());
+        // Record it as ours, unmined: its spends mark our notes spent until nExpiryHeight passes
+        // unbroadcast, and the OVK recovers the payment and the change.
+        decrypt_and_store_transaction(&params, &mut self.db, &tx, None)?;
+        let fee = Some(fee);
         Ok(Built {
             txid: txid.to_string(),
             txHex: hex::encode(&raw),
@@ -621,6 +631,8 @@ pub struct NoteInfo {
 #[serde(rename_all = "camelCase")]
 pub struct BuildRequest {
     pub to: String,
+    /// The SDK's builder contract sends a decimal string; an integer is accepted too.
+    #[serde(deserialize_with = "zat_from_string_or_number")]
     pub amount_zat: u64,
     #[serde(default)]
     pub memo_hex: Option<String>,
@@ -630,6 +642,32 @@ pub struct BuildRequest {
     pub fee_zat: Option<u64>,
     #[serde(default)]
     pub min_confirmations: Option<u32>,
+    /// nExpiryHeight; absent, target + 40 (the x402 client passes tip + 3 + ⌈maxTimeoutSeconds/75⌉).
+    #[serde(default)]
+    pub expiry_height: Option<u32>,
+}
+
+/// `amountZat` as the TS contract sends it (a canonical decimal string) or as a JSON integer.
+fn zat_from_string_or_number<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Zat {
+        Int(u64),
+        Text(String),
+    }
+    match Zat::deserialize(d)? {
+        Zat::Int(v) => Ok(v),
+        Zat::Text(t)
+            if !t.is_empty()
+                && t.bytes().all(|b| b.is_ascii_digit())
+                && (t == "0" || !t.starts_with('0')) =>
+        {
+            t.parse().map_err(serde::de::Error::custom)
+        }
+        Zat::Text(t) => Err(serde::de::Error::custom(format!(
+            "amountZat {t:?} is not a decimal number of zatoshis"
+        ))),
+    }
 }
 
 #[allow(non_snake_case)]
@@ -696,6 +734,12 @@ pub enum Error {
     Rejected(i32, String),
     #[error("scan: {0}")]
     Scan(String),
+    #[error("bad expiry: {0}")]
+    Expiry(String),
+    #[error(
+        "fee {fee} is below the x402 floor {floor} (max(1000, 500 · max(2, logical actions)))"
+    )]
+    FeeBelowFloor { fee: u64, floor: u64 },
 }
 
 impl

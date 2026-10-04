@@ -270,8 +270,11 @@ fn pays_a_merchant_through_lightwalletd() {
         .unwrap()
         .to_owned();
     let memo = "x402 lightcore: invoice 42";
+    // Exactly the SDK's builder contract: amountZat a decimal string, nExpiryHeight the spec's
+    // tip + 3 + ⌈maxTimeoutSeconds/75⌉ (900 s here).
+    let expiry = funded_height + 3 + 12;
     let t = Instant::now();
-    let built = env.light(&data, "build", &json!({ "to": merchant, "amountZat": 50_000_000u64, "memoHex": hex::encode(memo), "minConfirmations": 1 })).unwrap();
+    let built = env.light(&data, "build", &json!({ "to": merchant, "amountZat": "50000000", "memoHex": hex::encode(memo), "expiryHeight": expiry })).unwrap();
     record["build"] = json!({ "millis": t.elapsed().as_millis() as u64, "feeZat": built["feeZat"], "branchId": built["branchId"], "branchIdSource": built["branchIdSource"], "version": built["version"] });
     let tx_hex = built["txHex"].as_str().unwrap();
     let chain = env.rpc(&["getblockchaininfo"]);
@@ -299,6 +302,12 @@ fn pays_a_merchant_through_lightwalletd() {
     );
     assert!(!decoded["vShieldedSpend"].as_array().unwrap().is_empty());
     assert_eq!(decoded["version"], 4);
+    assert_eq!(decoded["expiryheight"].as_u64().unwrap(), expiry);
+    assert_eq!(built["expiryHeight"].as_u64().unwrap(), expiry);
+    assert!(
+        built["feeZat"].as_u64().unwrap() >= 1000,
+        "at or above the x402 floor"
+    );
     // Not broadcast: the node has never seen it.
     let pool = env.rpc(&["getrawmempool"]);
     assert!(!pool.as_array().unwrap().iter().any(|t| t == &built["txid"]));
