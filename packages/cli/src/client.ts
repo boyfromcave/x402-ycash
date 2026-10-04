@@ -3,9 +3,20 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { x402Client, x402HTTPClient } from "@x402/core/client";
-import { ASSET_YEC, ASSET_YED, BatchYcashClientScheme, exact, FileClientChannelStorage, FileCoinReservationStore, rpcWalletFunder, ShieldedExactClient, tx, batch as B } from "x402-ycash-mechanism";
+import {
+  ASSET_YEC,
+  ASSET_YED,
+  BatchYcashClientScheme,
+  exact,
+  FileClientChannelStorage,
+  FileCoinReservationStore,
+  rpcWalletFunder,
+  ShieldedExactClient,
+  tx,
+  utxoSourceFunder,
+  batch as B,
+} from "x402-ycash-mechanism";
 import type { CliConfig } from "./config.js";
-import { wifChannelFunder } from "./funder.js";
 
 /**
  * D for a new channel: the configured deposit of its asset (zatoshis or cents), within the
@@ -42,7 +53,8 @@ export function buildClient(config: CliConfig): PayingClient {
   const source = config.wif ? new exact.RpcUtxoSource(node, { importAddress: true, ...held }) : undefined;
   const transparent = new exact.ExactYcashScheme(config.wif && source ? new exact.LocalKeySigner(config.wif, source) : new exact.RpcWalletSigner(node, held));
   const shielded = config.shieldedFrom ? new ShieldedExactClient({ rpc: node, from: config.shieldedFrom }) : undefined;
-  const funder = config.wif && source ? wifChannelFunder(tx.decodeWif(config.wif, config.network).privKey, source) : rpcWalletFunder(node, held);
+  // Both assets; the channel's remainder returns to the WIF key's address or a new wallet address.
+  const funder = config.wif && source ? utxoSourceFunder(tx.decodeWif(config.wif, config.network).privKey, source) : rpcWalletFunder(node, held);
   const deposit = depositFor(config);
   const maxDeposit = {
     ...(config.maxDepositZat !== undefined ? { [ASSET_YEC]: config.maxDepositZat } : {}),
@@ -54,6 +66,7 @@ export function buildClient(config: CliConfig): PayingClient {
     storage,
     ...(deposit ? { deposit } : {}),
     ...(Object.keys(maxDeposit).length > 0 ? { maxDeposit } : {}),
+    ...(config.maxCloseFeeZat !== undefined ? { maxCloseFee: { [ASSET_YEC]: config.maxCloseFeeZat, [ASSET_YED]: config.maxCloseFeeZat } } : {}),
   });
   const client = new x402Client()
     .register(config.network, new exact.ExactYcashMethodRouter({ transparent, ...(shielded ? { shielded } : {}) }))

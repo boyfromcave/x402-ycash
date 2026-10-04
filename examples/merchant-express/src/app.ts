@@ -7,14 +7,24 @@ import { paymentMiddleware, x402ResourceServer } from "@x402/express";
 import { ASSET_YEC } from "x402-ycash-mechanism";
 import type { MerchantConfig } from "./config.js";
 import { registerServerSchemes, type PaymentModes, type RegisterServerSchemes, type ServerSchemes, type YedModes } from "./schemes.js";
+import { SupportedCache, YedGate } from "./yed.js";
 
 export interface MerchantOptions {
   /** Defaults to an HTTPFacilitatorClient on `config.facilitatorUrl`. */
   facilitator?: FacilitatorClient;
   /** Defaults to schemes.ts; tests pass a fake. */
   register?: RegisterServerSchemes;
-  /** The YED modes probeYed (yed.ts) found; absent, the YED routes answer 501. */
+  /** The YED modes probeYed (yed.ts) found; absent (and no yedProbe), the YED routes answer 501. */
   yed?: YedModes;
+  /**
+   * Re-probes the YED modes (probeYed bound to the facilitator and node). With it the YED routes are
+   * wired whenever YED is configured and gated live: re-probed every `yedReprobeMs` and when a
+   * request reaches a YED route that is off, so YED comes on when the facilitator starts after the
+   * merchant. `yed` is then the initial view.
+   */
+  yedProbe?: (facilitator: FacilitatorClient) => Promise<YedModes>;
+  /** default 60 s */
+  yedReprobeMs?: number;
 }
 
 export interface Merchant {
@@ -128,18 +138,38 @@ export function facilitatorClientOf(config: MerchantConfig): FacilitatorClient {
 const SHIELDED_TIMEOUT_SECONDS = 900;
 
 export function createMerchant(config: MerchantConfig, opts: MerchantOptions = {}): Merchant {
-  const facilitator = opts.facilitator ?? facilitatorClientOf(config);
+  const raw = opts.facilitator ?? facilitatorClientOf(config);
+  const probe = opts.yedProbe;
+  const facilitator = config.yed && probe ? new SupportedCache(raw) : raw;
   const server = new x402ResourceServer(facilitator);
+  const log = (msg: string, fields?: Record<string, unknown>): void => console.log(JSON.stringify({ msg, ...fields }));
+  // A live YED gate: the schemes are wired for everything YED can do, and each request asks the gate.
+  // On a change the resource server reloads the facilitator's kinds (its YED asset list).
+  const gate = config.yed && probe && facilitator instanceof SupportedCache
+    ? new YedGate(opts.yed ?? { exact: false, channel: false, maxDepositCents: config.yed.maxDepositCents }, () => probe(facilitator), {
+      ...(opts.yedReprobeMs !== undefined ? { intervalMs: opts.yedReprobeMs } : {}),
+      log,
+      onChange: () => facilitator.reload(() => server.initialize()).catch((e: unknown) => log("facilitator reload failed", { error: String(e) })),
+    })
+    : undefined;
+  const yedWiring: YedModes | undefined = config.yed && gate ? { exact: true, channel: true, maxDepositCents: config.yed.maxDepositCents } : opts.yed;
   const schemes = (opts.register ?? registerServerSchemes)(server, {
     network: config.network,
     zeroConfCapZat: config.zeroConfCapZat,
     ...(config.wallet ? { wallet: config.wallet } : {}),
     ...(config.channel ? { channel: config.channel } : {}),
     ...(config.shielded ? { shielded: { ...config.shielded, amount: config.priceShieldedZat, maxTimeoutSeconds: SHIELDED_TIMEOUT_SECONDS } } : {}),
-    ...(config.yed && opts.yed ? { yed: opts.yed } : {}),
-    log: (msg, fields) => console.log(JSON.stringify({ msg, ...fields })),
+    ...(config.yed && yedWiring ? { yed: yedWiring } : {}),
+    log,
   });
-  const { modes } = schemes;
+  // What the schemes can serve; with a gate, the YED modes are that and the gate's current view.
+  const wired = schemes.modes;
+  const modes: PaymentModes = gate
+    ? Object.defineProperties({ ...wired }, {
+      yedExact: { enumerable: true, get: () => wired.yedExact && gate.modes.exact },
+      yedChannel: { enumerable: true, get: () => wired.yedChannel && gate.modes.channel },
+    })
+    : wired;
 
   const app = express();
   app.disable("x-powered-by");
@@ -152,6 +182,21 @@ export function createMerchant(config: MerchantConfig, opts: MerchantOptions = {
   });
 
   const paid = routes(config, schemes);
+  // While the gate has YED off, a YED route re-probes once (rate-limited) and answers 501 if still off.
+  if (gate) {
+    for (const name of ["yedReport", "yedStream"] as const) {
+      const route = PAID_ROUTES[name];
+      if (!(route in paid)) continue;
+      app.get(route.slice(route.indexOf(" ") + 1), (_req, res, next) => {
+        void (async () => {
+          if (!modes[MODE_OF[name]]) await gate.refresh();
+          if (modes[MODE_OF[name]]) return next();
+          res.status(501).json({ error: "payment mode not available", mode: MODE_OF[name], reason: "the facilitator does not list YED, or the node does not run -yellowback (re-probed)" });
+        })().catch(next);
+      });
+    }
+    gate.start();
+  }
   if (Object.keys(paid).length > 0) app.use(paymentMiddleware(paid, server));
 
   // Each paid route gets its handler only when the middleware guards it; otherwise a 501. Registering
@@ -190,5 +235,12 @@ export function createMerchant(config: MerchantConfig, opts: MerchantOptions = {
     );
   }
 
-  return { app, modes, close: async () => schemes.close?.() };
+  return {
+    app,
+    modes,
+    close: async () => {
+      gate?.stop();
+      await schemes.close?.();
+    },
+  };
 }

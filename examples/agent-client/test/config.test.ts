@@ -45,6 +45,12 @@ describe("loadAgentConfig", () => {
     expect(() => loadAgentConfig({ ...node, AGENT_CHANNEL_MAX_DEPOSIT_ZAT: "1e8" })).toThrow(/MAX_DEPOSIT/);
   });
 
+  it("takes the client's closeFee cap (plan X-F50); unset, the mechanism's 5,000 zat applies", () => {
+    expect(loadAgentConfig({ ...node, AGENT_CHANNEL_MAX_CLOSE_FEE_ZAT: "3000" }).channelMaxCloseFeeZat).toBe(3_000n);
+    expect(loadAgentConfig(node).channelMaxCloseFeeZat).toBeUndefined();
+    expect(() => loadAgentConfig({ ...node, AGENT_CHANNEL_MAX_CLOSE_FEE_ZAT: "-1" })).toThrow(/MAX_CLOSE_FEE/);
+  });
+
   it("requires a signer and sane numbers", () => {
     expect(() => loadAgentConfig({})).toThrow(/needs its node/);
     expect(() => loadAgentConfig({ AGENT_WIF: wifRegtest })).toThrow(/needs its node/);

@@ -12,7 +12,7 @@ import type { SupportedResponse } from "@x402/core/types";
 import { tx } from "x402-ycash-mechanism";
 import { createMerchant, PAID_ROUTES } from "../src/app.js";
 import { describeConfig, loadMerchantConfig } from "../src/config.js";
-import { facilitatorListsYed, probeYed } from "../src/yed.js";
+import { facilitatorListsYed, probeYed, YedGate } from "../src/yed.js";
 
 const NETWORK = "ycash:regtest" as const;
 const PAY_TO = tx.encodeAddress(NETWORK, "p2pkh", new Uint8Array(20).fill(7));
@@ -126,6 +126,73 @@ describe("the YED routes with the production schemes", () => {
     } finally {
       await Promise.all([off.close(), mempool.close()]);
       await new Promise<void>((r) => shop.server.close(() => r()));
+    }
+  });
+});
+
+describe("re-probing the facilitator's /supported", () => {
+  /** A facilitator that starts without YED and lists it once `on` is set. */
+  const switching = () => {
+    const state = { on: false, calls: 0 };
+    const fac: FacilitatorClient = {
+      getSupported: async () => (state.calls++, (await facilitator(state.on ? ["YEC", "YED"] : ["YEC"]).getSupported())),
+      verify: async () => ({ isValid: false, invalidReason: "unused" }),
+      settle: async () => ({ success: false, transaction: "", network: NETWORK, errorReason: "unused" }),
+    };
+    return { state, fac };
+  };
+  const config = () => loadMerchantConfig({ ...BASE, ...NODE, MERCHANT_YED_PAY_TO: YED_PAY_TO, MERCHANT_CHANNEL_KEY: "5a".repeat(32), MERCHANT_CHANNEL_STORE: join(mkdtempSync(join(tmpdir(), "yed-")), "c.json") });
+  const node = { capabilities: async () => ({ yellowback: true }) };
+
+  it("YedGate probes on demand at most every minGapMs, one probe at a time, and on its interval", async () => {
+    let n = 0;
+    const gate = new YedGate({ exact: false, channel: false, maxDepositCents: 1n }, async () => ({ exact: ++n > 1, channel: false, maxDepositCents: 1n }), { minGapMs: 60_000, intervalMs: 10 });
+    await Promise.all([gate.refresh(), gate.refresh()]);
+    expect(n).toBe(1);
+    await gate.refresh(); // within minGapMs: the last view
+    expect(n).toBe(1);
+    gate.start();
+    await new Promise((r) => setTimeout(r, 50));
+    gate.stop();
+    expect(n).toBeGreaterThan(1);
+    expect(gate.modes.exact).toBe(true);
+  });
+
+  it("a YED route of a merchant started before the facilitator re-probes and comes on; while off it answers 501", async () => {
+    const c = config();
+    const { state, fac } = switching();
+    const yedProbe = (f: FacilitatorClient) => probeYed(c.yed!, f, NETWORK, node, quiet);
+    const merchant = createMerchant(c, { facilitator: fac, yed: await yedProbe(fac), yedProbe });
+    expect(merchant.modes).toMatchObject({ yedExact: false, yedChannel: false, exact: true });
+    const shop = await listen(merchant.app);
+    try {
+      expect((await fetch(`${shop.url}/yed/report`)).status).toBe(501); // the start-up view is under 5 s old
+      state.on = true;
+      await new Promise((r) => setTimeout(r, 5_100));
+      expect((await fetch(`${shop.url}/yed/report`)).status).toBe(402); // a request to an off route re-probes
+      expect(merchant.modes).toMatchObject({ yedExact: true, yedChannel: true });
+      expect((await fetch(`${shop.url}/yed/stream`)).status).toBe(402);
+      expect(await (await fetch(shop.url)).json()).toMatchObject({ routes: { [PAID_ROUTES.yedReport]: "paid" } });
+    } finally {
+      await merchant.close();
+      await new Promise<void>((r) => shop.server.close(() => r()));
+    }
+  }, 15_000);
+
+  it("the periodic re-probe turns YED on without a request, and off again when the facilitator drops it", async () => {
+    const c = config();
+    const { state, fac } = switching();
+    const merchant = createMerchant(c, { facilitator: fac, yedProbe: (f) => probeYed(c.yed!, f, NETWORK, node, quiet), yedReprobeMs: 20 });
+    try {
+      expect(merchant.modes.yedExact).toBe(false);
+      state.on = true;
+      await new Promise((r) => setTimeout(r, 100));
+      expect(merchant.modes).toMatchObject({ yedExact: true, yedChannel: true });
+      state.on = false;
+      await new Promise((r) => setTimeout(r, 100));
+      expect(merchant.modes.yedExact).toBe(false);
+    } finally {
+      await merchant.close();
     }
   });
 });

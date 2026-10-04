@@ -42,6 +42,11 @@ export interface AgentConfig {
   /** YED channels: the most this agent locks in one channel, cents (the client's maxDeposit for YED; default $50). */
   yedChannelMaxDepositCents?: bigint;
   /**
+   * batch-settlement: the largest server-chosen closeFee this agent opens with, zatoshis, for both
+   * assets (default 5,000; plan X-F50). The fee is locked in V and paid to miners at close.
+   */
+  channelMaxCloseFeeZat?: bigint;
+  /**
    * Coins held by this payer's signed, unconfirmed spends (a file shared by every agent process
    * of the same payer, so the next run never reselects a coin the last one spent). Default: a
    * file in the OS temp directory named after the payer (loadAgentConfig); absent, in memory.
@@ -96,6 +101,8 @@ export function loadAgentConfig(env: Env = process.env): AgentConfig {
   if (maxDeposit !== undefined && !/^[1-9]\d{0,15}$/.test(maxDeposit)) throw new Error("AGENT_CHANNEL_MAX_DEPOSIT_ZAT must be a positive whole number of zatoshis");
   const maxPaymentYedCents = env.MAX_PAYMENT_YED_CENTS ?? "100";
   if (!/^[1-9]\d{0,9}$/.test(maxPaymentYedCents)) throw new Error("MAX_PAYMENT_YED_CENTS must be a positive whole number of cents");
+  const maxCloseFee = env.AGENT_CHANNEL_MAX_CLOSE_FEE_ZAT;
+  if (maxCloseFee !== undefined && !/^[1-9]\d{0,15}$/.test(maxCloseFee)) throw new Error("AGENT_CHANNEL_MAX_CLOSE_FEE_ZAT must be a positive whole number of zatoshis");
   const yedDeposit = cents(env, "AGENT_YED_CHANNEL_DEPOSIT_CENTS");
   const yedMaxDeposit = cents(env, "AGENT_YED_CHANNEL_MAX_DEPOSIT_CENTS");
   const payerId = signer.kind === "wif" ? signer.address : `node-${createHash("sha256").update(node.url).digest("hex").slice(0, 16)}`;
@@ -110,6 +117,7 @@ export function loadAgentConfig(env: Env = process.env): AgentConfig {
     ...(env.AGENT_CHANNEL_STORE ? { channelStorePath: env.AGENT_CHANNEL_STORE } : {}),
     ...(deposit ? { channelDepositZat: BigInt(deposit) } : {}),
     ...(maxDeposit ? { channelMaxDepositZat: BigInt(maxDeposit) } : {}),
+    ...(maxCloseFee ? { channelMaxCloseFeeZat: BigInt(maxCloseFee) } : {}),
     maxPaymentYedCents,
     ...(yedDeposit !== undefined ? { yedChannelDepositCents: yedDeposit } : {}),
     ...(yedMaxDeposit !== undefined ? { yedChannelMaxDepositCents: yedMaxDeposit } : {}),

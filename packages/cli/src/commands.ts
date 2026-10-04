@@ -106,16 +106,17 @@ export async function channelClose(c: PayingClient, url: string, channelId: stri
 }
 
 /**
- * Where a YED refund goes without `--to`: the WIF key's address, or a new Yellowback address of the
- * node's wallet. The channel key C (the scheme's default) lives only in the channel store, where
- * no wallet sees the YED.
+ * Where the refund of a channel recorded before return addresses existed goes without `--to`: the
+ * WIF key's address, or a new address of the node's wallet (Yellowback for YED). Such a record's
+ * client script is the channel key C's, which lives only in the channel store and which no wallet
+ * watches. A newer record refunds to its open's returnAddress.
  */
-async function yedRefundScript(c: PayingClient, config: CliConfig): Promise<Uint8Array> {
+async function legacyRefundScript(config: CliConfig, isYed: boolean): Promise<Uint8Array> {
   if (config.wif) {
     const { privKey, compressed } = tx.decodeWif(config.wif, config.network);
     return tx.p2pkhScript(tx.hash160(tx.pubkeyFromPriv(privKey, compressed)));
   }
-  return tx.addressToScript(await config.node.call<string>("yed_getnewaddress"), config.network);
+  return tx.addressToScript(await config.node.call<string>(isYed ? "yed_getnewaddress" : "getrawchangeaddress"), config.network);
 }
 
 /** `channel refund <channelId>`: the client alone, from height t. A YED refund carries a TRANSFER of all of D. */
@@ -124,15 +125,19 @@ export async function channelRefund(c: PayingClient, config: CliConfig, channelI
   if (!rec) throw new UsageError(`no channel ${channelId} in the store`);
   const isYed = rec.asset === ASSET_YED;
   if (isYed && config.refundTo && tx.decodeAddress(config.refundTo, config.network).kind === "p2sh") throw new UsageError("--to: a YED refund pays a P2PKH (ye…) address");
-  const toScript = config.refundTo ? tx.addressToScript(config.refundTo, config.network) : isYed ? await yedRefundScript(c, config) : undefined;
-  const txid = await c.batch.refund(channelId, toScript ? { toScript } : {});
+  const toScript = config.refundTo
+    ? tx.addressToScript(config.refundTo, config.network)
+    : rec.returnAddress
+      ? tx.hexToBytes(rec.clientScript)
+      : await legacyRefundScript(config, isYed);
+  const txid = await c.batch.refund(channelId, { toScript });
   const record: Record<string, unknown> = { msg: "refunded", channelId, asset: rec.asset, transaction: txid };
   if (isYed) {
     // The TRANSFER as broadcast (vout 1 is the refund output): proof the YED came back, nothing burned.
     const hex = await config.node.call<string>("getrawtransaction", [txid]);
     const found = yed.findPayload(tx.parseTx(hex).vout);
     record.transfer = found && "payload" in found ? found.payload : found;
-    record.to = tx.encodeAddress(config.network, "yed", tx.p2pkhHash(toScript as Uint8Array) as Uint8Array);
+    record.to = tx.encodeAddress(config.network, "yed", tx.p2pkhHash(toScript) as Uint8Array);
   }
   out(record);
   return 0;

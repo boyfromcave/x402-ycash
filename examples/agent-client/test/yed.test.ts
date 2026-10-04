@@ -1,10 +1,9 @@
 // The agent's YED settings (plan X3): its own per-payment cap in cents (YED is a default asset with
 // core's $1 cap, X-F43), YED channel deposits in cents, and a WIF funder that pays YED channels.
 import { describe, expect, it } from "vitest";
-import { ASSET_YED, type batch, channel, type exact, tx, yed, type YcashNetwork } from "x402-ycash-mechanism";
+import { ASSET_YED, type batch, channel, type exact, tx, utxoSourceFunder, yed, type YcashNetwork } from "x402-ycash-mechanism";
 import { createAgent } from "../src/agent.js";
 import { loadAgentConfig } from "../src/config.js";
-import { wifChannelFunder } from "../src/funder.js";
 import { channelDeposit } from "../src/schemes.js";
 
 const NET: YcashNetwork = "ycash:regtest";
@@ -60,7 +59,8 @@ describe("channelDeposit", () => {
   });
 });
 
-describe("wifChannelFunder", () => {
+// A WIF agent funds both assets' channels with the mechanism's utxoSourceFunder (schemes.ts).
+describe("utxoSourceFunder as the WIF channel funder", () => {
   const priv = new Uint8Array(32).fill(5);
   const hash = tx.hash160(tx.pubkeyFromPriv(priv));
   const script = tx.p2pkhScript(hash);
@@ -82,7 +82,7 @@ describe("wifChannelFunder", () => {
 
   it("funds a YED channel with a TRANSFER of D to vout 0 and YED change to the key, and reserves both inputs", async () => {
     const { s, reserved } = source();
-    const hex = await wifChannelFunder(priv, s).fund({ network: NET, redeemScript, value: 25_000n, branchId: 0x19bd2d2f, asset: ASSET_YED, deposit: 500n });
+    const hex = await utxoSourceFunder(priv, s).fund({ network: NET, redeemScript, value: 25_000n, branchId: 0x19bd2d2f, asset: ASSET_YED, deposit: 500n });
     const t = tx.parseTx(hex);
     const found = yed.findPayload(t.vout);
     expect(found && "payload" in found ? found.payload : undefined).toMatchObject({ type: "transfer", assignments: [{ vout: 0, cents: 500 }, { vout: 1, cents: 300 }] });
@@ -91,6 +91,6 @@ describe("wifChannelFunder", () => {
   });
 
   it("refuses when another spend took a coin meanwhile", async () => {
-    await expect(wifChannelFunder(priv, source(false).s).fund({ network: NET, redeemScript, value: 25_000n, branchId: 0x19bd2d2f, asset: ASSET_YED, deposit: 500n })).rejects.toThrow(/try again/);
+    await expect(utxoSourceFunder(priv, source(false).s).fund({ network: NET, redeemScript, value: 25_000n, branchId: 0x19bd2d2f, asset: ASSET_YED, deposit: 500n })).rejects.toThrow(/try again/);
   });
 });

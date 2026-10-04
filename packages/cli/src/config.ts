@@ -28,6 +28,8 @@ export interface CliConfig {
   maxDepositCents?: bigint;
   /** The most a channel this CLI opens may lock, zatoshis; default 1 YEC, whatever the server allows. */
   maxDepositZat?: bigint;
+  /** The largest server closeFee a channel this CLI opens may lock, zatoshis, both assets (default the mechanism's 5,000; plan X-F50). */
+  maxCloseFeeZat?: bigint;
   /** Coins held by signed, unconfirmed spends, shared by every run (default next to the channel store). */
   reservationsPath: string;
   /** `pay --count` */
@@ -58,7 +60,11 @@ payer:               --wif / X402_WIF (a local key; default: the node's wallet s
 other:               --network / X402_NETWORK (default ycash:regtest), --channels FILE / X402_CHANNEL_STORE
                      (default ~/.x402-ycash/channels.json), --max-payment ZAT / X402_MAX_PAYMENT_ZAT (default 1000000),
                      --max-deposit ZAT / X402_MAX_DEPOSIT_ZAT (default 100000000, 1 YEC), --reservations FILE /
-                     X402_RESERVATIONS (default reservations.json next to the channel store)
+                     X402_RESERVATIONS (default reservations.json next to the channel store),
+                     --max-close-fee ZAT / X402_MAX_CLOSE_FEE_ZAT (the largest server closeFee a channel may lock;
+                     default 5000)
+channels:            the remainder of every close and refund returns to the payer: the WIF key's address, or a new
+                     address of the node's wallet (a Yellowback address for YED)
 YED:                 --asset YED picks a route's YED requirements; --deposit is then in cents (at least 100).
                      --max-payment-yed CENTS / X402_MAX_PAYMENT_YED_CENTS (default 100, $1.00),
                      --max-deposit-yed CENTS / X402_MAX_DEPOSIT_YED_CENTS (default 5000, $50).
@@ -83,6 +89,7 @@ const OPTIONS = {
   "max-deposit": { type: "string" },
   "max-payment-yed": { type: "string" },
   "max-deposit-yed": { type: "string" },
+  "max-close-fee": { type: "string" },
   asset: { type: "string" },
   reservations: { type: "string" },
   count: { type: "string" },
@@ -176,6 +183,7 @@ export function loadCliConfig(args: ParsedArgs, env: Env = process.env, node?: Y
   const depositCents = asset === ASSET_YED ? cents("--deposit", f.deposit, 100n) : undefined;
   const maxDepositCents = cents("--max-deposit-yed", f["max-deposit-yed"] ?? env.X402_MAX_DEPOSIT_YED_CENTS, 100n);
   const maxDepositZat = zat("--max-deposit", f["max-deposit"] ?? env.X402_MAX_DEPOSIT_ZAT);
+  const maxCloseFeeZat = zat("--max-close-fee", f["max-close-fee"] ?? env.X402_MAX_CLOSE_FEE_ZAT);
   const channelStorePath = f.channels ?? env.X402_CHANNEL_STORE ?? join(homedir(), ".x402-ycash", "channels.json");
   return {
     network,
@@ -192,6 +200,7 @@ export function loadCliConfig(args: ParsedArgs, env: Env = process.env, node?: Y
     ...(shieldedFrom ? { shieldedFrom } : {}),
     ...(depositZat !== undefined ? { depositZat } : {}),
     ...(maxDepositZat !== undefined ? { maxDepositZat } : {}),
+    ...(maxCloseFeeZat !== undefined ? { maxCloseFeeZat } : {}),
     ...(refundTo ? { refundTo } : {}),
   };
 }

@@ -11,11 +11,11 @@ import {
   FileCoinReservationStore,
   rpcWalletFunder,
   ShieldedExactClient,
+  utxoSourceFunder,
   type YcashNetwork,
   type YcashRpc,
 } from "x402-ycash-mechanism";
 import type { AgentSigner } from "./config.js";
-import { wifChannelFunder } from "./funder.js";
 
 export interface ClientSchemeDeps {
   network: YcashNetwork;
@@ -32,6 +32,8 @@ export interface ClientSchemeDeps {
   yedChannelDepositCents?: bigint;
   /** YED channels: the client's cap on D, cents (default $50). */
   yedChannelMaxDepositCents?: bigint;
+  /** batch-settlement: the largest server closeFee accepted, zatoshis, for both assets (default 5,000). */
+  channelMaxCloseFeeZat?: bigint;
 }
 
 /**
@@ -76,7 +78,8 @@ export const registerClientSchemes: RegisterClientSchemes = (client, deps) => {
 
   // batch-settlement: opens a channel on the first 402, then one voucher per request.
   // YEC or YED, as the route's 402 asks: the WIF funder spends the key's token outputs for YED.
-  const funder = deps.signer.kind === "wif" && source ? wifChannelFunder(deps.signer.privKey, source) : rpcWalletFunder(deps.node, held);
+  // The channel's remainder returns to the funder: the WIF key's address or a new wallet address.
+  const funder = deps.signer.kind === "wif" && source ? utxoSourceFunder(deps.signer.privKey, source) : rpcWalletFunder(deps.node, held);
   const deposits = {
     ...(deps.channelDepositZat !== undefined ? { [ASSET_YEC]: deps.channelDepositZat } : {}),
     ...(deps.yedChannelDepositCents !== undefined ? { [ASSET_YED]: deps.yedChannelDepositCents } : {}),
@@ -92,6 +95,7 @@ export const registerClientSchemes: RegisterClientSchemes = (client, deps) => {
     // A deposit is in its asset's unit (zatoshis or cents), so it applies to that asset's channels only.
     ...(Object.keys(deposits).length > 0 ? { deposit: channelDeposit(deposits, maxDeposit) } : {}),
     ...(Object.keys(maxDeposit).length > 0 ? { maxDeposit } : {}),
+    ...(deps.channelMaxCloseFeeZat !== undefined ? { maxCloseFee: { [ASSET_YEC]: deps.channelMaxCloseFeeZat, [ASSET_YED]: deps.channelMaxCloseFeeZat } } : {}),
   });
   client.register(deps.network, channels);
 
