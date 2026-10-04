@@ -51,7 +51,18 @@ async function tokensOf(address: string): Promise<{ txid: string; vout: number; 
 async function ensureYed(cents: number): Promise<void> {
   const balance = async () => (await d.wallet.call<{ confirmedCents: number }>("yed_getbalance")).confirmedCents;
   if ((await balance()) >= cents) return;
-  await d.wallet.call("yed_mint", [cents, 48, "", "", false]);
+  // Blocks mined by the stock node carry no pool quote; after a run of them the price window is
+  // empty and the mint refuses (mintpol-no-price). Pool blocks carry quotes: mine there until it mints.
+  await waitFor(async () => {
+    try {
+      await d.wallet.call("yed_mint", [cents, 48, "", "", false]);
+      return true;
+    } catch (e) {
+      if (!/no-price|price/i.test((e as Error).message)) throw e;
+      await d.mine(4, d.pool);
+      return false;
+    }
+  }, { timeoutMs: 180_000, pollMs: 100, what: "a mint price" });
   await waitFor(async () => (await d.mine(1), (await balance()) >= cents), { timeoutMs: 180_000, pollMs: 500, what: "the MINT" });
 }
 
