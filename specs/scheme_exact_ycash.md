@@ -228,7 +228,7 @@ requirements; a client MUST NOT infer it from `/supported`.
       "network": "ycash:mainnet",
       "asset": "YEC",
       "amount": "250000",
-      "payTo": "s1VgKr7cDvKvW2T4Lg3xJbWhAa2UZxnZQ3m",
+      "payTo": "s1bAnoUebGvEU7jBJ5zQm7soeSn7XYM3yah",
       "maxTimeoutSeconds": 300,
       "extra": {
         "assetTransferMethod": "transparent",
@@ -324,7 +324,7 @@ the merchant's wallet ([Security Considerations](#viewing-key-custody)).
     "network": "ycash:mainnet",
     "asset": "YEC",
     "amount": "250000",
-    "payTo": "s1VgKr7cDvKvW2T4Lg3xJbWhAa2UZxnZQ3m",
+    "payTo": "s1bAnoUebGvEU7jBJ5zQm7soeSn7XYM3yah",
     "maxTimeoutSeconds": 300,
     "extra": { "assetTransferMethod": "transparent", "areFeesSponsored": false, "confirmationPolicy": { "confirmations": -1 } }
   },

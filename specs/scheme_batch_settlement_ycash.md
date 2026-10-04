@@ -163,7 +163,7 @@ sequenceDiagram
   "network": "ycash:mainnet",
   "asset": "YEC",
   "amount": "2000",
-  "payTo": "s1VgKr7cDvKvW2T4Lg3xJbWhAa2UZxnZQ3m",
+  "payTo": "s1bAnoUebGvEU7jBJ5zQm7soeSn7XYM3yah",
   "maxTimeoutSeconds": 300,
   "extra": {
     "serverPubKey": "0289bb2b0ac2056bbc117fcee21dc12b8147066cea2d6ff9a1a650b8e444378435",
@@ -205,7 +205,7 @@ close fee.
 ```json
 {
   "x402Version": 2,
-  "accepted": { "scheme": "batch-settlement", "network": "ycash:mainnet", "asset": "YEC", "amount": "2000", "payTo": "s1VgKr7cDvKvW2T4Lg3xJbWhAa2UZxnZQ3m", "maxTimeoutSeconds": 300, "extra": { "serverPubKey": "0289bb…8435", "minLockBlocks": 1152, "closeMarginBlocks": 96, "maxDeposit": "100000000", "closeFee": "1500" } },
+  "accepted": { "scheme": "batch-settlement", "network": "ycash:mainnet", "asset": "YEC", "amount": "2000", "payTo": "s1bAnoUebGvEU7jBJ5zQm7soeSn7XYM3yah", "maxTimeoutSeconds": 300, "extra": { "serverPubKey": "0289bb…8435", "minLockBlocks": 1152, "closeMarginBlocks": 96, "maxDeposit": "100000000", "closeFee": "1500" } },
   "payload": {
     "type": "open",
     "fundingTx": "0400008085202f8901…",
