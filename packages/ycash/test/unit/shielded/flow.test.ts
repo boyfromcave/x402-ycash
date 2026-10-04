@@ -28,6 +28,8 @@ class MockWallet {
   divCalls = 0;
   notes = new Map<string, ZReceived[]>();
   repeat: string | undefined;
+  /** A viewing-key-only wallet: addresses it has seen no note at are refused with -5. */
+  viewingKeyOnly = false;
   price: Partial<YedPrice> | Error = { height: 10, pMid: 300_000, pFast: null, pSlow: null };
 
   async zGetNewAddress(): Promise<string> {
@@ -41,6 +43,9 @@ class MockWallet {
   }
   async zListReceivedByAddress(address: string, minconf = 1): Promise<ZReceived[]> {
     expect(minconf).toBe(0);
+    if (this.viewingKeyOnly && !this.notes.has(address)) {
+      throw new RpcError(-5, "From address does not belong to this node, zaddr spending key or viewing key not found.", "z_listreceivedbyaddress");
+    }
     return this.notes.get(address) ?? [];
   }
   async getBlockchainInfo(): Promise<BlockchainInfo> {
@@ -275,6 +280,14 @@ describe("sapling-proof facilitator: settle", () => {
     t0 = Date.now();
     expect(await makeHandler({ noteWaitMs: 5_000 }).settle(payloadFor(req, TXID.toUpperCase()), req)).toMatchObject({ errorReason: ERR.unknownInstrument });
     expect(Date.now() - t0).toBeLessThan(200);
+  });
+  it("a viewing-key-only node refuses an address it has seen no note at (-5): that is not received yet, then settles", async () => {
+    wallet.viewingKeyOnly = true;
+    const h = makeHandler({ noteWaitMs: 300 });
+    const req = await h.enhanceRequirements(template(), RESOURCE);
+    expect(await h.settle(payloadFor(req), req)).toMatchObject({ errorReason: ERR.notReceived });
+    setTimeout(() => wallet.pay(req.payTo, 1_500_000, req.extra.memo as string, 1), 50);
+    expect(await h.settle(payloadFor(req), req)).toMatchObject({ success: true });
   });
   it("binds the proof to the request: a txid that paid another request settles nothing here", async () => {
     const a = await issue();

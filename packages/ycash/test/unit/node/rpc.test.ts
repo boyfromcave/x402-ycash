@@ -102,6 +102,9 @@ describe("wrappers", () => {
     expect(node.requests[0]?.params).toEqual(["from", [{ address: "zs", amount: "0.00000001", memo: "ab" }]]);
     await rpc().zSendMany("from", [{ address: "zs", amount: 1n }], { privacyPolicy: "AllowRevealedSenders" });
     expect(node.requests[1]?.params).toEqual(["from", [{ address: "zs", amount: "0.00000001" }], 1, null, "AllowRevealedSenders"]);
+    // v4.5.0 refuses a string fee ("JSON value is not a number as expected"): it goes as a number.
+    await rpc().zSendMany("from", [{ address: "zs", amount: 1n }], { fee: 10_000n });
+    expect(node.requests[2]?.params).toEqual(["from", [{ address: "zs", amount: "0.00000001" }], 1, 0.0001]);
   });
 
   it("waitForOperation polls until success, and surfaces a failure", async () => {

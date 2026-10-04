@@ -4,7 +4,7 @@
 // below its policy depth, or any failure before the claim, holds nothing.
 import type { PaymentPayload, PaymentRequirements, SettleResponse, VerifyResponse } from "@x402/core/types";
 import { ASSET_YEC, YCASH_NETWORKS, type YcashNetwork } from "../constants.js";
-import { yecToZat, type BlockchainInfo, type ZReceived } from "../node/index.js";
+import { RPC_INVALID_ADDRESS_OR_KEY, RpcError, yecToZat, type BlockchainInfo, type ZReceived } from "../node/index.js";
 import { RETAIN_FOREVER, consumptionKey, type SettlementStore } from "../store/index.js";
 import {
   ASSET_TRANSFER_METHOD_SAPLING_PROOF,
@@ -172,6 +172,25 @@ export class ShieldedExactFacilitator {
   }
 
   /**
+   * The wallet's notes at `payTo`, mempool included. A wallet that holds only the viewing key knows
+   * an offline-issued address only once a note to it has been decrypted (the wallet then adds the
+   * address: `ycash-dd/src/wallet/wallet.cpp:2850-2856`); until then both lines refuse the address
+   * with -5 (`ycash-dd/src/wallet/rpcwallet.cpp:3514-3515`, `ycash6/src/wallet/rpcwallet.cpp:4278-4279`),
+   * which here means no note yet.
+   *
+   * @param payTo - The issued address.
+   * @returns The notes the wallet holds at payTo; none when it does not know the address yet.
+   */
+  private async receivedAt(payTo: string): Promise<ZReceived[]> {
+    try {
+      return await this.config.rpc.zListReceivedByAddress(payTo, 0);
+    } catch (e) {
+      if (e instanceof RpcError && !e.transport && e.code === RPC_INVALID_ADDRESS_OR_KEY) return [];
+      throw e;
+    }
+  }
+
+  /**
    * The checks, repeated while the only failure is a note not yet received, up to noteWaitMs.
    *
    * @param payload - The client's payload.
@@ -242,7 +261,7 @@ export class ShieldedExactFacilitator {
     if (typeof txid !== "string" || !TXID_REGEX.test(txid)) return fail(ERR.txidMalformed, "payload.txid is not 64 lowercase hex characters");
 
     // 4. Notes of this txid at payTo, mempool included (minconf 0).
-    const notes = (await this.config.rpc.zListReceivedByAddress(requirements.payTo, 0)).filter((n) => n.txid === txid);
+    const notes = (await this.receivedAt(requirements.payTo)).filter((n) => n.txid === txid);
     if (notes.length === 0) return fail(ERR.notReceived, `the merchant wallet has no note of ${txid} at payTo (yet)`, txid);
 
     // 5. Memo: at least one note carries the commitment.
