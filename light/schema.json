@@ -1,0 +1,64 @@
+{
+  "$comment": "x402-light JSON-RPC 2.0 interface (HTTP POST on loopback). Amounts are zatoshi integers; txids are display-order hex; branch ids are 8 hex digits as getblockchaininfo prints them.",
+  "transport": {
+    "http": "POST / with a JSON-RPC 2.0 body; the server prints `listening 127.0.0.1:PORT` on stdout when bound",
+    "cli": "x402-light once --data DIR --lwd ADDR [--params DIR] [--network N] METHOD 'PARAMS_JSON'"
+  },
+  "methods": {
+    "status": {
+      "params": { "minConfirmations": "uint (default 1)" },
+      "result": {
+        "network": "mainnet|testnet|regtest",
+        "lwd": "string", "lwdHeight": "uint (the node's height, per GetLightdInfo)", "lwdLatestHeight": "uint (the compact-block cache tip, per GetLatestBlock; what sync reads)", "lwdChainName": "main|test|regtest", "lwdBranchId": "hex (the chaintip's, X-F71)",
+        "branchIdNextBlock": "hex (our parameters at lwdHeight+1; what build signs with)",
+        "height": "uint|null (wallet's view of the tip)", "scannedHeight": "uint|null", "synced": "bool",
+        "hasKey": "bool", "address": "string|null", "minConfirmations": "uint",
+        "balance": { "spendableZat": "uint", "pendingChangeZat": "uint", "pendingIncomingZat": "uint", "totalZat": "uint" },
+        "mempool": { "txCount": "uint", "incomingZat": "uint (0-conf notes to us)", "incomingTxids": ["txid"], "spendingTxids": ["txid (mempool txs spending our notes)"] }
+      }
+    },
+    "address": {
+      "params": null,
+      "result": { "address": "ys1…|ytestsapling1…|yregtestsapling1…", "fvk": "zxviews…", "birthday": "uint", "network": "string" }
+    },
+    "export_fvk": {
+      "params": null,
+      "result": { "fvk": "zxviews… (z_importviewingkey form)", "address": "string", "birthday": "uint" }
+    },
+    "import_key": {
+      "params": { "key": "secret-extended-key-… or a BIP-39 phrase (ZIP-32 m/32'/coin'/0')", "birthday": "uint (default: current tip)" },
+      "result": "same as address"
+    },
+    "sync": {
+      "params": { "batchSize": "uint (default 1000)" },
+      "result": { "tipHeight": "uint", "scannedHeight": "uint|null", "blocksScanned": "uint", "rangesScanned": "uint", "reorgs": "uint", "receivedNotes": "uint", "spentNotes": "uint", "millis": "uint", "branchIdChecked": "bool" }
+    },
+    "list_notes": {
+      "params": { "minConfirmations": "uint (default 1)" },
+      "result": [ { "txid": "hex", "outputIndex": "uint", "valueZat": "uint", "minedHeight": "uint|null" } ]
+    },
+    "build": {
+      "params": { "to": "Sapling address", "amountZat": "uint", "memoHex": "hex ≤512 bytes (optional)", "memo": "utf-8 text (optional, if memoHex absent)", "fee": "uint zat (optional; default ZIP-317 conventional)", "minConfirmations": "uint (default 1)" },
+      "result": { "txid": "hex", "txHex": "signed raw v4 transaction, NOT broadcast", "feeZat": "uint|null", "targetHeight": "uint", "expiryHeight": "uint", "branchId": "hex", "version": "string" },
+      "note": "The wallet records the transaction and treats its inputs as spent until expiryHeight passes unbroadcast."
+    },
+    "send": {
+      "params": "same as build",
+      "result": { "txid": "hex", "txHex": "hex", "feeZat": "uint|null", "expiryHeight": "uint", "branchId": "hex" }
+    },
+    "broadcast": {
+      "params": { "txHex": "hex" },
+      "result": { "txid": "hex (as the node reports it)" }
+    }
+  },
+  "errors": {
+    "-32700": "parse error",
+    "-32600": "invalid request",
+    "-32601": "method not found",
+    "-32602": "invalid params (bad address, amount, memo, hex, birthday or key)",
+    "-32000": "wallet error (db, lightwalletd, proposal, proving, cache)",
+    "-32001": "wallet has not synced yet",
+    "-32002": "no spending key imported",
+    "-32003": "lightwalletd/node rejected the transaction (message carries the node's reason)"
+  }
+}
