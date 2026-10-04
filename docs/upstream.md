@@ -6,7 +6,7 @@ tests, e2e, examples, a changeset and a publishing workflow, and PR 3 adds other
 repository is where the Ycash bindings are built and proved. The upstream contribution is
 **generated** from it, so it can be refreshed after every change here.
 
-**Status (2026-10-03): staged locally, not published.** No issue, PR or package has been opened or
+**Status (2026-10-04): staged locally, not published.** No issue, PR or package has been opened or
 pushed. The owner decides when (plan X-9). The staged branches, the upstream checks that pass and
 fail, the drafted PR bodies and the owner's open decisions are in
 `wt/scratch/x402-upstream-prep/PUBLISHING.md` in the Yellowback workspace.
@@ -32,6 +32,7 @@ fail, the drafted PR bodies and the owner's open decisions are in
 specs/scheme_exact_ycash.md            → specs/schemes/exact/scheme_exact_ycash.md
 specs/scheme_batch_settlement_ycash.md → specs/schemes/batch-settlement/scheme_batch_settlement_ycash.md
 packages/ycash/src                     → typescript/packages/mechanisms/ycash/src   (batch/ → batch-settlement/)
+packages/ycash/proto                   → typescript/packages/mechanisms/ycash/proto (read by src/lwd at run time)
 packages/ycash/test/unit               → …/test/unit             (unit/flow/*.test.ts → test/integrations/)
 packages/ycash/test/devnet             → …/test/integrations/*.devnet.test.ts   (not the x4m measurement)
 vectors/**/*.json                      → …/test/vectors/
@@ -86,19 +87,31 @@ When `fork.patch` no longer applies (upstream moved): stage onto the older base,
 branch onto the new upstream, resolve the conflicts there, and regenerate the patch:
 `git -C <fork> diff main ycash-binding -- .github e2e examples typescript/.changeset typescript/README.md typescript/package.json > tools/upstream/fork.patch`.
 
-## Upstream checks (2026-10-03)
+## Upstream checks (2026-10-04)
+
+Restaged from `x402/final` (`47db56e`, on `main` at `add0578`) into the fork: `ycash-spec` at
+`c93dcb49`, `ycash-binding` at `778e1e24`. Node 24.13.0, pnpm 11.1.1.
 
 | Check | Result |
 |---|---|
 | install, build (tsup ESM/CJS/d.ts), `tsc --noEmit`, `format:check`, `verify:exports` | pass |
-| `test` (560 tests; coverage 94% lines, 90% branches, thresholds 80%) | pass |
-| `test:integration` (in-process flows; devnet suites skip without `X402_DEVNET_JSON`) | pass |
-| `test:integration` on a ycash-dd regtest devnet | 57 pass, 1 skipped (the stratum-pool case needs this workspace) |
-| `lint:check` | **fail**: 1,028 errors. Upstream requires JSDoc with `@param` and `@returns` on every function and method (970 errors), plus `member-ordering` (52) and `_`-only unused arguments (6) |
+| `lint:check` (upstream's eslint config, JSDoc and member-ordering rules included) | pass: 0 errors, 0 warnings |
+| `test` (608 tests in 40 files; coverage 94.2% lines, 89.6% branches, 95.1% functions; thresholds 80%) | pass |
+| `test:integration` (5 in-process flow tests; the 6 devnet suites, 53 tests, skip without `X402_DEVNET_JSON`) | pass |
+| `test:integration` on a ycash-dd (4.5.0) regtest devnet | 57 pass, 1 skipped (the stratum-pool case needs this workspace), 138 s |
+| `test:integration` on a ycash6 (6.21.0) regtest devnet | 57 pass, 1 skipped, 298 s |
 
-The lint gap blocks PR 2's CI. It belongs here, not in the transform. Enable
-`jsdoc/require-jsdoc`, `jsdoc/require-param`, `jsdoc/require-returns` and
-`@typescript-eslint/member-ordering` in `eslint.config.js`, fix the source, and restage.
+The staged package carries no plan reference: a grep of `src/`, `test/` and `README.md` for
+`plan `, `X-F`, phase and decision ids and `docs/plans` finds none, and the remaining ids (`R-n`,
+`S-n`, `Y-n`, `Z-3`, `G-2`) are rows of the specs' Appendix A or Yellowback rule ids cited with the
+node file (`XFER-1`, `MINT-3`, `IN-3`, `ACT-4`). Two leftovers the transform prints are code, not
+prose: a devnet test that picks the node checkout to drive, and a vector check of the `line` field.
+
+**Since the lwd and rehearse merges** the package needs `@grpc/grpc-js`, `@grpc/proto-loader` (the
+lightwalletd adapter, `src/lwd`) and `@noble/curves` 2.x (the offline Sapling issuer). The overlay
+lists them, `stage.sh` copies `proto/` into the package (and `files` ships it), and the tsup config
+shims `import.meta.url` in the CJS build, which `src/lwd` uses to find the protos. Upstream's
+lockfile already has `@noble/curves` 1.x (for `extensions`); 2.x is a second major there.
 
 ## Differences from upstream conventions, kept on purpose
 
