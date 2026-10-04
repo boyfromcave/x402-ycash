@@ -39,7 +39,9 @@ describe("parsePrice", () => {
   it("YedGetPriceSource reads yed_getprice", async () => {
     const src = new exact.YedGetPriceSource({ yedGetPrice: async () => ({ pMid: 40_000_000, pFast: 1 }) as never });
     expect(await src.microUsdPerYec(NETWORK)).toBe(40_000_000n);
-    await expect(new exact.YedGetPriceSource({ yedGetPrice: async () => ({ pMid: null }) as never }).microUsdPerYec(NETWORK)).rejects.toThrow(/pMid/);
+    expect(await new exact.YedGetPriceSource({ yedGetPrice: async () => ({ pMid: null, pSlow: 30_000_000 }) as never }).microUsdPerYec(NETWORK)).toBe(30_000_000n);
+    await expect(new exact.YedGetPriceSource({ yedGetPrice: async () => ({ pMid: null, pSlow: null }) as never }).microUsdPerYec(NETWORK)).rejects.toThrow(/pMid/);
+    expect(await new exact.YedGetPriceSource({ yedGetPrice: async () => ({ pFast: 7 }) as never }, "pFast").microUsdPerYec(NETWORK)).toBe(7n);
   });
 });
 
@@ -48,6 +50,10 @@ describe("enhancePaymentRequirements", () => {
     const s = new exact.ExactYcashServerScheme({ priceSource: $50 });
     expect((await s.enhancePaymentRequirements(base("2000000"), kind(), [])).extra).toEqual({ assetTransferMethod: "transparent", areFeesSponsored: false, confirmationPolicy: { confirmations: -1 } });
     expect((await s.enhancePaymentRequirements(base("2000001"), kind(), [])).extra.confirmationPolicy).toEqual({ confirmations: 1 });
+  });
+  it("an unavailable price falls back to 1", async () => {
+    const s = new exact.ExactYcashServerScheme({ priceSource: { microUsdPerYec: async () => { throw new Error("no price"); } } });
+    expect((await s.enhancePaymentRequirements(base("100"), kind(), [])).extra.confirmationPolicy).toEqual({ confirmations: 1 });
   });
   it("an explicit cap, or none without a price source", async () => {
     expect((await new exact.ExactYcashServerScheme({ zeroConfCapZat: 10n ** 6n }).enhancePaymentRequirements(base("1000000"), kind(), [])).extra.confirmationPolicy).toEqual({ confirmations: -1 });

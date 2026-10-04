@@ -115,7 +115,11 @@ export class ExactYcashServerScheme implements SchemeNetworkServer {
   private async defaultConfirmations(req: PaymentRequirements): Promise<number> {
     if (req.asset !== ASSET_YEC) return 1;
     let cap = this.config.zeroConfCapZat;
-    if (cap === undefined && this.config.priceSource) cap = microUsdToZat(ONE_DOLLAR_MICRO_USD, await this.config.priceSource.microUsdPerYec(req.network));
+    if (cap === undefined && this.config.priceSource) {
+      // No price, no zero-confirmation default: 1 is the safe side.
+      const rate = await this.config.priceSource.microUsdPerYec(req.network).catch(() => undefined);
+      if (rate !== undefined) cap = microUsdToZat(ONE_DOLLAR_MICRO_USD, rate);
+    }
     return cap !== undefined && BigInt(req.amount) <= cap ? -1 : 1;
   }
 }

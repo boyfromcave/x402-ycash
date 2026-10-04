@@ -80,7 +80,8 @@ export class RpcWalletSigner implements YcashClientSigner {
 
   private async candidates(): Promise<Coin[]> {
     // listunspent omits locked coins, so a coin held by a pending payment is not offered again.
-    const unspent = (await this.rpc.listUnspent(1)).filter((u) => u.spendable);
+    // Coinbase outputs are left out: outside regtest, consensus makes them go to the shielded pool first.
+    const unspent = (await this.rpc.listUnspent(1)).filter((u) => u.spendable && !u.generated);
     const yed = await this.yedOutpoints();
     const coins: Coin[] = [];
     for (const u of unspent) {

@@ -11,21 +11,28 @@ export interface YecPriceSource {
 export type YedPriceField = "pFast" | "pMid" | "pSlow" | "pMint" | "pClaim";
 
 /**
- * `yed_getprice`'s median of the chain's price windows. pMid by default: steadier than pFast,
- * fresher than pSlow; a merchant may prefer another field.
+ * `yed_getprice`'s price windows, first available of `fields`: pMid (steadier than pFast, fresher
+ * than pSlow), then pSlow. A window is null until enough recent blocks carry pool quotes, so a
+ * single field can go missing on a quiet chain.
  */
 export class YedGetPriceSource implements YecPriceSource {
+  private readonly fields: readonly YedPriceField[];
+
   constructor(
     private readonly rpc: Pick<YcashRpc, "yedGetPrice">,
-    private readonly field: YedPriceField = "pMid",
-  ) {}
+    fields: YedPriceField | readonly YedPriceField[] = ["pMid", "pSlow"],
+  ) {
+    this.fields = typeof fields === "string" ? [fields] : fields;
+  }
 
   async microUsdPerYec(_network: string): Promise<bigint> {
     void _network;
     const p = await this.rpc.yedGetPrice();
-    const v = p[this.field];
-    if (typeof v !== "number" || !Number.isSafeInteger(v) || v <= 0) throw new Error(`yed_getprice has no ${this.field} price`);
-    return BigInt(v);
+    for (const f of this.fields) {
+      const v = p[f];
+      if (typeof v === "number" && Number.isSafeInteger(v) && v > 0) return BigInt(v);
+    }
+    throw new Error(`yed_getprice has no ${this.fields.join("/")} price`);
   }
 }
 
