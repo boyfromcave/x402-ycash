@@ -14,6 +14,9 @@ import { InMemorySettlementStore } from "../../src/store/index.js";
 import * as T from "../../src/tx/index.js";
 import { describeDevnet, devnet, record, waitFor, type Devnet } from "./harness.js";
 
+/** The next block's branch id (Canopy 19bd2d2f, or Vault 6d5b7a31 past that upgrade), read once the devnet is up. */
+let nextBranch = 0x19bd2d2f;
+
 const NET = "ycash:regtest" as const;
 const E = batch.BatchError;
 const MIN_LOCK = 30;
@@ -159,6 +162,7 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
 
   beforeAll(async () => {
     d = await devnet();
+    nextBranch = parseInt((await d.wallet.getBlockchainInfo()).consensus.nextblock, 16) >>> 0;
     expect(d.caps.yellowback).toBe(true);
     await ensureYed(20_000);
     payer = newKey();
@@ -407,7 +411,7 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
     record(d.line, "YED refund", { refundHeight: rec.refundHeight, txid, assignments: (await d.wallet.yedDecodePayload(hex)).assignments });
   });
 
-  it("a hand-built burning voucher: refused by the facilitator's verify; skipped by a strict pool's template, mined only by stock node 1", async () => {
+  it("a hand-built burning voucher: refused by the facilitator's verify; skipped by a strict pool's template (in it past the vault upgrade), mined by stock node 1", async () => {
     const p = await party(300n);
     const { channelId } = await open(p);
     const rec = (await p.client.storage.get(channelId))!;
@@ -436,7 +440,11 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
     await d.syncMempools();
     const template = await d.pool.call<{ transactions: { hash: string }[] }>("getblocktemplate", [{}]);
     const inTemplate = template.transactions.some((t) => t.hash === burnTxid);
-    expect(inTemplate).toBe(false);
+    // Past the vault upgrade (rpcversion 5) YED is consensus, a burning TRANSFER is valid (upgrade
+    // plan finding (34)) and templates follow validity (TPL-1/2, MP-1's rule content retired):
+    // every pool includes it. Before it, a strict pool's template skips it.
+    const templateFollowsValidity = Number((await d.wallet.yedGetInfo()).rpcversion) >= 5;
+    expect(inTemplate).toBe(templateFollowsValidity);
     const [hash] = await d.mine(1, d.stock);
     expect((await d.stock.call<{ tx: string[] }>("getblock", [hash])).tx).toContain(burnTxid);
     const after = await supply();
@@ -444,7 +452,7 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
     record(d.line, "burning voucher", {
       overlay: { verdict: overlay.verdict, yedIn: overlay.yedIn, yedOut: overlay.yedOut, burned: overlay.burned },
       facilitator: { voucher: asVoucher.invalidReason, claim: asClaim.invalidReason },
-      strictPoolTemplate: inTemplate ? "included" : "skipped", minedBy: "node 1 (stock)", supplyBefore: before, supplyAfter: after,
+      strictPoolTemplate: inTemplate ? "included" : "skipped", templateFollowsValidity, minedBy: "node 1 (stock)", supplyBefore: before, supplyAfter: after,
     });
   });
 });
@@ -453,7 +461,7 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
 function signP2pkh(tx: T.Tx, k: Key, values: bigint[]): string {
   const pub = T.pubkeyFromPriv(k.priv);
   values.forEach((v, i) => {
-    tx.vin[i]!.scriptSig = T.p2pkhScriptSig(T.signInput(T.sighashV4(tx, i, k.script, v, T.SIGHASH.ALL, 0x19bd2d2f), k.priv), pub);
+    tx.vin[i]!.scriptSig = T.p2pkhScriptSig(T.signInput(T.sighashV4(tx, i, k.script, v, T.SIGHASH.ALL, nextBranch), k.priv), pub);
   });
   return T.serializeTxHex(tx);
 }

@@ -36,6 +36,9 @@ import {
 } from "../../src/tx/index.js";
 import { DEVNET_JSON, describeDevnet, devnet, record, waitFor, type Devnet } from "./harness.js";
 
+/** The next block's branch id (Canopy 19bd2d2f, or Vault 6d5b7a31 past that upgrade), read once the devnet is up. */
+let nextBranch = 0x19bd2d2f;
+
 const NETWORK = "ycash:regtest" as const;
 const AMOUNT = 250_000n; // 0.0025 YEC
 const here = dirname(fileURLToPath(import.meta.url));
@@ -143,7 +146,7 @@ function signLocal(p: Payer, coins: { txid: string; vout: number; value: bigint;
   const tx = newTx({ vin: coins.map((c) => ({ prevout: { txid: c.txid, vout: c.vout }, scriptSig: new Uint8Array(), sequence: SEQUENCE_FINAL })), vout, expiryHeight });
   const pub = pubkeyFromPriv(p.priv);
   coins.forEach((c, i) => {
-    tx.vin[i]!.scriptSig = p2pkhScriptSig(signInput(sighashV4(tx, i, c.script ?? p.script, c.value, SIGHASH.ALL, 0x19bd2d2f), p.priv), pub);
+    tx.vin[i]!.scriptSig = p2pkhScriptSig(signInput(sighashV4(tx, i, c.script ?? p.script, c.value, SIGHASH.ALL, nextBranch), p.priv), pub);
   });
   return serializeTxHex(tx);
 }
@@ -160,6 +163,7 @@ describeDevnet("exact YEC through @x402/core on a live devnet", () => {
 
   beforeAll(async () => {
     d = await devnet();
+    nextBranch = parseInt((await d.wallet.getBlockchainInfo()).consensus.nextblock, 16) >>> 0;
     merchant = await d.stock.getNewAddress(); // the merchant's wallet is the stock node's
     stacks.push(await makeStack("yellowback", d.wallet), await makeStack("stock", d.stock));
     payer = newPayer();

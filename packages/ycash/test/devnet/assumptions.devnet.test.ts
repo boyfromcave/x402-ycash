@@ -193,7 +193,12 @@ describeDevnet("node assumptions on a live devnet", () => {
     const stock = await d.stock.getBlockchainInfo();
     record(d.line, "branch-id", { consensus: info.consensus, stockConsensus: stock.consensus, upgrades: Object.fromEntries(Object.entries(info.upgrades).map(([id, u]) => [id, `${u.name}@${u.activationheight}:${u.status}`])) });
     expect(stock.consensus).toEqual(info.consensus);
-    expect(info.consensus.nextblock).toBe("19bd2d2f"); // Canopy, on both lines' devnets
+    // The latest upgrade active at the next height: Canopy on both lines' devnets, Vault (6d5b7a31)
+    // past its activation on an upgrade/vault devnet (-nuparams=6d5b7a31:103).
+    const active = Object.entries(info.upgrades).filter(([, u]) => u.activationheight <= info.blocks + 1);
+    const latest = active.reduce((a, b) => (b[1].activationheight >= a[1].activationheight ? b : a));
+    expect(info.consensus.nextblock).toBe(latest[0]);
+    expect(["19bd2d2f", "6d5b7a31"]).toContain(info.consensus.nextblock);
   });
 
   it("Z-3: z_getnewdiversifiedaddress, and z_listreceivedbyaddress … 0 on an unconfirmed incoming payment with memo", async () => {
