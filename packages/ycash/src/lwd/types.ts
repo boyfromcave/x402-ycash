@@ -18,6 +18,16 @@ export interface LightdInfo {
   zcashdSubversion: string;
 }
 
+/** `YedChainInfo` (yellowback.proto:186-192): what a client needs to sign for the next block (X-F71). */
+export interface YedChainInfoMsg {
+  chainName: string;
+  blockHeight: string;
+  /** getblockchaininfo `consensus.chaintip`, hex. */
+  consensusBranchId: string;
+  /** getblockchaininfo `consensus.nextblock`, hex: differs from the chaintip's on the block before an upgrade. */
+  nextBlockBranchId: string;
+}
+
 /** `GetAddressUtxosReply` (service.proto:133-140); txid in internal (little-endian) byte order. */
 export interface AddressUtxoMsg {
   address: string;

@@ -1,5 +1,5 @@
-// Vendored unmodified (below this line) from lightwalletd-dd walletrpc/yellowback.proto at 32be188
-// (boyfromcave/lightwalletd-dd, branch feature/yellowback-price-attest). Do not edit: re-vendor.
+// Vendored unmodified (below this line) from lightwalletd-dd walletrpc/yellowback.proto at e81d1e1
+// (boyfromcave/lightwalletd-dd, branch hd/h5-light; adds GetChainInfo, 0b3448e). Do not edit: re-vendor.
 // Copyright (c) 2026 The Ycash developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
@@ -8,7 +8,7 @@
 // CompactTxStreamer (service.proto, which is not edited). Every method is a thin proxy of a
 // read-only yed_* RPC on the node this server already talks to; the server adds no rule and
 // holds no Yellowback state. Field names are the JSON names of the node's RPC contract
-// (ycash-dd/doc/yellowback-rpc-contract.json, rpcversion 3) so the contract's example values
+// (ycash-dd/doc/yellowback-rpc-contract.json, rpcversion 4) so the contract's example values
 // are the test fixtures and the JSON result unmarshals straight into these messages; a message
 // may carry a subset of a result's fields (unknown JSON fields are ignored), never a renamed one.
 // Plan: docs/plans/yellowback-lightwalletd-plan.md section 4.1.
@@ -67,6 +67,7 @@ message YellowbackInfo {
   YellowbackParams params = 11; int64 rpcversion = 12; int64 startHeight = 13; bool sunset = 14;
   string unhealthyReason = 15; bool valveTripped = 16; bool protectedByIndex = 17; bool rebuilt = 18;
   string serverVersion = 19;                                          // this server's, not the node's
+  bool mintRequiresArmed = 20;                                        // rpcversion 4 (hardening H-1): a mint needs the price ARMED
 }
 
 // ---- yed_getprice, yed_getstats, yed_getactivation ------------------------------------------
@@ -171,6 +172,21 @@ message YedAttestor {
   string status = 17; int64 statusHeight = 18; string weight = 19;
 }
 
+// ---- getblockchaininfo (the stock node RPC; the one message here not backed by a yed_* RPC) --
+
+// One network upgrade as the node's getblockchaininfo.upgrades lists it (key = branch id).
+message YedUpgrade { string branchId = 1; string name = 2; int64 activationHeight = 3; string status = 4; }
+// GetChainInfo: what a client needs to SIGN correctly. GetLightdInfo (service.proto, frozen) carries
+// consensus.chaintip only; a transaction built for the NEXT block must use consensus.nextblock, which
+// differs from chaintip exactly on the block before a network upgrade. Names follow LightdInfo's.
+message YedChainInfo {
+  string chainName = 1; uint64 blockHeight = 2; string bestBlockHash = 3;
+  string consensusBranchId = 4;                                     // getblockchaininfo.consensus.chaintip
+  string nextBlockBranchId = 5;                                     // getblockchaininfo.consensus.nextblock
+  uint64 saplingActivationHeight = 6;                               // upgrades["76b809bb"].activationheight, as LightdInfo reads it
+  repeated YedUpgrade upgrades = 7;                                 // every upgrade the node knows, by activationHeight then branchId
+}
+
 // ---- the service ---------------------------------------------------------------------------
 
 service YellowbackStreamer {
@@ -193,4 +209,5 @@ service YellowbackStreamer {
   rpc GetAttestations(Empty) returns (stream YedAttestation) {}
   rpc ListAttestors(HeightFilter) returns (stream YedAttestor) {}
   rpc GetAddressTokens(YedAddressList) returns (stream YedToken) {}     // Phase L2: yed_listtokens (node N1)
+  rpc GetChainInfo(Empty) returns (YedChainInfo) {}                      // x402 X-F71: getblockchaininfo.consensus.nextblock
 }

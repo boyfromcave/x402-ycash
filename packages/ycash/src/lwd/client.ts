@@ -9,7 +9,7 @@ import { Client, credentials, Metadata, status, type ServiceError } from "@grpc/
 import { loadSync, type MethodDefinition, type PackageDefinition, type ServiceDefinition } from "@grpc/proto-loader";
 import { RpcError, SendRawTransactionError } from "../node/errors.js";
 import { bytesToHex, hexToBytes } from "../tx/index.js";
-import type { AddressUtxoMsg, CompactTxMsg, LightdInfo, RawTransactionMsg, SendResponseMsg, YedTokenMsg, YedValidationMsg } from "./types.js";
+import type { AddressUtxoMsg, CompactTxMsg, LightdInfo, RawTransactionMsg, SendResponseMsg, YedChainInfoMsg, YedTokenMsg, YedValidationMsg } from "./types.js";
 import { parseLwdUrl } from "./url.js";
 
 const PACKAGE = "cash.z.wallet.sdk.rpc";
@@ -169,6 +169,17 @@ export class LwdClient {
    */
   getLightdInfo(): Promise<LightdInfo> {
     return this.unary("CompactTxStreamer", "GetLightdInfo", {});
+  }
+
+  /**
+   * `YellowbackStreamer.GetChainInfo` (lightwalletd-dd 0b3448e+): the tip with both the chaintip's
+   * and the next block's consensus branch id, which GetLightdInfo cannot carry (X-F71).
+   *
+   * @returns The chain name, tip height and both branch ids.
+   * @throws LwdError, `unimplemented` on a server without the service or older than 0b3448e.
+   */
+  getChainInfo(): Promise<YedChainInfoMsg> {
+    return this.unary("YellowbackStreamer", "GetChainInfo", {});
   }
 
   /**

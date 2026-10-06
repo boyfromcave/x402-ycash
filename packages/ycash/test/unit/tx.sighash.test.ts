@@ -4,6 +4,7 @@ import { SIGHASH, bytesToHex, newTx, p2pkhScript, sighashV4, type Tx } from "../
 
 const SAPLING = 0x76b809bb;
 const CANOPY = 0x19bd2d2f;
+const VAULT = 0x6d5b7a31; // the Ycash Vault network upgrade, after Canopy
 const code = p2pkhScript(new Uint8Array(20).fill(1));
 
 function tx3(): Tx {
@@ -26,6 +27,14 @@ describe("sighashV4 (ZIP-243)", () => {
     expect(h(tx, 0, SIGHASH.ALL, SAPLING, 5001n)).not.toBe(base);
     expect(h(tx, 1, SIGHASH.ALL)).not.toBe(base);
     expect(bytesToHex(sighashV4(tx, 0, new Uint8Array([0x51]), 5000n, SIGHASH.ALL, SAPLING))).not.toBe(base);
+  });
+
+  it("Vault (6d5b7a31) is one more personalisation: same preimage, a different digest from Canopy's", () => {
+    const tx = tx3();
+    for (const ht of [SIGHASH.ALL, SIGHASH.NONE, SIGHASH.SINGLE, SIGHASH.ALL | SIGHASH.ANYONECANPAY]) {
+      expect(h(tx, 0, ht, VAULT)).not.toBe(h(tx, 0, ht, CANOPY));
+      expect(h(tx, 0, ht, VAULT)).toBe(h(tx, 0, ht, VAULT));
+    }
   });
 
   it("ALL commits to every input, sequence, output, lock time and expiry", () => {

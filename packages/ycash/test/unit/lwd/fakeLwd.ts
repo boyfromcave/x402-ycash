@@ -46,6 +46,10 @@ export interface FakeLwdState {
   sendReply?: { errorCode: number; errorMessage: string };
   /** Serve YellowbackStreamer (a server started with --yellowback). */
   yellowback: boolean;
+  /** The next block's branch id GetChainInfo serves (default: `branchId`, no upgrade pending). */
+  nextBranchId?: string;
+  /** Leave GetChainInfo out of YellowbackStreamer, as lightwalletd-dd before 0b3448e (UNIMPLEMENTED). */
+  noChainInfo?: boolean;
   /** GetLightdInfo never answers (deadline tests). */
   hang?: boolean;
   calls: string[];
@@ -99,6 +103,9 @@ export async function startFakeLwd(init: Partial<FakeLwdState> = {}): Promise<{ 
       }
       call.end();
     },
+    ...(state.noChainInfo ? {} : {
+      GetChainInfo: unary("GetChainInfo", () => ({ chainName: state.chainName, blockHeight: String(state.height), consensusBranchId: state.branchId, nextBlockBranchId: state.nextBranchId ?? state.branchId })),
+    }),
     ValidateRawTransaction: unary("ValidateRawTransaction", () => ({ valid: true, verdict: "ok", type: "transfer", yedIn: "500", yedOut: "500" })),
   };
   const server = new Server();

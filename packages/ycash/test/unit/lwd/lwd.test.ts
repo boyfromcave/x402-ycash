@@ -146,9 +146,35 @@ describe("LwdChain", () => {
     await fake.stop();
   });
 
-  it("chainState and getBlockchainInfo: tip and the tip's branch id (lightwalletd has no nextblock)", async () => {
+  it("chainState and getBlockchainInfo: tip and the next block's branch id (GetChainInfo)", async () => {
     expect(await chain.chainState()).toEqual({ chain: "regtest", height: 300, branchId: 0x19bd2d2f });
     expect(await chain.getBlockchainInfo()).toEqual({ chain: "regtest", blocks: 300, consensus: { chaintip: "19bd2d2f", nextblock: "19bd2d2f" } });
+    expect(fake.state.calls.slice(-2)).toEqual(["GetChainInfo", "GetChainInfo"]);
+  });
+
+  it("the block before Vault activates: signs under the next block's 6d5b7a31, not the tip's Canopy", async () => {
+    fake.state.nextBranchId = "6D5B7A31"; // case as the server sends it does not matter
+    try {
+      expect(await chain.chainState()).toEqual({ chain: "regtest", height: 300, branchId: 0x6d5b7a31 });
+      expect(await chain.getBlockchainInfo()).toEqual({ chain: "regtest", blocks: 300, consensus: { chaintip: "19bd2d2f", nextblock: "6d5b7a31" } });
+    } finally {
+      delete fake.state.nextBranchId;
+    }
+  });
+
+  it("a server without GetChainInfo (or without YellowbackStreamer): the tip's branch id from GetLightdInfo", async () => {
+    for (const init of [{ noChainInfo: true }, { yellowback: false }]) {
+      const old = await startFakeLwd({ height: 300, nextBranchId: "6d5b7a31", ...init });
+      const c = new LwdChain(new LwdClient(old.url));
+      try {
+        expect(await c.chainState()).toEqual({ chain: "regtest", height: 300, branchId: 0x19bd2d2f });
+        expect(await c.getBlockchainInfo()).toEqual({ chain: "regtest", blocks: 300, consensus: { chaintip: "19bd2d2f", nextblock: "19bd2d2f" } });
+        expect(old.state.calls).toContain("GetLightdInfo");
+      } finally {
+        c.lwd.close();
+        await old.stop();
+      }
+    }
   });
 
   it("getTxOut: mined and still indexed → depth; mined and gone from the index → null; mempool only with includeMempool; unknown → null", async () => {
@@ -250,5 +276,24 @@ describe("LwdUtxoSource", () => {
     expect(a.inputs).toEqual([{ txid: txid("1"), vout: 0 }]);
     expect(b.inputs).toEqual([{ txid: txid("2"), vout: 0 }]);
     expect(T.parseTx(a.hex).vout[0]).toMatchObject({ value: 100_000n });
+  });
+
+  it("LocalKeySigner over LwdUtxoSource past Vault: the signature commits to 6d5b7a31 and fails under Canopy", async () => {
+    fake.state.tokens = [];
+    fake.state.utxos = [utxo("4", 500_000, 400)];
+    fake.state.branchId = "6d5b7a31";
+    try {
+      const signer = new exact.LocalKeySigner(T.encodeWif(priv, NET), new LwdUtxoSource(lwd));
+      const state = await signer.chainState();
+      expect(state.branchId).toBe(0x6d5b7a31);
+      const order = { network: NET, payTo: ADDR, amount: 100_000n, expiryHeight: state.height + 20, tip: state.height, branchId: state.branchId };
+      const tx = T.parseTx((await signer.signPayment(order)).hex);
+      const sig = T.parseScript(tx.vin[0]!.scriptSig)[0]!.data!;
+      const at = (branch: number) => T.sighashV4(tx, 0, T.hexToBytes(SCRIPT), 500_000n, T.SIGHASH.ALL, branch);
+      expect(T.verifyInputSig(sig, at(0x6d5b7a31), T.pubkeyFromPriv(priv))).toBe(true);
+      expect(T.verifyInputSig(sig, at(0x19bd2d2f), T.pubkeyFromPriv(priv))).toBe(false);
+    } finally {
+      fake.state.branchId = "19bd2d2f";
+    }
   });
 });

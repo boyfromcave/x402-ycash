@@ -6,7 +6,7 @@ import { zatToYecString } from "../node/amount.js";
 import type { BlockchainInfo, TxOutInfo } from "../node/types.js";
 import { bytesToHex, decodeAddress, encodeAddress, p2pkhHash, parseTx } from "../tx/index.js";
 import type { ChainState } from "../exact/client/signer.js";
-import type { LwdClient } from "./client.js";
+import { LwdError, type LwdClient } from "./client.js";
 
 /**
  * Recovers the transparent address an output pays, since lightwalletd's UTXO index is keyed by address.
@@ -35,27 +35,23 @@ export class LwdChain implements ClientChain {
   constructor(readonly lwd: LwdClient) {}
 
   /**
-   * Tip and branch id from `GetLightdInfo`. lightwalletd reports the tip's branch id
-   * (`consensus.chaintip`, lightwalletd-dd/common/common.go:212), not the next block's: the two
-   * differ only on the block before a network upgrade activates, where a signature made now would
-   * be refused. lightwalletd offers no `nextblock`, so the light path signs at the tip's branch.
+   * Tip and the branch id to sign under: the next block's (see {@link branches}).
    *
    * @returns The chain name, tip height and consensus branch id.
    */
   async chainState(): Promise<ChainState> {
-    const info = await this.lwd.getLightdInfo();
-    return { chain: info.chainName, height: Number(info.blockHeight), branchId: parseInt(info.consensusBranchId, 16) >>> 0 };
+    const b = await this.branches();
+    return { chain: b.chain, height: b.height, branchId: parseInt(b.nextblock, 16) >>> 0 };
   }
 
   /**
-   * The fields of `getblockchaininfo` the clients read (chain, blocks, consensus), from GetLightdInfo.
+   * The fields of `getblockchaininfo` the clients read (chain, blocks, consensus).
    *
-   * @returns Chain name, tip height, and the tip's branch id as both `chaintip` and `nextblock`.
+   * @returns Chain name, tip height, and the chaintip and next-block branch ids (both the tip's on a server without GetChainInfo).
    */
   async getBlockchainInfo(): Promise<Pick<BlockchainInfo, "chain" | "blocks" | "consensus">> {
-    const info = await this.lwd.getLightdInfo();
-    const branch = info.consensusBranchId.toLowerCase();
-    return { chain: info.chainName, blocks: Number(info.blockHeight), consensus: { chaintip: branch, nextblock: branch } };
+    const b = await this.branches();
+    return { chain: b.chain, blocks: b.height, consensus: { chaintip: b.chaintip, nextblock: b.nextblock } };
   }
 
   /**
@@ -113,5 +109,27 @@ export class LwdChain implements ClientChain {
     const found = await this.lwd.getTransaction(txid);
     if (!found) throw new Error(`lightwalletd's node knows no transaction ${txid}`);
     return found.hex;
+  }
+
+  /**
+   * Tip, chaintip branch id and the next block's branch id. `YellowbackStreamer.GetChainInfo`
+   * (lightwalletd-dd 0b3448e+) carries the node's `consensus.nextblock`, which a signature for the
+   * next block must commit to (ZIP-243): it differs from the tip's on the block before a network
+   * upgrade activates (Vault, `6d5b7a31`, among them). A server without it answers UNIMPLEMENTED;
+   * then `GetLightdInfo`'s `consensusBranchId` is the tip's (`consensus.chaintip`,
+   * lightwalletd-dd/common/common.go:212), and a payment signed on that one block is refused.
+   *
+   * @returns Chain name, tip height, and both branch ids as lowercase hex.
+   */
+  private async branches(): Promise<{ chain: string; height: number; chaintip: string; nextblock: string }> {
+    try {
+      const c = await this.lwd.getChainInfo();
+      return { chain: c.chainName, height: Number(c.blockHeight), chaintip: c.consensusBranchId.toLowerCase(), nextblock: c.nextBlockBranchId.toLowerCase() };
+    } catch (e) {
+      if (!(e instanceof LwdError && e.unimplemented)) throw e;
+    }
+    const info = await this.lwd.getLightdInfo();
+    const branch = info.consensusBranchId.toLowerCase();
+    return { chain: info.chainName, height: Number(info.blockHeight), chaintip: branch, nextblock: branch };
   }
 }
