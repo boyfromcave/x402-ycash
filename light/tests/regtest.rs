@@ -69,12 +69,17 @@ impl Env {
         }
     }
 
+    /// The node tree: `YCASH_DD` / `YCASH6` when set (scripts/devnet.sh honours the same), else the
+    /// workspace's ycash-dd / ycash6.
     fn node_repo(&self) -> PathBuf {
-        self.workspace.join(if self.line == "dd" {
-            "ycash-dd"
+        let (var, dir) = if self.line == "dd" {
+            ("YCASH_DD", "ycash-dd")
         } else {
-            "ycash6"
-        })
+            ("YCASH6", "ycash6")
+        };
+        std::env::var(var)
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| self.workspace.join(dir))
     }
 
     fn devnet_dir(&self) -> PathBuf {

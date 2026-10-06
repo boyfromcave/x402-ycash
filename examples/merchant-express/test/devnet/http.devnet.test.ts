@@ -177,8 +177,9 @@ describeDevnet("HTTP end to end: facilitator, merchant and agent as processes", 
     const { n } = await d.findVout(id, payTo);
 
     const state = JSON.parse(readFileSync(devnetJson, "utf8")) as { portseed: number; bitcoind: string; dir: string; stratum?: Record<string, { payout: string }> };
-    const repo = d.line === "v6" ? "ycash6" : "ycash-dd";
-    const cli = join(WORKSPACE, repo, "contrib/yellowback/devnet/yellowback-devnet");
+    // YCASH_DD / YCASH6 select another node tree, as scripts/devnet.sh does.
+    const repo = (d.line === "v6" ? process.env.YCASH6 : process.env.YCASH_DD) ?? join(WORKSPACE, d.line === "v6" ? "ycash6" : "ycash-dd");
+    const cli = join(repo, "contrib/yellowback/devnet/yellowback-devnet");
     const env = { ...process.env, YELLOWBACK_DEVNET_DIR: state.dir, YELLOWBACK_DEVNET_PORTSEED: String(state.portseed), [d.line === "v6" ? "ZCASHD" : "BITCOIND"]: state.bitcoind };
     const devnetCli = (...args: string[]) => promisify(execFile)(join(WORKSPACE, ".venv/bin/python"), [cli, ...args], { env, timeout: 300_000 });
     const POOL = 3;

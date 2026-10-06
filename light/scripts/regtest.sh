@@ -7,6 +7,7 @@
 # into $X402_SCRATCH/lightwalletd (GetChainInfo needs 0b3448e+) and starts it with --yellowback on
 # lwd-port (default 9067 + seed), runs `cargo test --release -- --ignored` with the environment
 # tests/regtest.rs reads, and tears everything down. Set KEEP=1 to leave the devnet running.
+# X402_LIGHT_UPGRADES (e.g. vault=103) reaches every `x402-light once` the test runs.
 set -euo pipefail
 [ $# -ge 2 ] || { echo "usage: $0 {dd|6} <seed> [lwd-port]" >&2; exit 2; }
 line=$1 seed=$2 port=${3:-$((9067 + seed))}
@@ -16,7 +17,9 @@ workspace=${YELLOWBACK_WORKSPACE:-$(dirname "$repo")}
 [ "$(basename "$workspace")" = wt ] && workspace=$(dirname "$workspace")
 export X402_SCRATCH=${X402_SCRATCH:-$workspace/wt/scratch/x402}
 python=${PYTHON:-$workspace/.venv/bin/python}
-case $line in dd) noderepo=$workspace/ycash-dd; binvar=BITCOIND ;; 6) noderepo=$workspace/ycash6; binvar=ZCASHD ;; *) exit 2 ;; esac
+# YCASH_DD / YCASH6 select another node tree (scripts/devnet.sh and tests/regtest.rs read them too). On
+# an upgrade/vault tree, whose devnet activates Vault itself, set X402_LIGHT_UPGRADES=vault=<h> too.
+case $line in dd) noderepo=${YCASH_DD:-$workspace/ycash-dd}; binvar=BITCOIND ;; 6) noderepo=${YCASH6:-$workspace/ycash6}; binvar=ZCASHD ;; *) exit 2 ;; esac
 devnet_cli=$noderepo/contrib/yellowback/devnet/yellowback-devnet
 lwd_bin=${X402_LIGHT_LWD_BIN:-$X402_SCRATCH/lightwalletd}
 
