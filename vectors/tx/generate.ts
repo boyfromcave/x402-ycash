@@ -12,7 +12,9 @@
 // - ycash-dd.json / ycash6.json: this script on a bare regtest node of each line, Overwinter and
 //   Sapling at height 1 (branch 76b809bb); ycash-dd-canopy.json: ycash-dd with the Ycash, Blossom,
 //   Heartwood and Canopy upgrades also at 1 (branch 19bd2d2f, mainnet's). ycash6 cannot run the Ycash
-//   upgrade on regtest at usable speed (Equihash 192,7 applies there).
+//   upgrade on regtest at usable speed (Equihash 192,7 applies there). ycash-dd-vault.json: ycash-dd
+//   upgrade/vault on its devnet past Vault's activation (branch 6d5b7a31, -nuparams=6d5b7a31:103),
+//   plus `wrongBranch`, the same kind of spend signed under Canopy and refused there.
 // - <line>-shielded.json: wallet-built shielded txs (z_shieldcoinbase, then z_sendmany to a
 //   transparent address) read back with gettransaction / decoderawtransaction, for the parser.
 // - sighash-node-tests.json: the v4 rows of each line's src/test/data/sighash.json.
@@ -41,6 +43,8 @@ async function rpc(method: string, ...params: unknown[]): Promise<any> {
 }
 
 const coins = (zat: bigint): number => Number(zat) / 1e8;
+const CANOPY = 0x19bd2d2f;
+const VAULT = 0x6d5b7a31; // the Ycash Vault network upgrade, after Canopy
 
 interface Key { priv: Uint8Array; pub: Uint8Array; pkh: Uint8Array; wif: string; address: string }
 let keyCounter = 0;
@@ -285,6 +289,36 @@ async function main(): Promise<void> {
     });
   }
 
+  // Past the Vault upgrade (branch 6d5b7a31, after Canopy), also show the node refusing the same
+  // spend signed under the previous branch: the stock verifier fails it and relay refuses it.
+  let wrongBranch: {
+    name: string; branchId: string; prevout: { txid: string; vout: number; scriptPubKey: string; value: string };
+    signedHex: string; sighash: string; verifyComplete: boolean; error: string;
+  } | undefined;
+  if (branchId === VAULT) {
+    const K = nextKey();
+    const [coin] = await fund([{ address: K.address, value: 1_000_000n }]);
+    const tx = T.newTx({ vin: [{ prevout: { txid: coin!.txid, vout: coin!.vout }, scriptSig: new Uint8Array(), sequence: T.SEQUENCE_FINAL }],
+      vout: [{ value: coin!.value - 1000n, scriptPubKey: T.p2pkhScript(K.pkh) }] });
+    const sh = T.sighashV4(tx, 0, coin!.scriptPubKey, coin!.value, T.SIGHASH.ALL, CANOPY);
+    tx.vin[0]!.scriptSig = T.p2pkhScriptSig(T.signInput(sh, K.priv), K.pub);
+    const hex = T.serializeTxHex(tx);
+    const verify = await rpc("signrawtransaction", hex, [], []);
+    let error = "";
+    try {
+      await rpc("sendrawtransaction", hex);
+    } catch (e) {
+      error = (e as Error).message;
+    }
+    if (verify.complete === true || !error) throw new Error(`a Canopy-signed spend past Vault was not refused (${JSON.stringify(verify)}, ${error})`);
+    console.log(`  p2pkh-signed-canopy-after-vault: refused (${error})`);
+    wrongBranch = {
+      name: "p2pkh-signed-canopy-after-vault", branchId: CANOPY.toString(16),
+      prevout: { txid: coin!.txid, vout: coin!.vout, scriptPubKey: T.bytesToHex(coin!.scriptPubKey), value: coin!.value.toString() },
+      signedHex: hex, sighash: T.bytesToHex(sh), verifyComplete: verify.complete === true, error,
+    };
+  }
+
   // Mine and confirm every case made it into a block (its output 0 is unspent and confirmed).
   await rpc("generate", 1);
   for (const vec of vectors) {
@@ -297,6 +331,7 @@ async function main(): Promise<void> {
   writeFileSync(out, JSON.stringify({
     description: "src/tx vectors generated against a regtest node; see vectors/tx/generate.ts",
     line, subversion: network.subversion, network: NET, branchId: branchHex, cases: vectors, negatives,
+    ...(wrongBranch ? { wrongBranch } : {}),
   }, null, 1) + "\n");
   console.log(`wrote ${vectors.length} cases to ${out}`);
 }

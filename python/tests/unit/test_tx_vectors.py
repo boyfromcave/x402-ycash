@@ -22,13 +22,15 @@ from x402_ycash.tx import (
     verify_input_sig,
 )
 
-NODE_FILES = ["ycash-dd.json", "ycash-dd-canopy.json", "ycash6.json"]
+# ycash-dd-vault.json: ycash-dd upgrade/vault past the Vault upgrade (branch 6d5b7a31).
+NODE_FILES = ["ycash-dd.json", "ycash-dd-canopy.json", "ycash6.json", "ycash-dd-vault.json"]
 NODE_CASES = [(f, c) for f in NODE_FILES for c in load_vector(f"tx/{f}")["cases"]]
 
 
 def test_node_vectors_cover_both_lines():
     files = [load_vector(f"tx/{f}") for f in NODE_FILES]
-    assert [f["subversion"] for f in files] == ["/YcashCpp:4.5.0/", "/YcashCpp:4.5.0/", "/YcashCpp:6.21.0-rc1/"]
+    assert [f["subversion"] for f in files] == ["/YcashCpp:4.5.0/", "/YcashCpp:4.5.0/", "/YcashCpp:6.21.0-rc1/", "/YcashCpp:4.5.0/"]
+    assert [f["branchId"] for f in files] == ["76b809bb", "19bd2d2f", "76b809bb", "6d5b7a31"]
     for f in files:
         assert len(f["cases"]) == 13
         assert all(c["accepted"] and c["mined"] for c in f["cases"])
@@ -70,6 +72,22 @@ def test_negatives_parse(fname):
     assert "Locktime requirement not satisfied" in negs[1]["error"]
     for n in negs:
         parse_tx(n["signedHex"])
+
+
+def test_vault_refuses_a_canopy_signature():
+    """Past Vault the node refused a spend signed under Canopy; the signature fails under Vault."""
+    w = load_vector("tx/ycash-dd-vault.json")["wrongBranch"]
+    tx = parse_tx(w["signedHex"])
+    ss = tx.vin[0].script_sig
+    n = ss[0]
+    sig, pub = ss[1:1 + n], ss[2 + n:2 + n + ss[1 + n]]
+    script, value = bytes.fromhex(w["prevout"]["scriptPubKey"]), int(w["prevout"]["value"])
+    canopy = sighash_v4(tx, 0, script, value, 1, 0x19BD2D2F)
+    assert canopy.hex() == w["sighash"]
+    assert verify_input_sig(sig, canopy, pub)
+    assert not verify_input_sig(sig, sighash_v4(tx, 0, script, value, 1, 0x6D5B7A31), pub)
+    assert not w["verifyComplete"]
+    assert "old-consensus-branch-id (Expected 6d5b7a31, found 19bd2d2f)" in w["error"]
 
 
 YEW = load_vector("tx/yew-transparent.json")["transactions"]
