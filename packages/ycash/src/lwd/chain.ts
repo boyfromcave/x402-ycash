@@ -23,10 +23,23 @@ function addressOf(script: Uint8Array, chain: string): string | undefined {
   return undefined;
 }
 
+/** The tip and both consensus branch ids, lowercase hex. */
+interface Branches {
+  chain: string;
+  height: number;
+  chaintip: string;
+  nextblock: string;
+}
+
 /**
  * A {@link ClientChain} backed by lightwalletd's gRPC services instead of a node's JSON-RPC.
  */
 export class LwdChain implements ClientChain {
+  /** The last GetChainInfo answer: the next block's branch id is a function of the tip height. */
+  private nextByHeight: Branches | undefined;
+  /** The server answered GetChainInfo UNIMPLEMENTED (no YellowbackStreamer, or older than 0b3448e). */
+  private noChainInfo = false;
+
   /**
    * Wraps a lightwalletd client.
    *
@@ -115,21 +128,31 @@ export class LwdChain implements ClientChain {
    * Tip, chaintip branch id and the next block's branch id. `YellowbackStreamer.GetChainInfo`
    * (lightwalletd-dd 0b3448e+) carries the node's `consensus.nextblock`, which a signature for the
    * next block must commit to (ZIP-243): it differs from the tip's on the block before a network
-   * upgrade activates (Vault, `6d5b7a31`, among them). A server without it answers UNIMPLEMENTED;
-   * then `GetLightdInfo`'s `consensusBranchId` is the tip's (`consensus.chaintip`,
+   * upgrade activates (Vault, `6d5b7a31`, among them). GetChainInfo is rate-limited with the rest of
+   * YellowbackStreamer (lightwalletd-dd frontend/yellowback_ratelimit.go) and the next block's branch
+   * depends on the height alone, so it is asked once per tip height: GetLightdInfo (not limited)
+   * gives the height each time. A server without it answers UNIMPLEMENTED, once; then
+   * `GetLightdInfo`'s `consensusBranchId` is the tip's (`consensus.chaintip`,
    * lightwalletd-dd/common/common.go:212), and a payment signed on that one block is refused.
    *
    * @returns Chain name, tip height, and both branch ids as lowercase hex.
    */
-  private async branches(): Promise<{ chain: string; height: number; chaintip: string; nextblock: string }> {
-    try {
-      const c = await this.lwd.getChainInfo();
-      return { chain: c.chainName, height: Number(c.blockHeight), chaintip: c.consensusBranchId.toLowerCase(), nextblock: c.nextBlockBranchId.toLowerCase() };
-    } catch (e) {
-      if (!(e instanceof LwdError && e.unimplemented)) throw e;
-    }
+  private async branches(): Promise<Branches> {
     const info = await this.lwd.getLightdInfo();
+    const height = Number(info.blockHeight);
     const branch = info.consensusBranchId.toLowerCase();
-    return { chain: info.chainName, height: Number(info.blockHeight), chaintip: branch, nextblock: branch };
+    if (this.nextByHeight?.height === height) return this.nextByHeight;
+    if (!this.noChainInfo) {
+      try {
+        const c = await this.lwd.getChainInfo();
+        const b = { chain: c.chainName, height: Number(c.blockHeight), chaintip: c.consensusBranchId.toLowerCase(), nextblock: c.nextBlockBranchId.toLowerCase() };
+        this.nextByHeight = b;
+        return b;
+      } catch (e) {
+        if (!(e instanceof LwdError && e.unimplemented)) throw e;
+        this.noChainInfo = true;
+      }
+    }
+    return { chain: info.chainName, height, chaintip: branch, nextblock: branch };
   }
 }

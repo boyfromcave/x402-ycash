@@ -149,16 +149,20 @@ describe("LwdChain", () => {
   it("chainState and getBlockchainInfo: tip and the next block's branch id (GetChainInfo)", async () => {
     expect(await chain.chainState()).toEqual({ chain: "regtest", height: 300, branchId: 0x19bd2d2f });
     expect(await chain.getBlockchainInfo()).toEqual({ chain: "regtest", blocks: 300, consensus: { chaintip: "19bd2d2f", nextblock: "19bd2d2f" } });
-    expect(fake.state.calls.slice(-2)).toEqual(["GetChainInfo", "GetChainInfo"]);
+    // GetChainInfo is rate-limited server side: asked once per tip height, GetLightdInfo each time.
+    expect(fake.state.calls.slice(-3)).toEqual(["GetLightdInfo", "GetChainInfo", "GetLightdInfo"]);
   });
 
   it("the block before Vault activates: signs under the next block's 6d5b7a31, not the tip's Canopy", async () => {
+    fake.state.height = 301; // a new tip: GetChainInfo is asked again
     fake.state.nextBranchId = "6D5B7A31"; // case as the server sends it does not matter
     try {
-      expect(await chain.chainState()).toEqual({ chain: "regtest", height: 300, branchId: 0x6d5b7a31 });
-      expect(await chain.getBlockchainInfo()).toEqual({ chain: "regtest", blocks: 300, consensus: { chaintip: "19bd2d2f", nextblock: "6d5b7a31" } });
+      expect(await chain.chainState()).toEqual({ chain: "regtest", height: 301, branchId: 0x6d5b7a31 });
+      expect(await chain.getBlockchainInfo()).toEqual({ chain: "regtest", blocks: 301, consensus: { chaintip: "19bd2d2f", nextblock: "6d5b7a31" } });
+      expect(fake.state.calls.filter((c) => c === "GetChainInfo")).toHaveLength(2);
     } finally {
       delete fake.state.nextBranchId;
+      fake.state.height = 300;
     }
   });
 
@@ -170,6 +174,8 @@ describe("LwdChain", () => {
         expect(await c.chainState()).toEqual({ chain: "regtest", height: 300, branchId: 0x19bd2d2f });
         expect(await c.getBlockchainInfo()).toEqual({ chain: "regtest", blocks: 300, consensus: { chaintip: "19bd2d2f", nextblock: "19bd2d2f" } });
         expect(old.state.calls).toContain("GetLightdInfo");
+        // UNIMPLEMENTED is remembered: GetChainInfo is not asked again.
+        expect(old.state.calls.filter((c) => c === "GetChainInfo").length).toBeLessThanOrEqual(1);
       } finally {
         c.lwd.close();
         await old.stop();

@@ -28,13 +28,22 @@ interface NodeCase {
   accepted: boolean;
   mined: boolean;
 }
-interface NodeFile { line: string; subversion: string; branchId: string; cases: NodeCase[]; negatives: { name: string; signedHex: string; error: string }[] }
+interface WrongBranch {
+  name: string; branchId: string; prevout: { txid: string; vout: number; scriptPubKey: string; value: string };
+  signedHex: string; sighash: string; verifyComplete: boolean; error: string;
+}
+interface NodeFile {
+  line: string; subversion: string; branchId: string; cases: NodeCase[]; negatives: { name: string; signedHex: string; error: string }[];
+  wrongBranch?: WrongBranch;
+}
 
-const files = ["ycash-dd.json", "ycash-dd-canopy.json", "ycash6.json"].map((f) => load<NodeFile>(f));
+// ycash-dd-vault.json: ycash-dd upgrade/vault past the Vault upgrade (branch 6d5b7a31).
+const files = ["ycash-dd.json", "ycash-dd-canopy.json", "ycash6.json", "ycash-dd-vault.json"].map((f) => load<NodeFile>(f));
 
 describe("node vectors: both lines", () => {
   it("cover both node lines, each with 13 accepted and mined cases", () => {
-    expect(files.map((f) => f.subversion)).toEqual(["/YcashCpp:4.5.0/", "/YcashCpp:4.5.0/", "/YcashCpp:6.21.0-rc1/"]);
+    expect(files.map((f) => f.subversion)).toEqual(["/YcashCpp:4.5.0/", "/YcashCpp:4.5.0/", "/YcashCpp:6.21.0-rc1/", "/YcashCpp:4.5.0/"]);
+    expect(files.map((f) => f.branchId)).toEqual(["76b809bb", "19bd2d2f", "76b809bb", "6d5b7a31"]);
     for (const f of files) {
       expect(f.cases).toHaveLength(13);
       expect(f.cases.every((c) => c.accepted && c.mined)).toBe(true);
@@ -81,6 +90,30 @@ describe("node vectors: both lines", () => {
       });
     });
   }
+});
+
+describe("Vault (6d5b7a31): the node refuses a spend signed under Canopy past activation", () => {
+  const vault = files[3]!;
+  const w = vault.wrongBranch!;
+  it("its signature is Canopy's, fails under Vault, and the node said old-consensus-branch-id", () => {
+    expect(vault.branchId).toBe("6d5b7a31");
+    expect(w.branchId).toBe("19bd2d2f");
+    const tx = parseTx(w.signedHex);
+    const [sig, pub] = [0, 1].map((k) => {
+      const ss = tx.vin[0]!.scriptSig; // <sig> <pubkey>, two direct pushes
+      const n = ss[0]!;
+      return k === 0 ? ss.slice(1, 1 + n) : ss.slice(2 + n, 2 + n + ss[1 + n]!);
+    }) as [Uint8Array, Uint8Array];
+    const at = (branch: number) => sighashV4(tx, 0, hexToBytes(w.prevout.scriptPubKey), BigInt(w.prevout.value), 1, branch);
+    expect(bytesToHex(at(0x19bd2d2f))).toBe(w.sighash);
+    expect(verifyInputSig(sig, at(0x19bd2d2f), pub)).toBe(true);
+    expect(verifyInputSig(sig, at(0x6d5b7a31), pub)).toBe(false);
+    expect(w.verifyComplete).toBe(false);
+    expect(w.error).toContain("old-consensus-branch-id (Expected 6d5b7a31, found 19bd2d2f)");
+  });
+  it("only the Vault file carries one", () => {
+    expect(files.filter((f) => f.wrongBranch).map((f) => f.line)).toEqual(["ycash-dd-vault"]);
+  });
 });
 
 describe("YEW tx.rs vectors (ycash-dd devnet, Canopy branch)", () => {

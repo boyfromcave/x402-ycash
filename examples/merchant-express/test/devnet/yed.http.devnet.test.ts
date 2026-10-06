@@ -170,8 +170,11 @@ describeDevnet("YED over HTTP: exact at ≥ $1 and YED channels through the merc
     procs.push(shop);
     const started = shop.lines.find((l) => l.msg === "merchant listening") as { modes: Record<string, boolean> };
     expect(started.modes).toMatchObject({ yedExact: true, yedChannel: true });
-    const policy = (await d.pool.call<{ templatePolicy: string }>("yed_getinfo")).templatePolicy;
-    expect(policy).toBe("strict");
+    // Before the vault upgrade a pool's template policy decides YED inclusion (default `strict`);
+    // past it (rpcversion 5) YED is consensus, templates follow validity and the field is gone.
+    const info = await d.pool.call<{ templatePolicy?: string; rpcversion: number }>("yed_getinfo");
+    const policy = info.rpcversion >= 5 ? "consensus" : info.templatePolicy;
+    if (info.rpcversion < 5) expect(policy).toBe("strict");
     record(d.line, "HTTP YED stack", { facilitator: fac.url, merchant: shop.url, merchantYed, poolTemplatePolicy: policy, supplyAtStart });
   });
 
