@@ -10,7 +10,9 @@
 # X402_DEVNET_JSON at it to run `npm run test:devnet`.
 #
 # Environment: YELLOWBACK_WORKSPACE (default: found from this script's location), X402_SCRATCH
-# (default: $YELLOWBACK_WORKSPACE/wt/scratch/x402), PYTHON (default: the workspace .venv).
+# (default: $YELLOWBACK_WORKSPACE/wt/scratch/x402), PYTHON (default: the workspace .venv), YCASH_DD /
+# YCASH6 (a built node tree to use instead of the workspace's ycash-dd / ycash6, e.g. an
+# upgrade/vault integration worktree, whose devnet activates the Vault upgrade 6d5b7a31 itself).
 set -euo pipefail
 
 usage() { echo "usage: $0 {up|down|status} {dd|6} <seed>  |  $0 cli {dd|6} <seed> [--node N] -- <rpc> [args…]" >&2; exit 2; }
@@ -26,8 +28,8 @@ workspace=${YELLOWBACK_WORKSPACE:-$(dirname "$here")}
 [ "$(basename "$workspace")" = wt ] && workspace=$(dirname "$workspace")
 
 case $line in
-  dd) repo=$workspace/ycash-dd; binvar=BITCOIND ;;
-  6)  repo=$workspace/ycash6;   binvar=ZCASHD ;;
+  dd) repo=${YCASH_DD:-$workspace/ycash-dd}; binvar=BITCOIND ;;
+  6)  repo=${YCASH6:-$workspace/ycash6};      binvar=ZCASHD ;;
   *)  usage ;;
 esac
 cli=$repo/contrib/yellowback/devnet/yellowback-devnet
