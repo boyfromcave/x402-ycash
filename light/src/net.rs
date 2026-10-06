@@ -5,7 +5,9 @@
 //! but its `Network` enum has no regtest variant: regtest heights are whatever `-nuparams` the node
 //! was started with. The Yellowback devnets activate every upgrade through Canopy at height 1 and
 //! never NU5 (`ycash-dd/qa/rpc-tests/test_framework/yellowback_util.py:129-134`, `util.py:267-268`),
-//! which is the default here; `--upgrades` overrides it.
+//! which is the default here; `--upgrades` overrides it. The Vault upgrade (branch id `6d5b7a31`,
+//! after Canopy) has no mainnet or testnet height yet; a regtest that activates it with
+//! `-nuparams=6d5b7a31:<h>` needs `--upgrades vault=<h>` here.
 
 use std::fmt;
 use std::str::FromStr;
@@ -35,6 +37,9 @@ impl YcashNetwork {
             nu6: None,
             nu6_1: None,
             nu6_2: None,
+            // The Ycash Vault upgrade (branch 0x6d5b7a31): unset unless the devnet's
+            // `-nuparams=6d5b7a31:<h>` is mirrored with `--upgrades vault=<h>`.
+            vault: None,
         })
     }
 
@@ -77,6 +82,7 @@ impl YcashNetwork {
                 "nu6" => &mut local.nu6,
                 "nu6_1" | "nu6.1" => &mut local.nu6_1,
                 "nu6_2" | "nu6.2" => &mut local.nu6_2,
+                "vault" | "6d5b7a31" => &mut local.vault,
                 other => return Err(format!("unknown upgrade {other:?}")),
             };
             *slot = height;
@@ -201,7 +207,43 @@ mod tests {
     }
 
     #[test]
+    fn vault_follows_canopy_and_is_unset_on_mainnet_and_testnet() {
+        // The Vault upgrade (upgrade plan U-9): branch 6d5b7a31, after Canopy, no height on the
+        // public networks yet (P8 sets it).
+        assert_eq!(u32::from(BranchId::Vault), 0x6d5b_7a31);
+        assert!(BranchId::Vault.height_range(&YcashNetwork::Main).is_none());
+        for net in [YcashNetwork::Main, YcashNetwork::Test] {
+            assert_eq!(net.activation_height(NetworkUpgrade::Vault), None);
+        }
+        assert_eq!(
+            YcashNetwork::devnet_regtest().activation_height(NetworkUpgrade::Vault),
+            None
+        );
+        // The wt/up-dd devnet: Vault at 103 on top of the devnet's Canopy-at-1.
+        for spec in ["vault=103", "6d5b7a31=103"] {
+            let net = YcashNetwork::devnet_regtest().with_upgrades(spec).unwrap();
+            assert_eq!(
+                net.branch_id_at(BlockHeight::from_u32(102)),
+                BranchId::Canopy
+            );
+            assert_eq!(
+                net.branch_id_at(BlockHeight::from_u32(103)),
+                BranchId::Vault
+            );
+            assert_eq!(
+                u32::from(net.branch_id_at(BlockHeight::from_u32(500))),
+                0x6d5b_7a31
+            );
+        }
+        let off = YcashNetwork::devnet_regtest()
+            .with_upgrades("vault=103,vault=none")
+            .unwrap();
+        assert_eq!(off, YcashNetwork::devnet_regtest());
+    }
+
+    #[test]
     fn branch_id_parses_lightwalletd_form() {
+        assert_eq!(parse_branch_id("6d5b7a31"), Some(BranchId::Vault));
         assert_eq!(parse_branch_id("19bd2d2f"), Some(BranchId::Canopy));
         assert_eq!(parse_branch_id("0x374d694f"), Some(BranchId::Ycash));
         assert_eq!(parse_branch_id("zz"), None);

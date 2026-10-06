@@ -34,7 +34,7 @@ use zcash_primitives::transaction::components::sapling::zip212_enforcement;
 use zcash_primitives::transaction::fees::fixed::FeeRule as FixedFeeRule;
 use zcash_primitives::transaction::{Transaction, TxId};
 use zcash_proofs::prover::LocalTxProver;
-use zcash_protocol::consensus::{BlockHeight, Parameters};
+use zcash_protocol::consensus::{BlockHeight, BranchId, Parameters};
 use zcash_protocol::memo::MemoBytes;
 use zcash_protocol::value::Zatoshis;
 use zcash_protocol::ShieldedProtocol;
@@ -469,23 +469,7 @@ impl Wallet {
             ),
             None => spend::ExpiryRequest::new(req.expiry_height, self.max_expiry_window),
         };
-        let branch_id = self.params.branch_id_at(target_height);
-        // Sign with what the server says the next block wants (GetChainInfo.nextBlockBranchId), by
-        // refusing to build when our parameters disagree with it: the builder derives the branch id
-        // from the parameters, so agreement here is what makes the signature valid.
-        let server_branch = crate::net::parse_branch_id(&server.branch_id_hex)
-            .ok_or_else(|| Error::Server(format!("unknown branch id {}", server.branch_id_hex)))?;
-        let compare_at = if server.next_block {
-            BlockHeight::from_u32(server.height) + 1
-        } else {
-            BlockHeight::from_u32(server.height)
-        };
-        if self.params.branch_id_at(compare_at) != server_branch {
-            return Err(Error::Server(format!(
-                "branch id mismatch: lightwalletd wants {:?} ({}) for height {compare_at}, our parameters give {:?}; check --network/--upgrades",
-                server_branch, server.branch_id_hex, self.params.branch_id_at(compare_at)
-            )));
-        }
+        let branch_id = check_branch(&self.params, &server, target_height)?;
 
         let params = self.params;
         let Address::Sapling(to_pa) = &to else {
@@ -643,6 +627,33 @@ pub(crate) fn check_tip(
             server: server.height,
         }),
     }
+}
+
+/// The branch id to sign for `target` (the server's tip + 1). Sign with what the server says the
+/// next block wants (GetChainInfo.nextBlockBranchId), by refusing to build when our parameters
+/// disagree with it: the builder derives the branch id from the parameters, so agreement here is
+/// what makes the signature valid. This is also what stops a wallet whose parameters lack an
+/// upgrade the node has activated (Vault, `6d5b7a31`, on a regtest started with
+/// `-nuparams=6d5b7a31:<h>` but no `--upgrades vault=<h>` here) from signing under the old branch.
+pub(crate) fn check_branch(
+    params: &YcashNetwork,
+    server: &lwd::BranchInfo,
+    target: BlockHeight,
+) -> Result<BranchId, Error> {
+    let server_branch = crate::net::parse_branch_id(&server.branch_id_hex)
+        .ok_or_else(|| Error::Server(format!("unknown branch id {}", server.branch_id_hex)))?;
+    let compare_at = if server.next_block {
+        BlockHeight::from_u32(server.height) + 1
+    } else {
+        BlockHeight::from_u32(server.height)
+    };
+    if params.branch_id_at(compare_at) != server_branch {
+        return Err(Error::Server(format!(
+            "branch id mismatch: lightwalletd wants {:?} ({}) for height {compare_at}, our parameters give {:?}; check --network/--upgrades",
+            server_branch, server.branch_id_hex, params.branch_id_at(compare_at)
+        )));
+    }
+    Ok(params.branch_id_at(target))
 }
 
 /// An advisory exclusive lock on `<data>/wallet.lock`, held while the wallet is open, so two

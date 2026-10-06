@@ -12,16 +12,17 @@ name = "x402-light"
 path = "src/main.rs"
 
 [dependencies]
-# librustzcash, Ycash-aware fork (boyfromcave/librustzcash6 = miodragpop/librustzcash @ ec525fae,
-# the revision ycashd 6.21.0 pins). Path dependencies for now; see README "Pinning".
-zcash_client_backend = { version = "0.22", path = "../../librustzcash6/zcash_client_backend", features = ["lightwalletd-tonic", "unstable", "non-standard-fees"] }
-zcash_client_sqlite = { version = "0.20", path = "../../librustzcash6/zcash_client_sqlite", features = ["unstable"] }
-zcash_keys = { version = "0.14", path = "../../librustzcash6/zcash_keys", features = ["sapling", "unstable"] }
-zcash_primitives = { version = "0.28", path = "../../librustzcash6/zcash_primitives", features = ["non-standard-fees"] }
-zcash_proofs = { version = "0.28", path = "../../librustzcash6/zcash_proofs", features = ["local-prover", "multicore"] }
-zcash_protocol = { version = "0.9", path = "../../librustzcash6/components/zcash_protocol", features = ["local-consensus"] }
-zcash_address = { version = "0.12", path = "../../librustzcash6/components/zcash_address" }
-zip321 = { version = "0.8", path = "../../librustzcash6/components/zip321" }
+# librustzcash, Ycash-aware fork: boyfromcave/librustzcash6 @ 4867cf85 = miodragpop/librustzcash
+# ec525fae (the revision ycashd 6.21.0 pins) plus the Vault network upgrade (BranchId::Vault =
+# 0x6d5b7a31), the revision ycashd's upgrade/vault Cargo.toml pins. See README "Pinning".
+zcash_client_backend = { version = "0.22", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", features = ["lightwalletd-tonic", "unstable", "non-standard-fees"] }
+zcash_client_sqlite = { version = "0.20", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", features = ["unstable"] }
+zcash_keys = { version = "0.14", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", features = ["sapling", "unstable"] }
+zcash_primitives = { version = "0.28", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", features = ["non-standard-fees"] }
+zcash_proofs = { version = "0.28", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", features = ["local-prover", "multicore"] }
+zcash_protocol = { version = "0.9", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", features = ["local-consensus"] }
+zcash_address = { version = "0.12", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011" }
+zip321 = { version = "0.8", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011" }
 sapling = { package = "sapling-crypto", version = "0.7", default-features = false, features = ["std"] }
 zip32 = "0.2"
 bip0039 = "0.12"
@@ -50,25 +51,25 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # `router` for the unit tests' in-process fake lightwalletd (src/fake_lwd.rs); test builds only.
 tonic = { version = "0.14", default-features = false, features = ["router"] }
 # spend_diff_tests: an authorization type with no transparent inputs, to recompute a signed tx's sighash.
-zcash_transparent = { version = "0.8", path = "../../librustzcash6/zcash_transparent" }
+zcash_transparent = { version = "0.8", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011" }
 
-# Mirror of ref/ycash6/Cargo.toml:122-133 so every transitive zcash_* crate resolves to the same
+# Mirror of ycash6 upgrade/vault Cargo.toml:130-136 (ref/ycash6/Cargo.toml:122-133 before Vault) so every transitive zcash_* crate resolves to the same
 # Ycash-aware source as ycashd 6.21.0 (one revision, one set of branch ids and HRPs).
 [build-dependencies]
 tonic-prost-build = "0.14"
 
 [patch.crates-io]
-zcash_protocol = { path = "../../librustzcash6/components/zcash_protocol" }
-zcash_primitives = { path = "../../librustzcash6/zcash_primitives" }
-f4jumble = { path = "../../librustzcash6/components/f4jumble" }
-zcash_address = { path = "../../librustzcash6/components/zcash_address" }
-zcash_encoding = { path = "../../librustzcash6/components/zcash_encoding" }
-zcash_transparent = { path = "../../librustzcash6/zcash_transparent" }
+zcash_protocol = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011" }
+zcash_primitives = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011" }
+f4jumble = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011" }
+zcash_address = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011" }
+zcash_encoding = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011" }
+zcash_transparent = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011" }
 # Not in ycashd's list (it does not use them) but needed here so the path crates above see one copy:
-zcash_client_backend = { path = "../../librustzcash6/zcash_client_backend" }
-zcash_keys = { path = "../../librustzcash6/zcash_keys" }
-zip321 = { path = "../../librustzcash6/components/zip321" }
-zcash_proofs = { path = "../../librustzcash6/zcash_proofs" }
+zcash_client_backend = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011" }
+zcash_keys = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011" }
+zip321 = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011" }
+zcash_proofs = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011" }
 
 [profile.release]
 lto = "thin"

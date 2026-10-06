@@ -19,19 +19,19 @@ cargo build --release          # needs protoc (brew install protobuf / apt insta
 cargo test                     # unit tests; no proving parameters needed
 ```
 
-**Pinning.** The `zcash_*` crates come from `librustzcash6` (boyfromcave/librustzcash6 =
-miodragpop/librustzcash @ `ec525fae`, the revision `ref/ycash6/Cargo.toml:122-133` pins for ycashd
-6.21.0): `zcash_client_backend` 0.22, `zcash_client_sqlite` 0.20.2, `zcash_primitives` 0.28,
+**Pinning.** The `zcash_*` crates come from `librustzcash6` as **git dependencies** on
+`https://github.com/boyfromcave/librustzcash6.git` rev `4867cf85` (branch `upgrade/vault`):
+miodragpop/librustzcash @ `ec525fae` (the revision `ref/ycash6/Cargo.toml:122-133` pins for ycashd
+6.21.0) plus the Vault network upgrade (`NetworkUpgrade::Vault`, `BranchId::Vault` = `0x6d5b7a31`),
+the same revision ycashd's upgrade/vault `Cargo.toml` `[patch.crates-io]` pins:
+`zcash_client_backend` 0.22, `zcash_client_sqlite` 0.20.2, `zcash_primitives` 0.28,
 `zcash_proofs` 0.28, `zcash_keys` 0.14, `zcash_protocol` 0.9, `zip321` 0.8, `sapling-crypto` 0.7.
-For now they are **path dependencies** on `../../../librustzcash6` (the workspace layout; CI clones
-the fork there) with a `[patch.crates-io]` block mirroring ycashd's so every transitive copy is the
-same source. **A release must switch every path to
-`git = "https://github.com/boyfromcave/librustzcash6", rev = "ec525fae…"`** (or a later tag of
-the fork) in both the dependencies and the patch block.
+A `[patch.crates-io]` block mirrors ycashd's so every transitive copy is the same source. Moving
+the pin means changing the rev in both the dependencies and the patch block.
 
-Note for anyone building on a machine with `protoc`: `zcash_client_backend`'s build script
-regenerates its own `src/proto/*.rs` into the fork's working tree whenever protoc is on PATH, so
-after a build run `git -C librustzcash6 checkout zcash_client_backend/src/proto` (finding below).
+`zcash_client_backend`'s build script regenerates its own `src/proto/*.rs` whenever protoc is on
+PATH; with git dependencies that lands in cargo's checkout cache (`~/.cargo/git/checkouts`), not
+in a librustzcash6 working tree.
 
 ## Run
 
@@ -47,7 +47,9 @@ x402-light once  --data ~/.x402-light --lwd 127.0.0.1:9067 --network regtest sta
   (`rustls-native-certs`), `webpki` the Mozilla bundle compiled in (`webpki-roots`). Default:
   `webpki` on iOS and Android, `native` elsewhere. Both stores are always compiled in.
 - `--network mainnet|testnet|regtest`; `--upgrades "canopy=1,nu5=none"` sets regtest activation
-  heights (default: every upgrade through Canopy at height 1, the devnet's). `sync` and `build`
+  heights (default: every upgrade through Canopy at height 1, the devnet's). The Vault upgrade
+  (branch `6d5b7a31`, after Canopy; no mainnet or testnet height yet) is `vault=<h>`, the mirror of
+  the node's `-nuparams=6d5b7a31:<h>` (the upgrade/vault devnet's is 103). `sync` and `build`
   refuse to run when these disagree with the server's branch id.
 - `--params`: the Sapling proving parameters, `sapling-spend.params` (~48 MB) and
   `sapling-output.params` (~3.5 MB). ycashd 4.5.0's `fetch-params.sh` puts them in
@@ -160,7 +162,7 @@ before an upgrade. `build` asks `YellowbackStreamer.GetChainInfo` (lightwalletd-
 `nextBlockBranchId` and refuses to build unless the wallet's parameters produce that id for the
 next block, falling back to the chaintip id when the server answers UNIMPLEMENTED; the result
 says which (`branchIdSource`). The transaction is v4 (ZIP-243, Canopy `19bd2d2f` on both lines
-today), fee ZIP-317 conventional (10000 zat for a one-in two-out spend) unless `fee` is given; a fee
+today; Vault `6d5b7a31` past that upgrade, which stays v4 since Ycash activates it without NU5), fee ZIP-317 conventional (10000 zat for a one-in two-out spend) unless `fee` is given; a fee
 below the x402 floor max(1000, 500 · max(2, logical actions)) is refused.
 
 **Expiry.** `zcash_client_backend::create_proposed_transactions` fixes `nExpiryHeight` at target + 40

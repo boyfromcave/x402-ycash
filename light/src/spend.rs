@@ -478,6 +478,23 @@ mod tests {
             choose_expiry(&net, t, any(None)),
             Err(Error::Expiry(_))
         ));
+        // Vault at 130 (the wt/up-dd devnet's -nuparams=6d5b7a31:<h>): a Canopy-signed spend
+        // must expire by 129; from 130 on the target is Vault and so is every expiry.
+        let net = YcashNetwork::devnet_regtest()
+            .with_upgrades("vault=130")
+            .unwrap();
+        assert_eq!(
+            choose_expiry(&net, t, any(None)).unwrap(),
+            BlockHeight::from_u32(129)
+        );
+        assert!(matches!(
+            choose_expiry(&net, t, any(Some(130))),
+            Err(Error::Expiry(_))
+        ));
+        assert_eq!(
+            choose_expiry(&net, BlockHeight::from_u32(130), any(None)).unwrap(),
+            BlockHeight::from_u32(170)
+        );
         // Mainnet schedules nothing after Canopy: the default is untouched.
         let t = BlockHeight::from_u32(3_100_000);
         assert_eq!(

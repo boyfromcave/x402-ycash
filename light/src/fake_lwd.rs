@@ -522,6 +522,54 @@ mod tests {
     }
 
     #[test]
+    fn build_signs_with_vault_only_when_our_parameters_have_it() {
+        use crate::wallet::{check_branch, Error};
+        use zcash_protocol::consensus::BranchId;
+        // The node's next block (103) is the first Vault block.
+        let next = |id: &str| lwd::BranchInfo {
+            height: 102,
+            branch_id_hex: id.into(),
+            next_block: true,
+        };
+        let target = BlockHeight::from_u32(103);
+        let vault = YcashNetwork::devnet_regtest()
+            .with_upgrades("vault=103")
+            .unwrap();
+        assert_eq!(
+            check_branch(&vault, &next("6d5b7a31"), target).unwrap(),
+            BranchId::Vault
+        );
+        // Parameters without Vault would sign Canopy at 103, which the node refuses: refuse first.
+        match check_branch(&YcashNetwork::devnet_regtest(), &next("6d5b7a31"), target) {
+            Err(Error::Server(m)) => assert!(m.contains("--upgrades"), "{m}"),
+            other => panic!("expected a branch mismatch, got {other:?}"),
+        }
+        // A server still on Canopy for 103 disagrees with Vault parameters the same way.
+        assert!(check_branch(&vault, &next(CANOPY), target).is_err());
+        // The block before: both agree on Canopy.
+        let before = lwd::BranchInfo {
+            height: 101,
+            branch_id_hex: CANOPY.into(),
+            next_block: true,
+        };
+        assert_eq!(
+            check_branch(&vault, &before, BlockHeight::from_u32(102)).unwrap(),
+            BranchId::Canopy
+        );
+        // A chaintip-only server (X-F71) at 102 says Canopy: our Canopy at 102 agrees, and the
+        // signature is still Vault's (our parameters at the target), which the node wants.
+        let tip_only = lwd::BranchInfo {
+            height: 102,
+            branch_id_hex: CANOPY.into(),
+            next_block: false,
+        };
+        assert_eq!(
+            check_branch(&vault, &tip_only, target).unwrap(),
+            BranchId::Vault
+        );
+    }
+
+    #[test]
     fn tls_roots_parse_and_default_per_target() {
         assert_eq!("native".parse::<TlsRoots>(), Ok(TlsRoots::Native));
         assert_eq!("webpki".parse::<TlsRoots>(), Ok(TlsRoots::Webpki));

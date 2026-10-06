@@ -48,7 +48,7 @@ struct Common {
     /// Most blocks a built transaction's nExpiryHeight may sit above target + 3 (~1 day)
     #[arg(long, env = "X402_LIGHT_MAX_EXPIRY_WINDOW", default_value_t = x402_ycash_light::spend::DEFAULT_MAX_EXPIRY_WINDOW)]
     max_expiry_window: u32,
-    /// Regtest activation heights, e.g. "canopy=1,nu5=none" (default: every upgrade through Canopy at 1)
+    /// Regtest activation heights, e.g. "canopy=1,nu5=none" or "vault=103" (default: every upgrade through Canopy at 1)
     #[arg(long, env = "X402_LIGHT_UPGRADES")]
     upgrades: Option<String>,
 }
