@@ -2,9 +2,15 @@
 
 Every devnet suite on both node lines, run one devnet at a time on 2026-10-04, now including the
 shielded `sapling` suites (`light.http`, `sapling.http`) and the light client's own regtest test.
-Each line is a fresh light five-node devnet (`scripts/devnet.sh up <line> <seed>`: node 0 funded
-wallet with `-yellowback`, node 1 stock, nodes 2-4 pools), with the suites run in the order below
-against the same devnet. The light client's regtest test brings up its own devnet
+Each line is a fresh light five-node devnet (`scripts/devnet.sh up <line> <seed>`), with the suites
+run in the order below against the same devnet. This record was taken on 2026-10-04, before the
+vault upgrade line existed, so its devnets ran without the upgrade (node 0 then started Yellowback
+with a node flag). Today `scripts/devnet.sh` needs a node tree built from `upgrade/vault`
+(`YCASH_DD` / `YCASH6`) and brings up the vault-upgrade devnet: the upgrade (`6d5b7a31`) active
+and the YED attestor set created on every node, node 0 the funded wallet (`-insightexplorer
+-txindex`), node 1 without the attestor set, nodes 2-4 pools. The vault-line results are the
+transaction vectors in `ycash-dd-vault.json` and the devnet suites' Vault-branch signing; a full
+rerun of this record on that line has not been written up here. The light client's regtest test brings up its own devnet
 (`light/scripts/regtest.sh`), so it ran after that devnet was down.
 
 ## What was tested

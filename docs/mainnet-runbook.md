@@ -1,13 +1,15 @@
 # Mainnet runbook (X6)
 
 For the owner. This is the first run of x402 payments on Ycash mainnet: a YEC `exact` payment and a
-short YEC channel on each node line, with small amounts. Then YED once Yellowback is live on
-mainnet, then shielded payments. Nothing here changes a node. Every step can be stopped, and
+short YEC channel on each node line, with small amounts, then shielded payments. YED comes later
+(below). Nothing here changes a node. Every step can be stopped, and
 [Roll back](#roll-back) undoes it.
 
-**YED on mainnet starts at height 3,075,000** on both lines (Yellowback's mainnet `startHeight`).
-The tip was 3,052,055 on 2026-10-02. At 75 s blocks that is about 2026-10-22. Until then only YEC
-runs.
+**YED cannot run on mainnet today.** Yellowback (YED) is part of the proposed Ycash vault upgrade
+(a network upgrade, branch ID `6d5b7a31`): a node offers the `yed_*` RPCs only where that upgrade
+and the network's YED attestor set are configured, and mainnet has neither an activation height
+nor an attestor set yet. Both are set by a future release. Until that release activates on
+mainnet, this runbook's YED steps do not apply; YEC and shielded payments run on any synced node.
 
 ## What runs where
 
@@ -31,7 +33,7 @@ the merchant's (self-hosted) or a hosted facilitator's.
 | For | Flags | Why |
 |---|---|---|
 | YEC (`exact`, channels) | **none** | Every x402 YEC transaction is a standard transparent v4 transaction. A stock node relays and verifies it. |
-| YED | **`-experimentalfeatures -yellowback`** | The facilitator verifies YED with `yed_validaterawtransaction`; the merchant and agent need `yed_getnewaddress`, `yed_listunspent` and `yed_listtokens`. |
+| YED | **none**, but a node release with the vault upgrade active on mainnet (not available yet) | The facilitator verifies YED with `yed_validaterawtransaction`; the merchant and agent need `yed_getnewaddress`, `yed_listunspent` and `yed_listtokens`. |
 | Shielded (`sapling-proof`) | none | The settlement node needs the merchant's viewing key (see [Keys](#4-keys)). |
 
 RPC hygiene, on every node:
@@ -43,11 +45,12 @@ RPC hygiene, on every node:
 - Check that the node is synced: `getblockchaininfo` shows `chain: "main"` and `blocks` equal to
   `headers`, and the tip matches a public explorer.
 
-For YED, also check (after height 3,075,000):
+For YED, once a release has activated the vault upgrade on mainnet, also check:
 
 ```
 ycash-cli yed_getinfo
-# enabled: true, network: "main", healthy: true, activation.status: "active", height ≥ startHeight (3075000)
+# network: "main", healthy: true, upgrade.status: "active"
+# (today: "Method not found", because mainnet has no vault upgrade height or attestor set)
 ```
 
 ## 2. Facilitator
@@ -80,7 +83,7 @@ Check:
 ```bash
 curl -s http://127.0.0.1:4022/healthz
 curl -s http://127.0.0.1:4022/supported
-# kinds: exact on ycash:mainnet with extra.assets ["YEC"] (["YEC","YED"] on a -yellowback node),
+# kinds: exact on ycash:mainnet with extra.assets ["YEC"] (["YEC","YED"] once the node offers yed_*),
 #        batch-settlement on ycash:mainnet; confirmations {minimum: -1, maximum: 20}
 ```
 
@@ -107,10 +110,10 @@ export MERCHANT_FUNDING_WAIT_MS=300000              # an open waits up to 5 min 
 npm start -w x402-ycash-example-merchant-express
 ```
 
-YED (only after height 3,075,000, and only with a `-yellowback` facilitator node):
+YED (only once the vault upgrade is active on mainnet and the facilitator's node offers `yed_*`):
 
 ```bash
-export MERCHANT_YED_PAY_TO=ye...                    # yed_getnewaddress on the merchant's -yellowback wallet
+export MERCHANT_YED_PAY_TO=ye...                    # yed_getnewaddress on the merchant's wallet
 export PRICE_YED_REPORT='$1'                        # /yed/report: exact, never below $1.00
 export PRICE_YED_STREAM='$0.01'                     # /yed/stream: a YED channel
 export MERCHANT_MAX_DEPOSIT_CENTS=200               # at most $2 per YED channel
@@ -265,8 +268,8 @@ Order of runs:
    returned to the agent. No difference between the lines needed a fix.
 2. **Mainnet YEC on the 4.5.0 node**: `--dry-run`, then the real run.
 3. **Mainnet YEC on the 6.21.0 node**: the same, with the facilitator and merchant pointed at it.
-4. **YED** after height 3,075,000: restart the facilitator's node with
-   `-experimentalfeatures -yellowback`, check `yed_getinfo` and `/supported` (YED listed), set the
+4. **YED**, only after a release has activated the vault upgrade on mainnet (not possible today):
+   run the facilitator's node on that release, check `yed_getinfo` and `/supported` (YED listed), set the
    merchant's YED variables, then pay `/yed/report` once ($1) and open one YED channel on
    `/yed/stream` with the CLI: `x402-ycash pay <merchant>/yed/report --asset YED` and
    `x402-ycash channel open <merchant>/yed/stream --asset YED --deposit 200`, a few
@@ -324,9 +327,10 @@ Nothing on chain needs undoing: no node changed, and every payment is an ordinar
 3. **Unconfirmed payments.** A signed `exact` payment that was never settled expires on its own at
    its `nExpiryHeight` (a few blocks). A settled one that is still in the mempool cannot be
    recalled; wait for it to be mined or to expire.
-4. **YED off.** Restart the facilitator's node without `-yellowback`; `/supported` stops listing
-   YED and the merchant's YED routes go off within a minute. YED already paid stays recorded on
-   every Yellowback node.
+4. **YED off.** On the vault upgrade YED is consensus and has no node switch: point the facilitator
+   at a node without `yed_*` (or drop YED from the merchant's routes by unsetting
+   `MERCHANT_YED_PAY_TO`); `/supported` stops listing YED and the merchant's YED routes go off
+   within a minute. YED already paid stays recorded on chain.
 5. **Keys.** Rotate `X402_API_KEY` and the receipt key if either was exposed. Sweep the shielded
    revenue key to treasury.
 6. **Software.** Redeploy the previous `x402-ycash` commit, keeping the store files (JSON). Nodes
