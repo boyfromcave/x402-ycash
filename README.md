@@ -1,7 +1,7 @@
 # x402-ycash
 
 x402 (HTTP-402, protocol v2, [x402.org](https://x402.org)) agent payments on the Ycash network, in
-**YEC** and **YED** (Ycash Yellowback, the dollar on Ycash).
+**YEC** and in **Ycash Yellowback (YED)**, a dollar token on Ycash.
 
 - **Pay-per-request** (`exact`): the agent signs a complete transparent transaction, the facilitator
   verifies it and relays it (the pattern of x402's Cardano binding).
@@ -9,23 +9,29 @@ x402 (HTTP-402, protocol v2, [x402.org](https://x402.org)) agent payments on the
   off chain until one close; YEC, then YED.
 - **Private payments**: shielded (Sapling) YEC to a fresh diversified address per request.
 
-x402 itself makes no consensus change and needs no node change: it runs against stock `ycashd`
-RPCs (plus the read-only `yed_*` RPCs for YED) on both Ycash node lines, 4.5.0 and 6.21.0, and
-node and pool operators need to do nothing for it. On this branch (`upgrade/vault`) those nodes
-carry the **vault network upgrade** (`UPGRADE_VAULT`, consensus branch ID `0x6d5b7a31`), a
-coordinated hard fork that makes Yellowback a consensus rule module; YED is live wherever the
-upgrade and the network's YED attestor set are configured, with no enabling flag. Every signature
-x402 makes commits to the **next block's** branch ID (the node's
-`getblockchaininfo.consensus.nextblock`, or `GetChainInfo` on a lightwalletd-dd server), so a
-payment signed on the block before the activation still verifies (`vectors/tx/ycash-dd-vault.json`
-replays the transaction cases past it). The upgrade has no activation height on mainnet or testnet
-and is not activated on any public network: it runs on regtest and the devnet only. The
-`harden/yellowback` line is the no-upgrade fallback, where YED needs `-experimentalfeatures
--yellowback` on the facilitator's node.
+## YEC, YED and the vault upgrade
 
-The plan is `docs/plans/x402-agent-payments-plan.md` in the
-[Yellowback workspace](https://github.com/boyfromcave/yellowback); the binding specs are in
-[`specs/`](specs/), language-neutral test vectors in [`vectors/`](vectors/).
+x402 needs no change to the Ycash node: YEC payments run against the stock `ycashd` RPCs, and node
+and pool operators do nothing for them. YED is different, because YED depends on a proposed Ycash
+network upgrade, **the vault upgrade**, which adds **vaults** to Ycash: YEC locked on chain under
+rules every node enforces. YED is a dollar token built on vaults (`1 YED = 1 US dollar`): lock
+YEC in a vault to mint YED, return the YED to get the YEC back.
+
+- **What x402 does with YED:** pays YED per request and over YED payment channels, reading
+  balances through the node's read-only `yed_*` RPCs. Every signature commits to the consensus
+  branch ID of the *next* block, so a payment signed on the block before the upgrade activates
+  still verifies after it. x402 does not touch the wYEC bridge.
+- **Node it needs:** any ycashd for YEC (x402 uses only stock RPCs); for YED, a ycashd built
+  from the `upgrade/vault` branch of [ycash-dd](https://github.com/boyfromcave/ycash-dd) or
+  [ycash6](https://github.com/boyfromcave/ycash6).
+- **Status: proposed, not live.** It runs on a local test network (regtest) only. It has not been
+  adopted by the Ycash Foundation, has not been audited, and has no activation height on mainnet
+  or testnet.
+- **Try it:** [Quick start on the devnet](#quick-start-on-the-devnet) below.
+
+The binding specs are in [`specs/`](specs/), language-neutral test vectors in
+[`vectors/`](vectors/); the plan behind them is in the
+[Yellowback workspace](https://github.com/boyfromcave/yellowback).
 
 ## Layout
 
@@ -45,7 +51,7 @@ nvm use            # Node 22 (see .nvmrc); >= 20 works
 npm install
 npm run typecheck
 npm test           # unit tests
-npm run test:devnet   # against a running yellowback-devnet (see the plan, §6)
+npm run test:devnet   # against a running devnet (see the quick start below)
 npm run test:devnet:http   # the HTTP path only: facilitator, merchant, agent and CLI as processes
                            # (+ X402_LWD_URL=host:port of a lightwalletd on node 0: the light-agent suite)
 ```
@@ -53,10 +59,11 @@ npm run test:devnet:http   # the HTTP path only: facilitator, merchant, agent an
 ## Quick start on the devnet
 
 Four terminals, one command each, from the repository root of a
-[Yellowback workspace](https://github.com/boyfromcave/yellowback) checkout (the devnet script needs
-its built `ycash-dd` or `ycash6`). Use `6` instead of `dd` for the 6.21.0 line. The devnet is the
-one that node tree builds: for the vault upgrade, point `YCASH_DD` (or `YCASH6`) at a built
-`upgrade/vault` tree, whose devnet activates `6d5b7a31` itself.
+[Yellowback workspace](https://github.com/boyfromcave/yellowback) checkout. The devnet is a local
+test network of five regtest nodes, run by the node repository's devnet script: `dd` uses
+ycash-dd, `6` ycash6. Point `YCASH_DD` (or `YCASH6`) at a node tree built from `upgrade/vault`
+(otherwise the workspace's own `ycash-dd` / `ycash6` is used); its devnet activates the vault
+upgrade by itself.
 
 ```
 # 1. a five-node regtest devnet (node 0 funded wallet, node 1 stock, nodes 2-4 pools)
@@ -83,10 +90,8 @@ node 1, the stock seat: no node runs anything for x402.
 ### YED
 
 Ycash Yellowback (YED) is paid on two more merchant routes, served only when the facilitator lists
-YED in `/supported` (its node has YED: on `upgrade/vault` nodes the vault upgrade and the YED
-attestor set, which the devnet configures; on a `harden/yellowback` node `-experimentalfeatures
--yellowback`; node 0 has it either way) and the
-merchant has a Yellowback address: `GET /yed/report` (exact, `PRICE_YED_REPORT`, default `$2`;
+YED in `/supported` (its node has YED live, as the devnet's node 0 does) and the merchant has a
+Yellowback address: `GET /yed/report` (exact, `PRICE_YED_REPORT`, default `$2`;
 never below $1.00, since a smaller YED output burns) and `GET /yed/stream` (a YED channel,
 `PRICE_YED_STREAM` per request, default `$0.01`, deposits up to `MERCHANT_MAX_DEPOSIT_CENTS`). The
 merchant re-reads the facilitator's `/supported` every minute and when a request reaches a YED
@@ -244,7 +249,7 @@ cannot be told apart from plain coins, as on a stock node. Its node needs `-insi
   broadcast refusal. Change of an unconfirmed payment is spendable once it is mined.
 - **The branch id is the next block's only on a current server.** lightwalletd-dd's
   `YellowbackStreamer.GetChainInfo` carries `nextblock`, which the agent signs for; a server
-  without it (no `--yellowback`, or older than `0b3448e`) answers UNIMPLEMENTED and the agent falls
+  without it (no `--yellowback`, or an older build) answers UNIMPLEMENTED and the agent falls
   back to `GetLightdInfo`'s `chaintip`, so on the one block before a network upgrade (the vault
   upgrade among them) a payment signed then would be refused.
 
