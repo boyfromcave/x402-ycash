@@ -9,9 +9,19 @@ x402 (HTTP-402, protocol v2, [x402.org](https://x402.org)) agent payments on the
   off chain until one close; YEC, then YED.
 - **Private payments**: shielded (Sapling) YEC to a fresh diversified address per request.
 
-No consensus change and no node change: it runs against stock `ycashd` RPCs (plus the read-only
-`yed_*` RPCs for YED) on both Ycash node lines, 4.5.0 and 6.21.0, and node and pool operators need
-to do nothing.
+x402 itself makes no consensus change and needs no node change: it runs against stock `ycashd`
+RPCs (plus the read-only `yed_*` RPCs for YED) on both Ycash node lines, 4.5.0 and 6.21.0, and
+node and pool operators need to do nothing for it. On this branch (`upgrade/vault`) those nodes
+carry the **vault network upgrade** (`UPGRADE_VAULT`, consensus branch ID `0x6d5b7a31`), a
+coordinated hard fork that makes Yellowback a consensus rule module; YED is live wherever the
+upgrade and the network's YED attestor set are configured, with no enabling flag. Every signature
+x402 makes commits to the **next block's** branch ID (the node's
+`getblockchaininfo.consensus.nextblock`, or `GetChainInfo` on a lightwalletd-dd server), so a
+payment signed on the block before the activation still verifies (`vectors/tx/ycash-dd-vault.json`
+replays the transaction cases past it). The upgrade has no activation height on mainnet or testnet
+and is not activated on any public network: it runs on regtest and the devnet only. The
+`harden/yellowback` line is the no-upgrade fallback, where YED needs `-experimentalfeatures
+-yellowback` on the facilitator's node.
 
 The plan is `docs/plans/x402-agent-payments-plan.md` in the
 [Yellowback workspace](https://github.com/boyfromcave/yellowback); the binding specs are in
@@ -44,7 +54,9 @@ npm run test:devnet:http   # the HTTP path only: facilitator, merchant, agent an
 
 Four terminals, one command each, from the repository root of a
 [Yellowback workspace](https://github.com/boyfromcave/yellowback) checkout (the devnet script needs
-its built `ycash-dd` or `ycash6`). Use `6` instead of `dd` for the 6.21.0 line.
+its built `ycash-dd` or `ycash6`). Use `6` instead of `dd` for the 6.21.0 line. The devnet is the
+one that node tree builds: for the vault upgrade, point `YCASH_DD` (or `YCASH6`) at a built
+`upgrade/vault` tree, whose devnet activates `6d5b7a31` itself.
 
 ```
 # 1. a five-node regtest devnet (node 0 funded wallet, node 1 stock, nodes 2-4 pools)
@@ -71,7 +83,9 @@ node 1, the stock seat: no node runs anything for x402.
 ### YED
 
 Ycash Yellowback (YED) is paid on two more merchant routes, served only when the facilitator lists
-YED in `/supported` (its node runs `-experimentalfeatures -yellowback`, as node 0 does) and the
+YED in `/supported` (its node has YED: on `upgrade/vault` nodes the vault upgrade and the YED
+attestor set, which the devnet configures; on a `harden/yellowback` node `-experimentalfeatures
+-yellowback`; node 0 has it either way) and the
 merchant has a Yellowback address: `GET /yed/report` (exact, `PRICE_YED_REPORT`, default `$2`;
 never below $1.00, since a smaller YED output burns) and `GET /yed/stream` (a YED channel,
 `PRICE_YED_STREAM` per request, default `$0.01`, deposits up to `MERCHANT_MAX_DEPOSIT_CENTS`). The
@@ -228,8 +242,11 @@ cannot be told apart from plain coins, as on a stock node. Its node needs `-insi
   sends only transactions with Sapling parts. The agent's reservation file is what keeps it off a
   coin it already spent; a spend of the same key from elsewhere shows up only as the facilitator's
   broadcast refusal. Change of an unconfirmed payment is spendable once it is mined.
-- **The branch id is the tip's.** `GetLightdInfo` reports `consensus.chaintip`, not `nextblock`, so
-  on the one block before a network upgrade activates a payment signed now would be refused.
+- **The branch id is the next block's only on a current server.** lightwalletd-dd's
+  `YellowbackStreamer.GetChainInfo` carries `nextblock`, which the agent signs for; a server
+  without it (no `--yellowback`, or older than `0b3448e`) answers UNIMPLEMENTED and the agent falls
+  back to `GetLightdInfo`'s `chaintip`, so on the one block before a network upgrade (the vault
+  upgrade among them) a payment signed then would be refused.
 
 ### Private agents: a Sapling key and lightwalletd
 
