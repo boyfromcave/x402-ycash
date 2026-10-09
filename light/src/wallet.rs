@@ -6,6 +6,14 @@
 //!   cache/               the FsBlockDb: blockmeta.sqlite + blocks/ (compact blocks, deleted once scanned)
 //! The spending key is injected (`Options::spending_key`, `register_key`); where it is kept is the
 //! embedding application's business (the x402-light binary stores it as `spending.key`, mode 0600).
+//!
+//! wasm32 (the browser wallet, yew/web plan W0.4): the library compiles with the gRPC-web channel
+//! (`lwd::Channel`); `build` answers [`Error::ProverUnsupported`] until W0.3, and the store, the
+//! compact-block cache (`FsBlockDb`, `std::fs`) and `SystemClock` compile but are not usable
+//! there until W0.2 (OPFS block source, `JsClock`).
+
+// `build` and its helpers are native-only (above); on wasm32 their imports are unused.
+#![cfg_attr(target_arch = "wasm32", allow(unused_imports, dead_code))]
 
 use std::fs;
 use std::num::NonZeroU32;
@@ -33,6 +41,7 @@ use zcash_keys::address::Address;
 use zcash_primitives::transaction::components::sapling::zip212_enforcement;
 use zcash_primitives::transaction::fees::fixed::FeeRule as FixedFeeRule;
 use zcash_primitives::transaction::{Transaction, TxId};
+#[cfg(not(target_arch = "wasm32"))]
 use zcash_proofs::prover::LocalTxProver;
 use zcash_protocol::consensus::{BlockHeight, BranchId, Parameters};
 use zcash_protocol::memo::MemoBytes;
@@ -44,10 +53,8 @@ use sapling::note_encryption::{try_sapling_compact_note_decryption, CompactOutpu
 use sapling::zip32::ExtendedSpendingKey;
 use zip32::Scope;
 
-use tonic::transport::Channel;
-
 use crate::keys;
-use crate::lwd::{self, Client};
+use crate::lwd::{self, Channel, Client};
 use crate::net::YcashNetwork;
 use crate::spend;
 
@@ -61,6 +68,8 @@ pub struct Wallet {
     pub data_dir: PathBuf,
     extsk: Option<ExtendedSpendingKey>,
     params_dir: Option<PathBuf>,
+    /// Native only until the browser prover lands (yew/web plan W0.3).
+    #[cfg(not(target_arch = "wasm32"))]
     prover: Option<LocalTxProver>,
     pub(crate) client: Client,
     channel: Channel,
@@ -151,6 +160,7 @@ impl Wallet {
             data_dir: opts.data_dir,
             extsk,
             params_dir: opts.proving_params_dir,
+            #[cfg(not(target_arch = "wasm32"))]
             prover: None,
             client,
             channel,
@@ -411,6 +421,7 @@ impl Wallet {
 
     /// Takes the prover out of `self` (loading it on first use) so it can be used while the
     /// wallet db is borrowed mutably; `build` puts it back.
+    #[cfg(not(target_arch = "wasm32"))]
     fn take_prover(&mut self) -> Result<LocalTxProver, Error> {
         if let Some(p) = self.prover.take() {
             return Ok(p);
@@ -428,6 +439,7 @@ impl Wallet {
     /// Builds, proves and signs a shielded spend to `to` with `memo`, records it in the wallet
     /// (its inputs are marked spent until the transaction expires) and returns the raw hex
     /// WITHOUT broadcasting it. A `fee` of `None` is the ZIP-317 conventional fee.
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn build(&mut self, req: &BuildRequest) -> Result<Built, Error> {
         let account = self.account()?;
         // Branch id and expiry come from the server's next block, so the wallet must stand at the
@@ -470,6 +482,15 @@ impl Wallet {
             None => spend::ExpiryRequest::new(req.expiry_height, self.max_expiry_window),
         };
         let branch_id = check_branch(&self.params, &server, target_height)?;
+
+        /// The browser (wasm32): proving is not wired yet — the prover over the parameters fetched
+        /// into the Cache API is yew/web plan W0.3; until then every build answers
+        /// [`Error::ProverUnsupported`]. Sync, balances and broadcast of an externally built
+        /// transaction work.
+        #[cfg(target_arch = "wasm32")]
+        pub async fn build(&mut self, _req: &BuildRequest) -> Result<Built, Error> {
+            Err(Error::ProverUnsupported)
+        }
 
         let params = self.params;
         let Address::Sapling(to_pa) = &to else {
@@ -824,6 +845,8 @@ pub enum Error {
     NoProvingParams,
     #[error("sapling-spend.params / sapling-output.params not found in {0}")]
     ProvingParamsMissing(PathBuf),
+    #[error("proving is not available on this target yet (browser: yew/web plan W0.3)")]
+    ProverUnsupported,
     #[error("bad address {0}")]
     Address(String),
     #[error("bad amount {0}")]

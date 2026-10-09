@@ -241,7 +241,7 @@ impl Wallet {
 
         let (tx, mut rx) = mpsc::channel::<Result<Vec<CompactBlock>, lwd::Error>>(2);
         let mut client = self.client.clone();
-        let producer = tokio::spawn(async move {
+        let producer = spawn_producer(async move {
             let mut stream = match lwd::block_stream(&mut client, start, end).await {
                 Ok(s) => s,
                 Err(e) => {
@@ -441,6 +441,28 @@ struct ChunkSummary {
     outputs: u32,
     received: u32,
     spent: u32,
+}
+
+/// The download task beside the scan: a tokio task natively, a browser microtask on wasm32
+/// (`wasm-bindgen-futures`; the gRPC-web client is `!Send`, and there is no tokio runtime).
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_producer(fut: impl std::future::Future<Output = ()> + Send + 'static) -> Producer {
+    tokio::spawn(fut)
+}
+#[cfg(not(target_arch = "wasm32"))]
+type Producer = tokio::task::JoinHandle<()>;
+
+#[cfg(target_arch = "wasm32")]
+fn spawn_producer(fut: impl std::future::Future<Output = ()> + 'static) -> Producer {
+    wasm_bindgen_futures::spawn_local(fut);
+    Producer
+}
+/// A spawned browser task cannot be aborted; dropping the receiver ends it at its next send.
+#[cfg(target_arch = "wasm32")]
+struct Producer;
+#[cfg(target_arch = "wasm32")]
+impl Producer {
+    fn abort(&self) {}
 }
 
 fn bad_cmu(

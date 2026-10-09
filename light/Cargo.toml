@@ -15,11 +15,8 @@ path = "src/main.rs"
 # librustzcash, Ycash-aware fork: boyfromcave/librustzcash6 @ 4867cf85 = miodragpop/librustzcash
 # ec525fae (the revision ycashd 6.21.0 pins) plus the Vault network upgrade (BranchId::Vault =
 # 0x6d5b7a31), the revision ycashd's upgrade/vault Cargo.toml pins. See README "Pinning".
-zcash_client_backend = { version = "0.22", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", features = ["lightwalletd-tonic", "unstable", "non-standard-fees"] }
-zcash_client_sqlite = { version = "0.20", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", features = ["unstable"] }
+zcash_client_backend = { version = "0.22", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", features = ["unstable", "non-standard-fees"] }
 zcash_keys = { version = "0.14", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", features = ["sapling", "unstable"] }
-zcash_primitives = { version = "0.28", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", features = ["non-standard-fees"] }
-zcash_proofs = { version = "0.28", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", features = ["local-prover", "multicore"] }
 zcash_protocol = { version = "0.9", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", features = ["local-consensus"] }
 zcash_address = { version = "0.12", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011" }
 zip321 = { version = "0.8", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011" }
@@ -27,25 +24,50 @@ sapling = { package = "sapling-crypto", version = "0.7", default-features = fals
 zip32 = "0.2"
 bip0039 = "0.12"
 
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
-tonic = { version = "0.14", default-features = false, features = ["transport", "codegen", "tls-ring", "tls-native-roots", "tls-webpki-roots"] }
+# The network layer is per target (yew/web plan W0.4): natively tokio's runtime and tonic's
+# HTTP/2 channel with rustls; on wasm32-unknown-unknown (the browser wallet) tokio's runtime-free
+# parts only, tonic without a transport, and gRPC-web over `fetch` (`tonic-web-wasm-client`;
+# TLS is the browser's). `lwd::Channel` is the per-target channel type. The binary's own
+# dependencies (the JSON-RPC server, the CLI) are native-only too.
 tonic-prost = "0.14"
 prost = "0.14"
 futures-util = "0.3"
-hyper = { version = "1", features = ["http1", "server"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
-http-body-util = "0.1"
-bytes = "1"
 rusqlite = { version = "0.39", features = ["bundled"] }
 rand = "0.8"
 secrecy = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
-clap = { version = "4", features = ["derive", "env"] }
 thiserror = "2"
 tracing = "0.1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# `multicore` (rayon in the Sapling and Orchard circuits) is native-only: halo2_proofs refuses it
+# on wasm32 without atomics, and maybe-rayon is serial there anyway. One line per target so the
+# feature set is explicit on both; everything else about these two crates is the same.
+zcash_client_sqlite = { version = "0.20", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", features = ["unstable"] }
+zcash_primitives = { version = "0.28", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", features = ["non-standard-fees"] }
+# The prover is native-only for now: `local-prover` pulls `home` (no wasm32 build) and
+# `multicore` rayon; the browser prover is yew/web plan W0.3.
+zcash_proofs = { version = "0.28", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", features = ["local-prover", "multicore"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
+tonic = { version = "0.14", default-features = false, features = ["transport", "codegen", "tls-ring", "tls-native-roots", "tls-webpki-roots"] }
+# The `x402-light` binary only (src/main.rs, src/rpc.rs): the JSON-RPC server and the CLI.
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+clap = { version = "4", features = ["derive", "env"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+zcash_client_sqlite = { version = "0.20", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", default-features = false, features = ["unstable"] }
+zcash_primitives = { version = "0.28", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", default-features = false, features = ["std", "non-standard-fees"] }
+tokio = { version = "1", default-features = false, features = ["sync", "macros"] }
+tonic = { version = "0.14", default-features = false, features = ["codegen"] }
+tonic-web-wasm-client = "0.9"
+wasm-bindgen-futures = "0.4"
+getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
 # `router` for the unit tests' in-process fake lightwalletd (src/fake_lwd.rs); test builds only.
