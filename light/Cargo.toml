@@ -47,8 +47,7 @@ tracing = "0.1"
 # feature set is explicit on both; everything else about these two crates is the same.
 zcash_client_sqlite = { version = "0.20", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", features = ["unstable"] }
 zcash_primitives = { version = "0.28", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", features = ["non-standard-fees"] }
-# The prover is native-only for now: `local-prover` pulls `home` (no wasm32 build) and
-# `multicore` rayon; the browser prover is yew/web plan W0.3.
+# `multicore` (rayon) natively; the browser builds the same prover serially (its table below).
 zcash_proofs = { version = "0.28", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", features = ["local-prover", "multicore"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
 tonic = { version = "0.14", default-features = false, features = ["transport", "codegen", "tls-ring", "tls-native-roots", "tls-webpki-roots"] }
@@ -63,11 +62,22 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 zcash_client_sqlite = { version = "0.20", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", default-features = false, features = ["unstable"] }
 zcash_primitives = { version = "0.28", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", default-features = false, features = ["std", "non-standard-fees"] }
+# The browser prover (yew/web plan W0.3): `local-prover` for `LocalTxProver::from_bytes` (the
+# module is gated on it; its default-location lookup is native-only in librustzcash6 up/web),
+# no `multicore` (no threads).
+zcash_proofs = { version = "0.28", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "4867cf85199a6fc734bf4027bd001e9e4fca0011", default-features = false, features = ["local-prover"] }
 tokio = { version = "1", default-features = false, features = ["sync", "macros"] }
 tonic = { version = "0.14", default-features = false, features = ["codegen"] }
 tonic-web-wasm-client = "0.9"
 wasm-bindgen-futures = "0.4"
 getrandom = { version = "0.2", features = ["js"] }
+# The store on OPFS (yew/web plan W0.1/W0.2, `src/wasm.rs`, `src/cache.rs`): rusqlite 0.39's
+# sqlite-wasm-rs backend, the sahpool VFS (0.2 is the line for sqlite-wasm-rs 0.5), the browser
+# clock (`js-sys`), and rayon's `yield_now` to drain the scanner's batches without threads.
+sqlite-wasm-rs = { version = "0.5", default-features = false }
+sqlite-wasm-vfs = { version = "0.2", default-features = false }
+js-sys = "0.3"
+rayon = "1"
 
 [dev-dependencies]
 # `router` for the unit tests' in-process fake lightwalletd (src/fake_lwd.rs); test builds only.

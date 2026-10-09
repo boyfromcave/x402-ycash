@@ -22,11 +22,7 @@
 //! so the Sapling tree size after each block (needed for note positions and nullifiers) is
 //! computed from the checkpoint's frontier plus each block's outputs and attached before caching.
 
-use std::fs;
-use std::time::Instant;
-
 use futures_util::StreamExt;
-use prost::Message;
 use serde::Serialize;
 use tokio::sync::mpsc;
 use zcash_client_backend::data_api::chain::{
@@ -35,14 +31,15 @@ use zcash_client_backend::data_api::chain::{
 use zcash_client_backend::data_api::scanning::{ScanPriority, ScanRange};
 use zcash_client_backend::data_api::{WalletCommitmentTrees, WalletRead, WalletWrite};
 use zcash_client_backend::proto::compact_formats::{ChainMetadata, CompactBlock};
-use zcash_client_sqlite::chain::BlockMeta;
 use zcash_client_sqlite::error::SqliteClientError;
-use zcash_primitives::block::BlockHash;
 use zcash_protocol::consensus::BlockHeight;
 
 use crate::lwd;
 use crate::net::parse_branch_id;
-use crate::wallet::{Error, Wallet};
+use crate::wallet::{elapsed_ms, now_ms, Error, Wallet};
+
+/// A progress callback: `(fully scanned height, tip)` after every scanned chunk.
+pub type OnChunk<'a> = &'a mut (dyn FnMut(u32, u32) + Send);
 
 /// Chunking: cut a chunk once it holds this many Sapling outputs, or this many blocks.
 pub const CHUNK_OUTPUTS: u32 = 1_000;
@@ -80,7 +77,17 @@ pub struct SyncReport {
 impl Wallet {
     /// One pass: tip, suggested ranges, stream + scan each, until nothing is left to scan.
     pub async fn sync(&mut self, chunk_blocks: u32) -> Result<SyncReport, Error> {
-        let started = Instant::now();
+        self.sync_with(chunk_blocks, None).await
+    }
+
+    /// [`Wallet::sync`] reporting progress after each scanned chunk to `on_chunk` (the browser
+    /// has no second connection or task to poll the store from; yew/web plan W0.5).
+    pub async fn sync_with(
+        &mut self,
+        chunk_blocks: u32,
+        mut on_chunk: Option<OnChunk<'_>>,
+    ) -> Result<SyncReport, Error> {
+        let started = now_ms();
         let mut report = SyncReport::default();
         self.account()?;
         let chunk_blocks = chunk_blocks.max(1);
@@ -125,7 +132,10 @@ impl Wallet {
             };
             tracing::info!("scan range {range}");
 
-            match self.scan_range(&range, chunk_blocks, &mut report).await? {
+            match self
+                .scan_range(&range, chunk_blocks, &mut report, &mut on_chunk)
+                .await?
+            {
                 RangeOutcome::Done => {}
                 RangeOutcome::Reorg(at) => {
                     report.reorgs += 1;
@@ -149,7 +159,7 @@ impl Wallet {
             .db
             .get_wallet_summary(crate::wallet::default_policy())?
             .map(|s| u32::from(s.fully_scanned_height()));
-        report.millis = started.elapsed().as_millis();
+        report.millis = elapsed_ms(started);
         Ok(report)
     }
 
@@ -222,14 +232,15 @@ impl Wallet {
         range: &ScanRange,
         chunk_blocks: u32,
         report: &mut SyncReport,
+        on_chunk: &mut Option<OnChunk<'_>>,
     ) -> Result<RangeOutcome, Error> {
         let start = range.block_range().start;
         let end = range.block_range().end - 1;
 
         // The checkpoint: the chain state at the block before the range (one GetTreeState call).
-        let t0 = Instant::now();
+        let t0 = now_ms();
         let mut prior: ChainState = self.chain_state_at(start - 1).await?;
-        report.downloadMillis += t0.elapsed().as_millis();
+        report.downloadMillis += elapsed_ms(t0);
 
         // Reorg by checkpoint, before any scanning: does the wallet's stored hash for start-1
         // still match what the server says? (The scanner re-checks prev_hash per block.)
@@ -296,7 +307,7 @@ impl Wallet {
                 outcome = RangeOutcome::Reorg(first.height());
                 break;
             }
-            let t1 = Instant::now();
+            let t1 = now_ms();
             let (next_state, summary) = match self.scan_chunk(blocks, &prior) {
                 Ok(ok) => ok,
                 Err(ChainError::Scan(err)) if err.is_continuity_error() => {
@@ -308,7 +319,7 @@ impl Wallet {
                     return Err(e.into());
                 }
             };
-            report.scanMillis += t1.elapsed().as_millis();
+            report.scanMillis += elapsed_ms(t1);
             report.blocksScanned += summary.blocks;
             report.outputsScanned += u64::from(summary.outputs);
             report.chunksScanned += 1;
@@ -316,6 +327,9 @@ impl Wallet {
             report.spentNotes += summary.spent;
             expected = next_state.block_height() + 1;
             prior = next_state;
+            if let Some(f) = on_chunk.as_mut() {
+                f(u32::from(expected) - 1, report.tipHeight);
+            }
 
             // A found note may have raised a Verify/FoundNote range above this one: let the
             // outer loop re-ask for ranges.
@@ -336,17 +350,10 @@ impl Wallet {
         &mut self,
         mut blocks: Vec<CompactBlock>,
         prior: &ChainState,
-    ) -> Result<
-        (ChainState, ChunkSummary),
-        ChainError<
-            zcash_client_sqlite::error::SqliteClientError,
-            zcash_client_sqlite::FsBlockDbError,
-        >,
-    > {
+    ) -> Result<(ChainState, ChunkSummary), ChainError<SqliteClientError, SqliteClientError>> {
         let start = blocks[0].height();
         let mut size = prior.final_sapling_tree().tree_size();
         let mut outputs_total = 0u32;
-        let mut metas = Vec::with_capacity(blocks.len());
         for block in &mut blocks {
             let outputs: u32 = block.vtx.iter().map(|tx| tx.outputs.len() as u32).sum();
             size += u64::from(outputs);
@@ -356,23 +363,10 @@ impl Wallet {
                     .expect("Sapling tree size fits u32"),
                 orchard_commitment_tree_size: 0,
             });
-            let meta = BlockMeta {
-                height: block.height(),
-                block_hash: BlockHash::from_slice(&block.hash),
-                block_time: block.time,
-                sapling_outputs_count: outputs,
-                orchard_actions_count: 0,
-            };
-            fs::write(
-                meta.block_file_path(&self.blocks_dir),
-                block.encode_to_vec(),
-            )
-            .map_err(|e| ChainError::BlockSource(zcash_client_sqlite::FsBlockDbError::Fs(e)))?;
-            metas.push(meta);
         }
         self.cache
-            .write_block_metadata(&metas)
-            .map_err(ChainError::BlockSource)?;
+            .insert(&blocks)
+            .map_err(|e| ChainError::BlockSource(e.into()))?;
         let last_height = blocks.last().expect("non-empty").height();
 
         let summary = scan_cached_blocks(
@@ -423,16 +417,9 @@ impl Wallet {
 
     /// Drops every cached compact block (they are re-fetched on demand; keeping them is waste).
     pub(crate) fn clear_cache(&mut self) -> Result<(), Error> {
-        for entry in fs::read_dir(&self.blocks_dir)? {
-            let entry = entry?;
-            if entry.file_type()?.is_file() {
-                fs::remove_file(entry.path())?;
-            }
-        }
         self.cache
-            .truncate_to_height(BlockHeight::from_u32(0))
-            .map_err(|e| Error::Cache(e.to_string()))?;
-        Ok(())
+            .truncate()
+            .map_err(|e| Error::Cache(e.to_string()))
     }
 }
 
@@ -465,10 +452,7 @@ impl Producer {
     fn abort(&self) {}
 }
 
-fn bad_cmu(
-    height: BlockHeight,
-) -> ChainError<zcash_client_sqlite::error::SqliteClientError, zcash_client_sqlite::FsBlockDbError>
-{
+fn bad_cmu(height: BlockHeight) -> ChainError<SqliteClientError, SqliteClientError> {
     ChainError::Scan(zcash_client_backend::scanning::ScanError::TreeSizeInvalid {
         protocol: zcash_protocol::ShieldedProtocol::Sapling,
         at_height: height,

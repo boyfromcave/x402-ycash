@@ -43,7 +43,7 @@ struct Cli {
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Args, Clone)]
 struct Common {
-    /// Wallet data directory (wallet.sqlite, cache/, spending.key)
+    /// Wallet data directory (wallet.sqlite, cache.sqlite, spending.key)
     #[arg(long, env = "X402_LIGHT_DATA")]
     data: PathBuf,
     /// lightwalletd address: grpc://host:port, grpcs://host:port or host:port (TLS unless loopback)

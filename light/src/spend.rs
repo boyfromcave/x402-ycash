@@ -8,10 +8,6 @@
 //! builder, the proofs, the ZIP-243 sighash over `TransactionData` with the chosen expiry, and the
 //! signatures — the steps of `zcash_primitives` `Builder::build_internal`, Sapling-only.
 
-// `assemble` is native-only until the browser prover lands (yew/web plan W0.3); on wasm32 its
-// imports and helpers are unused.
-#![cfg_attr(target_arch = "wasm32", allow(unused_imports, dead_code))]
-
 use rand::rngs::OsRng;
 use zcash_client_backend::data_api::WalletCommitmentTrees;
 use zcash_client_backend::proposal::Proposal;
@@ -25,7 +21,6 @@ use zcash_primitives::transaction::txid::TxIdDigester;
 use zcash_primitives::transaction::{
     Authorized, Transaction, TransactionData, TxVersion, Unauthorized,
 };
-#[cfg(not(target_arch = "wasm32"))]
 use zcash_proofs::prover::LocalTxProver;
 use zcash_protocol::consensus::{BlockHeight, BranchId};
 use zcash_protocol::memo::MemoBytes;
@@ -185,9 +180,6 @@ fn check_payment<FR>(
 
 /// Builds, proves and signs the single-step, Sapling-only transaction `proposal` describes,
 /// paying `payment` with the proposal's change, at `expiry`. Nothing is stored or broadcast.
-/// Native only: the browser prover is yew/web plan W0.3 (`Wallet::build` there answers
-/// `ProverUnsupported`).
-#[cfg(not(target_arch = "wasm32"))]
 pub fn assemble<FR>(
     db: &mut Db,
     params: &YcashNetwork,

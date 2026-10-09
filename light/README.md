@@ -79,7 +79,8 @@ codes are in [`schema.json`](schema.json); `once METHOD 'PARAMS_JSON'` runs any 
 | `send` | build + broadcast; the agent's `sapling-proof` payment (`LightClientShieldedPayer` in the SDK) |
 
 The key file: `<data>/spending.key` (bech32, mode 0600), written by `import_key`. The data
-directory also holds `wallet.sqlite`, `cache/` and `wallet.lock`: an open wallet holds an advisory
+directory also holds `wallet.sqlite`, `cache.sqlite` (the compact-block cache, a `BlockDb`) and
+`wallet.lock`: an open wallet holds an advisory
 exclusive lock on it (released by the OS when the process exits), so a `once` against the data
 directory of a running `serve` fails at once ("another process holds the wallet") instead of
 selecting the same notes. Use the server's `build`/`send` instead.
@@ -155,7 +156,7 @@ rescan. Unit tests: `src/sync.rs` (a forkable fake lightwalletd); devnet:
 `CompactBlock.chainMetadata` (the Sapling tree size after each block) is absent from 0.4.6, and
 the scanner needs it to place notes and derive nullifiers: `sync.rs` computes it from the
 checkpoint plus each block's outputs and attaches it before caching, which is what a newer
-lightwalletd sends. Compact blocks are cached in `cache/` only for the duration of a chunk.
+lightwalletd sends. Compact blocks are cached in `cache.sqlite` only for the duration of a chunk.
 
 **Branch id.** `GetLightdInfo.consensusBranchId` is the chaintip's (X-F71), wrong on the block
 before an upgrade. `build` asks `YellowbackStreamer.GetChainInfo` (lightwalletd-dd 0b3448e+) for
