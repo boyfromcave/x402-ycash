@@ -32,6 +32,18 @@ uv pip install --python .venv/bin/python -e . pytest pytest-asyncio
 It depends on `x402` (2.25.0 on PyPI, the Python SDK of the upstream checkout this repo follows),
 `httpx` and `coincurve`.
 
+**Falcon (FN-DSA-512) keys and signatures** use the node's own C: `x402_ycash/pq/_falcon_c/` is a
+byte-identical copy of ycash-dd's vendored PQClean `falcon-padded-512/clean` (README there), compiled
+on first use with `$CC` (default `cc`) into `~/.cache/x402-ycash` (or `$X402_YCASH_FALCON_CACHE`). Where
+no compiler is available at run time, build it ahead of time and point the SDK at it:
+
+```bash
+.venv/bin/python -m x402_ycash.pq.falcon --out /opt/x402/libycashfalcon.so   # builds, then checks pq_vectors.json
+export X402_YCASH_FALCON_LIB=/opt/x402/libycashfalcon.so
+```
+
+Verification (SLH-DSA and Falcon) never needs it: it is stdlib Python.
+
 ## Facilitator
 
 ```python

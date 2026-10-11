@@ -1,9 +1,10 @@
 # x402-ycash CI (plan §6; workspace CI/CD design 2026-10-06).
 #
 # Push / PR tier (every push and pull request on the branches below), four parallel jobs:
-#   unit               npm workspaces: eslint, tsc (typecheck), vitest unit tests
+#   unit               npm workspaces: eslint, tsc (typecheck), vitest unit tests, the Falcon KAT run
 #   light              the Rust Sapling light client (light/): fmt, clippy (-D warnings), test
-#   python             the Python bindings (python/, its own venv): ruff, mypy, pytest
+#   python             the Python bindings (python/, its own venv): ruff, mypy, pytest (the Falcon
+#                      signer compiles the node's vendored C with the runner's cc on first use)
 #   facilitator-image  the facilitator's Docker image builds and refuses to start unconfigured
 # Nightly tier (workflow_dispatch with tier=nightly; component repos carry no schedule, the node
 # lines do):
@@ -66,6 +67,9 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
+      # noble's Falcon (floating point) against NIST round-3 falcon512 (100 entries) and PQClean's
+      # falcon-padded-512 / falcon-512 KAT digests: ≈ 35 s, nothing downloaded.
+      - run: npm run test:kat -w x402-ycash-mechanism
 
   light:
     runs-on: ubuntu-latest

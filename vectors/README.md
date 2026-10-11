@@ -11,8 +11,14 @@ Copied byte for byte from ycash-dd `upgrade/quantum-vaults` at `aa0fd3812`, neve
 - `pq_vectors.json` = `src/test/data/pq_vectors.json`: SLH-DSA-SHA2-128s and FN-DSA-512 (PQClean
   padded) keys from 48-byte seeds, signatures over 32-byte sighashes (Falcon with its 88-byte
   entropy), key hashes, and the chunked `TX_PQPKH` spends. The TypeScript SDK (`@noble/post-quantum`
-  0.7.1) reproduces every key and signature of both schemes; the Python mirror (the node test
-  framework's stdlib port) every SLH-DSA key and signature and verifies the Falcon ones.
+  0.7.1) reproduces every key and signature of both schemes; the Python mirror every SLH-DSA key and
+  signature (the node test framework's stdlib port) and every Falcon key and signature (the node's
+  vendored C through ctypes, `x402_ycash.pq.falcon`), and verifies both in stdlib Python.
+- Beyond these three Falcon vectors, `packages/ycash/test/kat` (`npm run test:kat`) checks noble's
+  floating-point Falcon against the NIST round-3 `falcon512-KAT.rsp` (100 entries) and PQClean's
+  `falcon-padded-512` / `falcon-512` KAT digests, regenerated from their deterministic RNGs (nothing
+  downloaded), and, with `FALCON_DIFF_JSON` from `python/tests/kat/gen_falcon_differential.py`, against
+  N key pairs and signatures from the node's C (1,000/1,000 on 2026-10-10).
 - `yellowback_pq_vectors.json` = `src/test/data/yellowback_pq_vectors.json`: its `scripts` are the node's
   `TX_PQCHANNEL` / `TX_PQPKH` matcher differential (type and YED holder per script), which both SDKs'
   parsers reproduce; its `chain` section is the module's and is not used here.

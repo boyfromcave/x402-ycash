@@ -440,8 +440,10 @@ A YED channel is the YEC channel with these changes. It REQUIRES a Yellowback no
 side (`-experimentalfeatures -yellowback`) to verify vouchers.
 
 **On the quantum line, the channel script is the hybrid `TX_PQCHANNEL`** (see "YED channels on
-`TX_PQCHANNEL`" below); the P2SH channel described here stays valid for YED only before the node's
-Falcon height and is deprecated there.
+`TX_PQCHANNEL`" below); the P2SH channel described here is valid for YED only below the node's Falcon
+height. The Falcon height is 0 on mainnet and testnet (owner decision, 2026-10-10: Falcon from the
+vault upgrade's first block), so there the P2SH YED channel is never valid; it survives for regtest
+runs with `-pqfalconheight` > 0 ("The Falcon height" below).
 
 **Funding.** A TRANSFER (see [`exact`, YED](./scheme_exact_ycash.md#transaction-construction-transparent))
 that assigns D cents to the channel output (P2SH, or the bare `TX_PQCHANNEL`), with D in [100, 10,000,000] and D ≤ `maxDeposit`. The
@@ -529,8 +531,9 @@ bytes `63 20<h> 5n c2 69 21<S> ac 67 <push(t)> b1 75 20<h> 5n c2 68`, 112–117 
 slots byte-identical (clientHash = SHA256(scheme ‖ pk)), S a valid compressed secp256k1 point (the
 offer's `serverPubKey`), t a minimal CScriptNum in (0, 500,000,000). Parsers MUST rebuild and compare,
 as the node's `MatchPQChannel` does; `vectors/pq/yellowback_pq_vectors.json` ("scripts") is the node's
-matcher differential. Before the Falcon height the node's policy refuses a scheme-2 client, so the
-client key is SLH-DSA-SHA2-128s.
+matcher differential. The client's scheme follows the node's Falcon height: Falcon (FN-DSA-512, scheme
+2) from it, SLH-DSA-SHA2-128s (scheme 1) below it, where the node's policy refuses a scheme-2 output
+("The Falcon height" below).
 
 **Wire.** The `open` payload's `redeemScript` carries this script; the funding output's
 scriptPubKey MUST equal it (not its P2SH hash). Everything else in the payload is unchanged.
@@ -551,20 +554,57 @@ one. A stateless facilitator reads the channel script from the live output (`get
 scriptSig carries no redeem script.
 
 **Fees.** A close's fee floor follows the binding's one rule (ZIP-317 conventional, 500 per logical
-action over the actual size): 27,000 zatoshis for an SLH-DSA client. A server's YED `closeFee` MUST be
-at least that (the SDK's default is 30,000); the client's default `closeFee` cap for YED is 40,000.
+action over the actual size): 27,000 zatoshis for an SLH-DSA client, 6,000 for a Falcon client. A
+server's YED `closeFee` MUST be at least the floor of the client scheme it accepts (the SDK's default,
+30,000, covers both); the client's default `closeFee` cap for YED is 40,000.
 
-**Transport.** A voucher is ≈ 8.1 KB (≈ 22 KB of base64 in the `PAYMENT-SIGNATURE` header; an
-`open` with its funding ≈ 25 KB), above Node's default 16 KB header limit: an HTTP server taking YED
-vouchers MUST raise its header limit (the example merchant uses 64 KB), or it answers 431.
+**Transport.** An SLH-DSA voucher is ≈ 8.1 KB (≈ 22 KB of base64 in the `PAYMENT-SIGNATURE` header;
+an `open` with its funding ≈ 25 KB), above Node's default 16 KB header limit: an HTTP server taking
+YED vouchers MUST raise its header limit (the example merchant uses 64 KB), or it answers 431. A
+Falcon voucher is ≈ 1.8 KB (a 1,650-byte cooperative scriptSig), under the default limit.
 
-**Cost.** Each new voucher is one SLH-DSA signature (≈ 1–2 s in the TypeScript SDK, ≈ 0.75 s in the
-Python mirror on Apple silicon); a client reuses the identical voucher while the cumulative is unchanged
-(the pre-paid dollar). Verification is milliseconds.
+**Cost.** Each new voucher is one client signature: SLH-DSA ≈ 1–2 s in the TypeScript SDK (≈ 0.75 s in
+the Python mirror on Apple silicon), Falcon a few milliseconds (devnet: ≈ 0.26 s per paid request
+end to end, node round trips included); a client reuses the identical voucher while the cumulative is
+unchanged (the pre-paid dollar). Verification is milliseconds.
 
 **Security.** The client's funds and the refund need the client's post-quantum key. The server's
 in-channel balance is secp256k1-secure only: a quantum-capable client could forge S's signature and
 close at a state paying itself; servers settle or close promptly (D-Q-19, as for the P2SH channel).
+
+### The Falcon height
+
+The node reports its Falcon height F in `yed_getinfo.params.pq.falconHeight` (-1: never; regtest sets
+it with `-pqfalconheight`, mainnet and testnet have F = 0). Falcon applies to a block of height h when
+h ≥ F ≥ 0; for a transaction not yet mined, h is the next block (tip + 1). From F the module's
+`TOK-PQ` rule lets only a scheme-2 `TX_PQPKH`, or a `TX_PQCHANNEL` with a scheme-2 client, receive
+YED, and a transaction assigning YED to any other output is **invalid** (not a burn); below F the
+node's policy relays no scheme-2 output. Hence:
+
+- **A channel opened at or after F** (Falcon applies to the funding's block): the channel is a
+  `TX_PQCHANNEL` with a Falcon client; `payTo`, the `returnAddress` and the funding's YED change are
+  Falcon `TX_PQPKH` addresses (the 53-character `yb…`/`yt…`/`yr…` form, scheme 2). A client MUST open
+  so and refuse an offer whose `payTo` is not one (`invalid_payment_requirements`); a server MUST
+  refuse any other client key (`invalid_batch_settlement_ycash_redeem_script`), return address
+  (`invalid_batch_settlement_ycash_return_address`) or a `payTo` of its own that is not one
+  (`invalid_payment_requirements`). A P2SH YED open is refused.
+- **A channel opened below F** (P2SH, or a `TX_PQCHANNEL` with an SLH-DSA client; outputs P2PKH or
+  SLH-DSA `TX_PQPKH`) MUST be funded and closed below F: its vouchers become invalid at F. Its
+  `closeBy` is min(t, F), and client and server treat `closeBy` exactly as t elsewhere in this spec: the
+  server stops accepting vouchers and closes at `closeBy` − `closeMarginBlocks`, the client retires the
+  channel there, a server refuses an open already inside that margin, and the funding's
+  `nExpiryHeight` MUST be below F (non-zero) so it can never land at F (`invalid_batch_settlement_ycash_funding`).
+  A client opening below F with t > F is warned.
+- **After F only the refund of a pre-F channel remains**, from t, and it MUST pay a Falcon
+  `TX_PQPKH`: the client refunds to a Falcon address of its wallet instead of the open's return
+  address (the TypeScript SDK takes the funder's current return address when that is a Falcon address,
+  which a node wallet's `yed_getnewaddress` is from F, and otherwise refuses without an explicit one).
+- A server whose YED channels span F switches its `payTo` to a Falcon address at F (a node wallet's
+  `yed_getnewaddress` does so by itself).
+
+The TypeScript SDK and the Python mirror implement these rules (`channel/falcon.ts`,
+`x402_ycash/channel/falcon.py`); a node that does not answer `yed_getinfo` is assumed to have the
+network's default F (0 on mainnet and testnet, never on regtest).
 
 ## The Seven Network Requirements
 
@@ -597,9 +637,9 @@ The core codes apply. Scheme-specific codes:
 | Code | Meaning |
 |---|---|
 | `invalid_batch_settlement_ycash_payload_type` | the `type` is not valid for the operation |
-| `invalid_batch_settlement_ycash_redeem_script` | not the channel script, wrong S, C = S, or t below tip + `minLockBlocks` |
-| `invalid_batch_settlement_ycash_funding` | the funding transaction fails the `exact` rules, does not pay the P2SH script, or expires too soon ([Funding expiry](#open)) |
-| `invalid_batch_settlement_ycash_return_address` | `returnAddress` not an address of the network, `payTo`'s, a YED address for a YEC channel, or not P2PKH for a YED channel |
+| `invalid_batch_settlement_ycash_redeem_script` | not the channel script, wrong S, C = S, t below tip + `minLockBlocks`, (YED) a client scheme the Falcon height does not allow, or a pre-Falcon open inside F − `closeMarginBlocks` |
+| `invalid_batch_settlement_ycash_funding` | the funding transaction fails the `exact` rules, does not pay the channel script, expires too soon ([Funding expiry](#open)), or (YED, below the Falcon height) could land at it |
+| `invalid_batch_settlement_ycash_return_address` | `returnAddress` not an address of the network, `payTo`'s, a YED address for a YEC channel, P2SH for a YED channel, or (YED) not a Falcon `TX_PQPKH` from the Falcon height / a Falcon one below it |
 | `invalid_batch_settlement_ycash_deposit_too_large` | D above `maxDeposit` |
 | `invalid_batch_settlement_ycash_funding_depth` | the funding transaction has not reached the funding depth |
 | `invalid_batch_settlement_ycash_unknown_channel` | no open channel with that id |

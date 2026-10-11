@@ -39,12 +39,18 @@ On the `upgrade/quantum-vaults` node line (`rpcversion` 7; it rides the vault up
 `6d5b7a31`) the SDKs speak post-quantum Ycash: YED addresses take a 53-character post-quantum form
 beside the 35-character one (mainnet `yb…`, testnet `yt…`, regtest `yr…`), plain YEC an `sq…`/`tq…`/`rq…`
 form; YED can be paid to a `TX_PQPKH` holder; and **YED payment channels open on the hybrid
-`TX_PQCHANNEL`** (the client's SLH-DSA key plus the server's secp256k1 key, a CLTV refund to the
-client's post-quantum key). The P2SH YED channel is deprecated there (`yedChannelTemplate: "p2sh"`,
-valid only before the node's Falcon height); YEC channels stay P2SH. A YED voucher is ≈ 8 KB, so a
-server taking them raises its HTTP header limit (the example merchant: 64 KB), and a YED channel's
-`closeFee` is 30,000 zatoshis. See `specs/scheme_batch_settlement_ycash.md`, "YED channels on
-`TX_PQCHANNEL`".
+`TX_PQCHANNEL`** (the client's post-quantum key plus the server's secp256k1 key, a CLTV refund to the
+client's post-quantum key). The client key follows the node's Falcon height F
+(`yed_getinfo.params.pq.falconHeight`): **Falcon (FN-DSA-512) from F**, with Falcon `TX_PQPKH` payTo,
+return and change addresses (the module's `TOK-PQ`), SLH-DSA below F. F is 0 on mainnet and testnet
+(owner decision 2026-10-10: Falcon from day one), so there every YED channel is Falcon. A channel opened
+below F (regtest `-pqfalconheight` only) is closed below F, and its refund after F pays a Falcon address.
+The P2SH YED channel (`yedChannelTemplate: "p2sh"`) is valid only below F, so never on mainnet; YEC
+channels stay P2SH. An SLH-DSA voucher is ≈ 8 KB (a server taking them raises its HTTP header limit; the
+example merchant: 64 KB), a Falcon one ≈ 1.8 KB; a YED channel's `closeFee` is 30,000 zatoshis (the floor:
+27,000 SLH-DSA, 6,000 Falcon). The Python mirror signs Falcon with the node's own C (`x402_ycash.pq.falcon`,
+compiled on first use). See `specs/scheme_batch_settlement_ycash.md`, "YED channels on `TX_PQCHANNEL`"
+and "The Falcon height".
 
 ## Layout
 
