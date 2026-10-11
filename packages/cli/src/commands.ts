@@ -139,18 +139,22 @@ export async function channelRefund(c: PayingClient, config: CliConfig, channelI
   if (!rec) throw new UsageError(`no channel ${channelId} in the store`);
   const isYed = rec.asset === ASSET_YED;
   if (isYed && config.refundTo && tx.decodeAddress(config.refundTo, config.network).kind === "p2sh") throw new UsageError("--to: a YED refund pays a key-hash (yb…/yt…/yr…) address");
-  const toScript = config.refundTo
+  // A record with a returnAddress refunds through the SDK's default: the open's return script, or, for
+  // a YED channel opened before the Falcon height and refunded after it, the funder's Falcon address.
+  const explicit = config.refundTo
     ? tx.addressToScript(config.refundTo, config.network)
     : rec.returnAddress
-      ? tx.hexToBytes(rec.clientScript)
+      ? undefined
       : await legacyRefundScript(config, isYed);
-  const txid = await batchOf(c).refund(channelId, { toScript });
+  const txid = await batchOf(c).refund(channelId, explicit ? { toScript: explicit } : {});
   const record: Record<string, unknown> = { msg: "refunded", channelId, asset: rec.asset, transaction: txid };
   if (isYed) {
     // The TRANSFER as broadcast (vout 1 is the refund output): proof the YED came back, nothing burned.
     const hex = await rawTransaction(config, txid);
-    const found = yed.findPayload(tx.parseTx(hex).vout);
+    const refundTx = tx.parseTx(hex);
+    const found = yed.findPayload(refundTx.vout);
     record.transfer = found && "payload" in found ? found.payload : found;
+    const toScript = refundTx.vout[refundTx.vout.length - 1]!.scriptPubKey;
     const pkh = tx.p2pkhHash(toScript);
     const pqId = pq.pqpkhKeyId(toScript);
     record.to = pkh ? tx.encodeAddress(config.network, "yed", pkh) : pqId ? tx.encodePQAddress(config.network, "yedpq", pqId) : tx.bytesToHex(toScript);

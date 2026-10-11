@@ -203,7 +203,10 @@ describe("Falcon known answers (noble 0.7.1 vs NIST round 3 and PQClean)", () =>
       }
       let pass = 0;
       const failed: number[] = [];
-      for (const [count, e] of entries) (JSON.stringify(got.get(count)) === JSON.stringify(e) ? pass++ : failed.push(count));
+      for (const [count, e] of entries) {
+        if (JSON.stringify(got.get(count)) === JSON.stringify(e)) pass++;
+        else failed.push(count);
+      }
       console.log(`NIST round-3 falcon512 KAT: ${pass}/${entries.size} entries byte-identical (keygen pk/sk and sm)${failed.length ? `; failed counts ${failed.join(",")}` : ""}`);
       expect(failed).toEqual([]);
     }

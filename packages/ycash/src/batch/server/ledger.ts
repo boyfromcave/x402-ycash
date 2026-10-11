@@ -41,6 +41,8 @@ export interface ChannelTerms {
   amount: string;
   /** the client's output script in every voucher (hex), from the open's `returnAddress` */
   returnScript?: string;
+  /** the height it must be closed below when earlier than t: the Falcon height for a YED channel opened before it */
+  closeBy?: number;
 }
 
 export interface LedgerChannel {

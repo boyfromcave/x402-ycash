@@ -9,7 +9,9 @@ import { RPC_METHOD_NOT_FOUND, RpcError } from "../../node/errors.js";
 import { selectTokenCoins, type TokenCoin } from "../../yed/build.js";
 import type { YcashRpc } from "../../node/rpc.js";
 import { yecToZat } from "../../node/amount.js";
-import { addressToScript, encodeAddress } from "../../tx/address.js";
+import { addressToScript, encodeAddress, encodePQAddress } from "../../tx/address.js";
+import { isFalconHolder } from "../../channel/falcon.js";
+import { pqpkhKeyId } from "../../pq/script.js";
 import { equalBytes, hexToBytes } from "../../tx/bytes.js";
 import { hash160 } from "../../tx/hash.js";
 import { pubkeyFromPriv } from "../../tx/keys.js";
@@ -31,6 +33,11 @@ export interface FundingRequest {
   tip?: number;
   /** The funding's nExpiryHeight (plan X-F52); 0 or absent = never expires. Its coins are held until then. */
   expiryHeight?: number;
+  /**
+   * YED: the funding lands at or after the node's Falcon height, so its YED change must go to a Falcon
+   * TX_PQPKH (TOK-PQ). A funder that cannot hold YED there refuses the request.
+   */
+  falconActive?: boolean;
 }
 
 export interface ChannelFunder {
@@ -222,6 +229,8 @@ async function fundYed(
  * @throws Error for any other script type.
  */
 function addressOfScript(network: YcashNetwork, script: Uint8Array): string {
+  const pq = pqpkhKeyId(script);
+  if (pq) return encodePQAddress(network, "yedpq", pq);
   const pkh = p2pkhHash(script);
   if (pkh) return encodeAddress(network, "p2pkh", pkh);
   if (script.length === 23 && script[0] === 0xa9 && script[1] === 0x14 && script[22] === 0x87) return encodeAddress(network, "p2sh", script.slice(2, 22));
@@ -327,6 +336,9 @@ export function utxoSourceFunder(privKey: Uint8Array, source: FundingCoinSource,
     throw new Error(`the coins of ${address} cannot fund ${req.value} zatoshis`);
   };
   const fundYedOnce = async (req: FundingRequest, address: string): Promise<string | undefined> => {
+    if (req.falconActive) {
+      throw new Error("utxoSourceFunder holds YED at a P2PKH key, which cannot receive YED from the Falcon height (TOK-PQ): fund YED channels from a node wallet (rpcWalletFunder)");
+    }
     if (!source.listTokens) throw new Error("this coin source cannot list YED outputs (listTokens), so it cannot fund a YED channel");
     const tokens = (await source.listTokens(address)).filter((t) => equalBytes(t.scriptPubKey, script) && free(req, t.outpoint));
     // YED and YEC change both return to the key (its ye… and s… forms share the script).
@@ -372,6 +384,9 @@ export function localKeyYedFunder(
     },
     async fund(req) {
       if (req.asset !== ASSET_YED || req.deposit === undefined) throw new Error("localKeyYedFunder funds YED channels: asset YED and the deposit in cents");
+      if (req.falconActive && !isFalconHolder(change.yed)) {
+        throw new Error("from the Falcon height the YED change must go to a Falcon post-quantum address (TOK-PQ): pass a scheme-2 TX_PQPKH as change.yed");
+      }
       const sel = selectTokenCoins(tokens, Number(req.deposit));
       const built = buildYedFundingTx({
         redeemScript: req.redeemScript,

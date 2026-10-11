@@ -27,9 +27,10 @@ import {
   layoutFor,
   verifyOpen,
   yedChain,
+  type ChainContext,
   type ChainView,
 } from "../verify.js";
-import { ChannelWatcher, type WatchedChannel } from "../watcher.js";
+import { ChannelWatcher, marginHeightOf, type WatchedChannel } from "../watcher.js";
 import { CHANNEL_OPEN, ChannelLedger, type ChannelTerms, type LedgerChannel } from "./ledger.js";
 
 export type CloseReason = "idle" | "margin" | "exhausted" | "client" | "demand";
@@ -161,8 +162,11 @@ export class ChannelManager {
           const v = await verifyOpen(p, terms, this.chain, ctx);
           channelId = v.channelId;
           if (!v.alreadyBroadcast) await this.relayFunding(p.fundingTx, v.fundingTxid, p.vout);
-          await this.ledger.open({ ...this.termsOf(v.channel, channelId, p.fundingTx, terms, v.deposit), returnScript: bytesToHex(v.returnScript) });
-          this.log(`open ${channelId} V=${v.channel.value} D=${v.deposit} t=${v.channel.refundHeight}`);
+          await this.ledger.open({
+            ...this.termsOf(v.channel, channelId, p.fundingTx, terms, v.deposit), returnScript: bytesToHex(v.returnScript),
+            ...(v.closeBy < v.channel.refundHeight ? { closeBy: v.closeBy } : {}),
+          });
+          this.log(`open ${channelId} V=${v.channel.value} D=${v.deposit} t=${v.channel.refundHeight}${v.closeBy < v.channel.refundHeight ? ` closeBy=${v.closeBy} (opened before the Falcon height)` : ""}`);
         }
         this.track(channelId);
         await this.waitForDepth(channelId);
@@ -279,7 +283,7 @@ export class ChannelManager {
         continue;
       }
       let reason: CloseReason | null = null;
-      if (height >= ch.terms.refundHeight - ch.terms.closeMarginBlocks) reason = "margin";
+      if (height >= marginHeightOf(ch.terms)) reason = "margin";
       else if (now - (this.lastActivity.get(id) ?? now) >= this.idleMs) reason = "idle";
       if (reason) closed.push({ channelId: id, reason, txid: await this.close(id, reason) });
     }
@@ -309,7 +313,9 @@ export class ChannelManager {
         const open: WatchedChannel[] = [];
         for (const id of this.tracked()) {
           const ch = await this.ledger.get(id);
-          if (ch?.state === CHANNEL_OPEN) open.push({ channelId: id, refundHeight: ch.terms.refundHeight, closeMarginBlocks: ch.terms.closeMarginBlocks });
+          if (ch?.state === CHANNEL_OPEN) {
+            open.push({ channelId: id, refundHeight: ch.terms.refundHeight, closeMarginBlocks: ch.terms.closeMarginBlocks, ...(ch.terms.closeBy !== undefined ? { closeBy: ch.terms.closeBy } : {}) });
+          }
         }
         return open;
       },
@@ -377,7 +383,7 @@ export class ChannelManager {
     txHex: string,
     cumulative: bigint,
     terms: BatchTerms,
-    ctx: { tip: number; branchId: number },
+    ctx: ChainContext,
   ): Promise<VerifiedVoucher> {
     // 1. known and open
     if (!parseChannelId(channelId)) throw new BatchSettlementError(BatchError.UNKNOWN_CHANNEL, channelId);
@@ -387,10 +393,10 @@ export class ChannelManager {
     this.checkSameTerms(before, terms);
     const channel = this.channelOf(before.terms);
     // 2. margin: refuse and close (a client close is still welcome until t)
-    const marginHeight = before.terms.refundHeight - before.terms.closeMarginBlocks;
+    const marginHeight = marginHeightOf(before.terms); // t − margin, or the Falcon height − margin for a channel opened before it
     if (kind !== "close" && ctx.tip >= marginHeight) {
       await this.close(channelId, "margin").catch((e: unknown) => this.log(`margin close of ${channelId} failed: ${String(e)}`));
-      throw new BatchSettlementError(BatchError.CHANNEL_CLOSING, `tip ${ctx.tip} ≥ t − margin = ${marginHeight}`);
+      throw new BatchSettlementError(BatchError.CHANNEL_CLOSING, `tip ${ctx.tip} ≥ ${before.terms.closeBy !== undefined && before.terms.closeBy < before.terms.refundHeight ? "the Falcon height" : "t"} − margin = ${marginHeight}`);
     }
     const token = await this.ledger.acquire(channelId);
     if (token === null) throw new BatchSettlementError(BatchError.CHANNEL_BUSY, "another voucher of this channel is in flight");

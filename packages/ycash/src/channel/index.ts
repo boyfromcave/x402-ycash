@@ -9,3 +9,4 @@ export * from "./funding.js";
 export * from "./voucher.js";
 export * from "./refund.js";
 export * from "./yed.js";
+export * from "./falcon.js";

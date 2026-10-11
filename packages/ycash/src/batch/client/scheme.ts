@@ -13,26 +13,32 @@ import { buildChannelScript, channelAddress } from "../../channel/script.js";
 import { buildVoucher } from "../../channel/voucher.js";
 import { buildYedRefund, yedChannelValue } from "../../channel/yed.js";
 import { ASSET_YEC, ASSET_YED, TX_EXPIRING_SOON_THRESHOLD, YED_MAX_OUTPUT_CENTS } from "../../constants.js";
-import type { BlockchainInfo, TxOutInfo } from "../../node/types.js";
+import type { BlockchainInfo, TxOutInfo, YedInfo } from "../../node/types.js";
+import { channelCloseBy, isFalconActiveAt, isFalconHolder, readFalconHeight, yedChannelClientScheme, yedHolderProblem } from "../../channel/falcon.js";
 import { bytesToHex, hexToBytes } from "../../tx/bytes.js";
 import { addressToScript } from "../../tx/address.js";
 import { randomBytes } from "@noble/hashes/utils.js";
-import { SCHEME_SLH_DSA_SHA2_128S, SEED_SIZE, keyIdOf } from "../../pq/scheme.js";
+import { SEED_SIZE, keyIdOf } from "../../pq/scheme.js";
 import { pqKeygen } from "../../pq/sign.js";
 import { pubkeyFromPriv, randomPrivKey } from "../../tx/keys.js";
 import { parseTx, serializeTxHex, txid as txidOf } from "../../tx/tx.js";
-import { BatchError } from "../errors.js";
+import { BatchError, BatchSettlementError } from "../errors.js";
 import { returnScriptOf } from "../returnAddress.js";
 import { parseTerms, type BatchChannelState, type BatchClientPayload, type BatchTerms } from "../types.js";
-import { closeCumulative, cumulativeFloor, layoutFor } from "../verify.js";
+import { closeCumulative, cumulativeFloor, layoutFor, minFundingExpiry } from "../verify.js";
 import { channelOfRecord, clientKeysOfRecord, InMemoryClientChannelStorage, offerKeyOf, type ClientChannelRecord, type ClientChannelStorage } from "./channel.js";
 import type { ChannelFunder } from "./funder.js";
 
-/** The node calls the client needs: tip and branch id, and broadcasting its refund. */
+/**
+ * The node calls the client needs: tip and branch id, and broadcasting its refund. `yed_getinfo`,
+ * when the node answers it, gives the Falcon height (`params.pq.falconHeight`) YED channels follow;
+ * without it the network's default applies (see `channel/falcon.ts`).
+ */
 export interface ClientChain {
   getBlockchainInfo(): Promise<Pick<BlockchainInfo, "blocks" | "consensus">>;
   getTxOut(txid: string, n: number, includeMempool: boolean): Promise<TxOutInfo | null>;
   sendRawTransaction(hex: string): Promise<string>;
+  yedGetInfo?(): Promise<YedInfo>;
 }
 
 /**
@@ -52,9 +58,10 @@ export const DEFAULT_CLIENT_MAX_CLOSE_FEE: Readonly<Record<string, bigint>> = { 
 
 /**
  * The script a YED channel is opened on. `pq` (the default): the hybrid TX_PQCHANNEL (D-Q-19), with
- * an SLH-DSA client key. `p2sh`: the 2-of-2 secp256k1 channel, **deprecated** on the quantum line:
- * valid for YED only before the node's Falcon height (TOK-PQ refuses a P2SH holder after it).
- * YEC channels are always P2SH.
+ * a Falcon client key once the node's Falcon height applies to the funding's block, an SLH-DSA key
+ * before it. `p2sh`: the 2-of-2 secp256k1 channel, **regtest before the Falcon height only**: TOK-PQ
+ * refuses a P2SH holder from the Falcon height, which is 0 on mainnet and testnet (owner decision
+ * 2026-10-10), so a `p2sh` open there is refused. YEC channels are always P2SH.
  */
 export type YedChannelTemplate = "pq" | "p2sh";
 
@@ -89,8 +96,13 @@ export interface BatchYcashClientConfig {
   maxCloseFee?: Partial<Record<string, bigint>>;
   /** The funding's nExpiryHeight is tip + 3 + this (default DEFAULT_FUNDING_EXPIRY_BLOCKS). */
   fundingExpiryBlocks?: number;
-  /** The script YED channels open on (default `pq`; `p2sh` is deprecated, see {@link YedChannelTemplate}). */
+  /** The script YED channels open on (default `pq`; `p2sh` is regtest-only, see {@link YedChannelTemplate}). */
   yedChannelTemplate?: YedChannelTemplate;
+  /**
+   * The node's Falcon height F (`yed_getinfo.params.pq.falconHeight`; -1 = never). Default: asked of
+   * `chain.yedGetInfo`, else the network's default (0 on mainnet and testnet, never on regtest).
+   */
+  falconHeight?: number;
   log?: (msg: string) => void;
 }
 
@@ -103,6 +115,13 @@ export interface ClientChannelStatus {
   blocksToRefund: number;
   /** the channel output is unspent (neither closed nor refunded) */
   unspent: boolean;
+  /**
+   * The height the channel must be closed below: t, or min(t, F) for a YED channel opened before the
+   * Falcon height F (its outputs stop being valid YED holders at F).
+   */
+  closeBy: number;
+  /** Set when the channel cannot be closed cooperatively any more, or only its refund (to a Falcon address) remains. */
+  warning?: string;
   charged: string;
   signed: string;
   deposit: string;
@@ -173,8 +192,9 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     const branchId = parseInt(info.consensus.nextblock, 16) >>> 0;
     if (rec) {
       const next = BigInt(rec.charged) + terms.amount;
-      if (next > BigInt(rec.deposit) || info.blocks >= rec.refundHeight - rec.closeMarginBlocks) {
-        rec.status = "retired"; // the server closes it (exhausted or margin); continue on a new channel
+      const closeBy = await this.closeByOf(rec);
+      if (next > BigInt(rec.deposit) || info.blocks >= closeBy - rec.closeMarginBlocks) {
+        rec.status = "retired"; // the server closes it (exhausted, margin, or the Falcon height); continue on a new channel
         await this.storage.put(rec);
         rec = undefined;
       } else {
@@ -274,10 +294,11 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     const rec = await this.mustGet(channelId);
     const info = await this.cfg.chain.getBlockchainInfo();
     if (info.blocks < rec.refundHeight) throw new Error(`the refund is valid from height ${rec.refundHeight}; tip is ${info.blocks}`);
+    const toScript = rec.asset === ASSET_YED ? await this.yedRefundScript(rec, info.blocks, opts.toScript) : (opts.toScript ?? hexToBytes(rec.clientScript));
     const params = {
       channel: channelOfRecord(rec),
       ...clientKeysOfRecord(rec),
-      toScript: opts.toScript ?? hexToBytes(rec.clientScript),
+      toScript,
       branchId: parseInt(info.consensus.nextblock, 16) >>> 0,
       ...(opts.fee !== undefined ? { fee: opts.fee } : {}),
     };
@@ -298,11 +319,20 @@ export class BatchYcashScheme implements SchemeNetworkClient {
    */
   async status(channelId: string): Promise<ClientChannelStatus> {
     const rec = await this.mustGet(channelId);
-    const [info, out] = await Promise.all([this.cfg.chain.getBlockchainInfo(), this.cfg.chain.getTxOut(rec.channelId.split(":")[0] as string, rec.vout, true)]);
+    const [info, out, closeBy] = await Promise.all([
+      this.cfg.chain.getBlockchainInfo(), this.cfg.chain.getTxOut(rec.channelId.split(":")[0] as string, rec.vout, true), this.closeByOf(rec),
+    ]);
+    const unspent = out !== null;
+    let warning: string | undefined;
+    if (unspent && closeBy < rec.refundHeight) {
+      warning = info.blocks + 1 >= closeBy
+        ? `the Falcon height ${closeBy} has passed: this channel's vouchers can no longer be mined; refund from ${rec.refundHeight} to a Falcon address`
+        : `opened before the Falcon height ${closeBy}: it must be closed below it (the server closes at ${closeBy - rec.closeMarginBlocks})`;
+    }
     return {
       channelId, status: rec.status, tip: info.blocks, refundHeight: rec.refundHeight,
-      blocksToRefund: Math.max(0, rec.refundHeight - info.blocks), unspent: out !== null,
-      charged: rec.charged, signed: rec.signed, deposit: rec.deposit,
+      blocksToRefund: Math.max(0, rec.refundHeight - info.blocks), unspent,
+      charged: rec.charged, signed: rec.signed, deposit: rec.deposit, closeBy, ...(warning ? { warning } : {}),
     };
   }
 
@@ -361,17 +391,47 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     }
     const returnAddress = this.cfg.returnAddress ?? (await this.cfg.funder.returnAddress?.({ network: terms.network, asset: terms.asset }));
     if (!returnAddress) throw new Error("no return address: set returnAddress, or use a funder that has one (the channel key's remainder would be stranded)");
-    const returnScript = returnScriptOf(returnAddress, terms.network, terms.asset, addressToScript(terms.payTo, terms.network));
+    const payToScript = addressToScript(terms.payTo, terms.network);
+    const returnScript = returnScriptOf(returnAddress, terms.network, terms.asset, payToScript);
     const refundHeight = tip + terms.minLockBlocks + (this.cfg.lockSlackBlocks ?? 10);
-    // A YED channel opens on the hybrid TX_PQCHANNEL unless configured otherwise (D-Q-19): the
-    // client key is SLH-DSA (Falcon keys are for after the node's Falcon height), its seed stored.
+    let expiryHeight = tip + TX_EXPIRING_SOON_THRESHOLD + (this.cfg.fundingExpiryBlocks ?? DEFAULT_FUNDING_EXPIRY_BLOCKS);
+    // A YED channel opens on the hybrid TX_PQCHANNEL unless configured otherwise (D-Q-19). Its client
+    // key follows the node's Falcon height F: Falcon when the funding lands at or after F, SLH-DSA
+    // before (policy refuses a scheme-2 output then); the seed is stored.
     const pq = yed && (this.cfg.yedChannelTemplate ?? "pq") === "pq";
+    let falconActive = false;
+    if (yed) {
+      const falconHeight = await this.falconHeightFor(terms.network);
+      falconActive = isFalconActiveAt(falconHeight, tip + 1);
+      // TOK-PQ from F, policy before it: every output a voucher assigns YED to must be a holder then.
+      const returnProblem = yedHolderProblem(returnScript, falconActive);
+      if (returnProblem) throw new BatchSettlementError(BatchError.RETURN_ADDRESS, `${returnAddress}: ${returnProblem}`);
+      const payToProblem = yedHolderProblem(payToScript, falconActive);
+      if (payToProblem) throw new BatchSettlementError(BatchError.REQUIREMENTS, `payTo ${terms.payTo}: ${payToProblem}`);
+      if (falconActive && !pq) {
+        throw new Error(`a P2SH YED channel is invalid from the Falcon height (${falconHeight}; TOK-PQ): open on TX_PQCHANNEL (yedChannelTemplate "pq")`);
+      }
+      if (!falconActive && falconHeight >= 0) {
+        // Opened before F: funded and closed below F. The funding expires below F so it can never land
+        // at F (TOK-PQ would refuse its non-Falcon channel output).
+        const closeBy = Math.min(refundHeight, falconHeight);
+        if (closeBy - terms.closeMarginBlocks <= tip + 1 || falconHeight - 1 < minFundingExpiry(tip, terms.confirmations)) {
+          throw new Error(`the Falcon height ${falconHeight} is too close (tip ${tip}): a YED channel opened now would have to close by ${closeBy - terms.closeMarginBlocks}; open one from height ${falconHeight}`);
+        }
+        if (expiryHeight > falconHeight - 1) expiryHeight = falconHeight - 1;
+        if (refundHeight > falconHeight) {
+          this.cfg.log?.(`warning: this YED channel opens before the Falcon height ${falconHeight} and must be closed below it (t = ${refundHeight}); after it only a refund to a Falcon address remains`);
+        }
+      }
+    }
     let priv: Uint8Array;
     let redeemScript: Uint8Array;
+    const clientScheme = pq ? yedChannelClientScheme(falconActive) : undefined;
     if (pq) {
+      const scheme = clientScheme as NonNullable<typeof clientScheme>;
       priv = randomBytes(SEED_SIZE);
-      const kp = pqKeygen(SCHEME_SLH_DSA_SHA2_128S, priv);
-      redeemScript = buildPQChannelScript({ client: keyIdOf(SCHEME_SLH_DSA_SHA2_128S, kp.publicKey), serverPubKey: terms.serverPubKey, refundHeight });
+      const kp = pqKeygen(scheme, priv);
+      redeemScript = buildPQChannelScript({ client: keyIdOf(scheme, kp.publicKey), serverPubKey: terms.serverPubKey, refundHeight });
     } else {
       priv = randomPrivKey();
       redeemScript = buildChannelScript({ clientPubKey: pubkeyFromPriv(priv), serverPubKey: terms.serverPubKey, refundHeight });
@@ -389,8 +449,9 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     this.layoutFor(terms.asset, deposit); // refuse an asset without a layout before funding anything
     // YED: V carries the two voucher outputs' TOKEN_VALUE and the close fee; D is assigned in cents.
     const value = yed ? yedChannelValue(terms.closeFee) : deposit + terms.closeFee;
-    const expiryHeight = tip + TX_EXPIRING_SOON_THRESHOLD + (this.cfg.fundingExpiryBlocks ?? DEFAULT_FUNDING_EXPIRY_BLOCKS);
-    const fundingTx = await this.cfg.funder.fund({ network: terms.network, redeemScript, value, branchId, asset: terms.asset, deposit, tip, expiryHeight });
+    const fundingTx = await this.cfg.funder.fund({
+      network: terms.network, redeemScript, value, branchId, asset: terms.asset, deposit, tip, expiryHeight, ...(yed ? { falconActive } : {}),
+    });
     const vout = findChannelVout(parseTx(fundingTx), redeemScript);
     if (vout < 0) throw new Error("the funder's transaction does not pay the channel");
     const channelId = channelIdOf({ txid: txidOf(hexToBytes(fundingTx)), vout });
@@ -398,6 +459,7 @@ export class BatchYcashScheme implements SchemeNetworkClient {
       channelId, offerKey, network: terms.network, asset: terms.asset, payTo: terms.payTo, serverPubKey: bytesToHex(terms.serverPubKey),
       redeemScript: bytesToHex(redeemScript), fundingTx, vout, value: value.toString(), closeFee: terms.closeFee.toString(),
       deposit: deposit.toString(), refundHeight, closeMarginBlocks: terms.closeMarginBlocks, clientPrivKey: bytesToHex(priv),
+      ...(clientScheme !== undefined ? { clientScheme } : {}),
       clientScript: bytesToHex(returnScript), returnAddress, fundingExpiryHeight: parseTx(fundingTx).expiryHeight,
       charged: "0", signed: first.toString(), status: "opening",
     };
@@ -407,8 +469,58 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     };
     rec.open = open;
     await this.storage.put(rec);
-    this.cfg.log?.(`opened ${channelId} ${pq ? "on TX_PQCHANNEL" : `at ${channelAddress(terms.network, redeemScript)}`}: V=${value} D=${deposit} t=${refundHeight}`);
+    this.cfg.log?.(`opened ${channelId} ${pq ? `on TX_PQCHANNEL (${falconActive ? "Falcon" : "SLH-DSA"} client)` : `at ${channelAddress(terms.network, redeemScript)}`}: V=${value} D=${deposit} t=${refundHeight}`);
     return open;
+  }
+
+  /**
+   * The node's Falcon height F: the configured one, else `yed_getinfo`'s, else the network default.
+   *
+   * @param network - The channel's network.
+   * @returns F, or -1 (never).
+   */
+  private async falconHeightFor(network: ClientChannelRecord["network"]): Promise<number> {
+    return this.cfg.falconHeight ?? readFalconHeight(this.cfg.chain, network);
+  }
+
+  /**
+   * The height a channel must be closed below: t, or min(t, F) for a YED channel opened before F.
+   *
+   * @param rec - The channel record.
+   * @returns closeBy.
+   */
+  private async closeByOf(rec: ClientChannelRecord): Promise<number> {
+    if (rec.asset !== ASSET_YED) return rec.refundHeight;
+    return channelCloseBy(rec.asset, channelOfRecord(rec), await this.falconHeightFor(rec.network));
+  }
+
+  /**
+   * Where a YED refund pays: `toScript`, else the channel's return script; from the Falcon height
+   * (TOK-PQ) it must be a Falcon TX_PQPKH, so a channel opened before F whose return script is not
+   * one refunds to the funder's current return address when that is a Falcon address (a node
+   * wallet's `yed_getnewaddress` is, from F), and is refused otherwise.
+   *
+   * @param rec - The channel record.
+   * @param tip - The current tip.
+   * @param toScript - The caller's destination, if any.
+   * @returns The refund's output script.
+   * @throws BatchSettlementError with `RETURN_ADDRESS` when no Falcon destination is available after F.
+   */
+  private async yedRefundScript(rec: ClientChannelRecord, tip: number, toScript?: Uint8Array): Promise<Uint8Array> {
+    const falconHeight = await this.falconHeightFor(rec.network);
+    const active = isFalconActiveAt(falconHeight, tip + 1);
+    const want = toScript ?? hexToBytes(rec.clientScript);
+    const problem = yedHolderProblem(want, active);
+    if (!problem) return want;
+    if (!toScript && active) {
+      const alt = await this.cfg.funder.returnAddress?.({ network: rec.network, asset: rec.asset });
+      const altScript = alt ? addressToScript(alt, rec.network) : undefined;
+      if (altScript && isFalconHolder(altScript)) {
+        this.cfg.log?.(`refund of ${rec.channelId}: after the Falcon height ${falconHeight} it pays the funder's Falcon address ${alt}, not the open's ${rec.returnAddress ?? "return script"}`);
+        return altScript;
+      }
+    }
+    throw new BatchSettlementError(BatchError.RETURN_ADDRESS, `refund of ${rec.channelId}: ${problem}; pass toScript`);
   }
 
   /**

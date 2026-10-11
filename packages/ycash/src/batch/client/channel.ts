@@ -30,6 +30,12 @@ export interface ClientChannelRecord {
    * the client's post-quantum key (TX_PQCHANNEL; the scheme is the channel script's).
    */
   clientPrivKey: string;
+  /**
+   * The client key's scheme: 1 (SLH-DSA, a TX_PQCHANNEL opened before the Falcon height), 2 (Falcon,
+   * at or after it), absent for a P2SH channel's secp256k1 C. Informational: the channel script is
+   * authoritative (records written before this field have none).
+   */
+  clientScheme?: number;
   /** where each voucher (and the refund, by default) returns the client's remainder: the return address's script */
   clientScript: string;
   /** the open's `returnAddress` (absent in records written before it existed, whose clientScript is C's) */
