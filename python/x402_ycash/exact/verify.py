@@ -12,8 +12,20 @@ from x402.schemas import PaymentPayload, PaymentRequirements
 
 from ..constants import ASSET_YED, DUST_ZAT, chain_of_network
 from ..node import NodeCapabilities, VerifyScriptsResult
+from ..pq import pqpkh_key_id
 from ..store import SettlementStore, txid_key
-from ..tx import Tx, address_to_script, decode_address, encode_address, fee_floor, p2pkh_hash, parse_tx, tx_fee, txid
+from ..tx import (
+    Tx,
+    address_to_script,
+    decode_address,
+    encode_address,
+    encode_pq_address,
+    fee_floor,
+    p2pkh_hash,
+    parse_tx,
+    tx_fee,
+    txid,
+)
 from ..yed import (
     Assignment,
     FindPayloadFailure,
@@ -229,9 +241,16 @@ def resolve_yed_transfer(tx: Tx, pay_to_vout: int, amount_cents: int) -> YedTran
 
 
 def payer_of(spk: bytes, s: ResolvedPayment) -> str:
-    """The response's ``payer``: input 0's address, in the ``ye…`` form for a YED payment from a P2PKH coin."""
-    pkh = p2pkh_hash(spk) if s.yed is not None else None
-    return encode_address(s.network, "yed", pkh) if pkh is not None else address_of_script(spk, s.network)
+    """The response's ``payer``: input 0's address, in the Yellowback form (``yb…``/``yt…``/``yr…``, 35 or
+    53 characters) for a YED payment from a P2PKH or TX_PQPKH coin."""
+    if s.yed is not None:
+        pkh = p2pkh_hash(spk)
+        if pkh is not None:
+            return encode_address(s.network, "yed", pkh)
+        kid = pqpkh_key_id(spk)
+        if kid is not None:
+            return encode_pq_address(s.network, "yedpq", kid.scheme, kid.hash)
+    return address_of_script(spk, s.network)
 
 
 async def check_network(rpc: ExactFacilitatorRpc, network: str) -> int | Failure:

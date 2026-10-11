@@ -10,11 +10,14 @@ from typing import Any, Protocol, TypeVar
 
 from ..channel import (
     Channel,
+    ChannelScript,
+    PQChannelScript,
     VoucherLayout,
     channel_id_of,
     channel_script_pubkey,
     check_voucher_shape,
     parse_channel_script,
+    parse_pq_channel_script,
     verify_voucher_signature,
     yec_voucher_outputs,
 )
@@ -188,9 +191,13 @@ async def verify_open(p: dict[str, Any], terms: BatchTerms, chain: ChainView, ct
     yed = terms.asset == ASSET_YED
     if yed:
         yed_chain(chain)
-    # 2. the redeem script
+    # 2. the channel script: the P2SH redeem script, or (YED only) the bare TX_PQCHANNEL (D-Q-19)
     rs = bytes.fromhex(p["redeemScript"])
-    script = parse_channel_script(rs)
+    script: ChannelScript | PQChannelScript | None = parse_pq_channel_script(rs)
+    if script is not None and not yed:
+        raise BatchSettlementError(BatchError.REDEEM_SCRIPT, "a YEC channel uses the P2SH channel script")
+    if script is None:
+        script = parse_channel_script(rs)
     if script is None:
         raise BatchSettlementError(BatchError.REDEEM_SCRIPT, "not the channel script")
     if script.server_pubkey != terms.server_pubkey:

@@ -104,9 +104,17 @@ def parse_channel_script(rs: bytes) -> ChannelScript | None:
         return None
 
 
+DEFAULT_YED_CLOSE_FEE = 30_000
+"""The close fee of a YED channel: a TX_PQCHANNEL close with an SLH-DSA client carries an ≈ 8,013-byte
+scriptSig (quantum spec D-Q-19), 54 logical actions, a 27,000 floor; a little over it."""
+
+
 def channel_script_pubkey(rs: bytes) -> bytes:
-    """The funding output's scriptPubKey: ``a9 14 <HASH160(redeemScript)> 87``."""
-    return p2sh_script(hash160(rs))
+    """The funding output's scriptPubKey: ``a9 14 <HASH160(redeemScript)> 87`` for the P2SH channel;
+    a TX_PQCHANNEL is a bare output, its own scriptPubKey."""
+    from .pq_script import is_pq_channel_script  # the PQ module imports this one
+
+    return bytes(rs) if is_pq_channel_script(rs) else p2sh_script(hash160(rs))
 
 
 def channel_address(network: str, rs: bytes) -> str:

@@ -3,8 +3,10 @@ channel's script and spends, with a Yellowback TRANSFER on every spend, because 
 one burns (plan Y-4; ycash-dd/src/yellowback/state.cpp:860-865, same on ycash6). Mirrors
 packages/ycash/src/channel/yed.ts.
 
-    funding  a TRANSFER assigning D cents to the P2SH output, whose YEC value is
-             V = 2 × TOKEN_VALUE + closeFee (plan Y-12)
+    funding  a TRANSFER assigning D cents to the channel output, whose YEC value is
+             V = 2 × TOKEN_VALUE + closeFee (plan Y-12). On the quantum line the channel output is the
+             bare hybrid TX_PQCHANNEL (D-Q-19); the P2SH 2-of-2 is deprecated there, valid for YED only
+             before the node's Falcon height (TOK-PQ refuses a P2SH holder after it)
     voucher  vout 0 payTo TOKEN_VALUE, vout 1 client TOKEN_VALUE, vout 2 the TRANSFER of the split
     refund   the CLTV branch, a TRANSFER assigning all of D to the client's output
 """
@@ -14,6 +16,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from ..constants import TOKEN_VALUE_ZAT
+from ..pq import PQKeyPair, pqpkh_key_id
 from ..tx import Tx, TxOut, p2pkh_hash
 from ..yed import Assignment, yed_channel_split
 from ..yed.build import BuiltYedTransfer, TokenCoin, TransferRecipient, YecCoin, build_yed_transfer
@@ -52,9 +55,9 @@ def yed_voucher_layout(deposit_cents: int) -> VoucherLayout:
                              f"not {channel.value}")
         if client_script is None:
             raise ValueError("a YED voucher always has a client output script")
-        # A YED holder is a key hash: there is no P2SH Yellowback address (plan Y-8).
-        if p2pkh_hash(client_script) is None:
-            raise ValueError("a YED voucher returns the client's YED to a P2PKH script")
+        # A YED holder is a key hash, P2PKH or TX_PQPKH: there is no P2SH Yellowback address (plan Y-8; quantum spec §4).
+        if p2pkh_hash(client_script) is None and pqpkh_key_id(client_script) is None:
+            raise ValueError("a YED voucher returns the client's YED to a P2PKH or post-quantum key-hash script")
         if client_script == channel.pay_to_script:
             raise ValueError("the client output must not pay payTo")
         return [TxOut(TOKEN_VALUE_ZAT, channel.pay_to_script), TxOut(TOKEN_VALUE_ZAT, client_script),
@@ -73,7 +76,7 @@ def build_yed_funding_tx(redeem_script: bytes, deposit_cents: int, close_fee: in
                               tokens, yec_coins, yed_change_script, yec_change_script, expiry_height)
 
 
-def build_yed_refund(channel: Channel, deposit_cents: int, client_priv: bytes, to_script: bytes, branch_id: int,
+def build_yed_refund(channel: Channel, deposit_cents: int, client_priv: bytes | PQKeyPair, to_script: bytes, branch_id: int,
                      lock_time: int | None = None, fee: int | None = None) -> Tx:
     """The client's refund of a YED channel: the CLTV branch with a TRANSFER assigning all of D to it.
     build_refund puts the extra outputs first, so the client's output is vout 1."""

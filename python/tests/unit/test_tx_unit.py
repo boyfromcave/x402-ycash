@@ -59,7 +59,7 @@ def test_addresses_take_the_network_from_the_caller():
     h = bytes(range(20))
     sm = encode_address(NETWORK, "p2pkh", h)
     assert sm.startswith("sm") and encode_address("ycash:mainnet", "p2pkh", h).startswith("s1")
-    assert encode_address("ycash:mainnet", "yed", h).startswith("ye")
+    assert encode_address("ycash:mainnet", "yed", h).startswith("yb")  # D-Q-21
     assert encode_address(NETWORK, "yed", h).startswith("yr")
     assert decode_address(sm).network == "ycash:testnet"  # shared prefix: X-F1
     assert decode_address(sm, NETWORK).network == NETWORK

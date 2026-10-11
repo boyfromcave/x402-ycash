@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from ..tx import SIGHASH_ALL, ScriptChunk, encode_address, hash160, p2pkh_hash, p2sh_hash, parse_script
+from ..pq import key_hash, parse_pq_spend, pqpkh_key_id
+from ..tx import SIGHASH_ALL, ScriptChunk, encode_address, encode_pq_address, hash160, p2pkh_hash, p2sh_hash, parse_script
 
 
 def looks_like_signature(b: bytes) -> bool:
@@ -18,11 +19,15 @@ def looks_like_signature(b: bytes) -> bool:
 
 def check_sighash_all(script_sig: bytes) -> str | None:
     """Rule 5: every signature in the scriptSig carries SIGHASH_ALL, and there is at least one (an
-    unsigned input would let anyone rewrite the outputs). Returns a reason, or None."""
+    unsigned input would let anyone rewrite the outputs). A post-quantum (TX_PQPKH) spend carries one
+    signature, its hash type the last byte of its last chunk. Returns a reason, or None."""
     try:
         chunks = parse_script(script_sig)
     except ValueError:
         return "scriptSig does not parse"
+    pq = parse_pq_spend(chunks)
+    if pq is not None:
+        return None if pq.sig[-1] == SIGHASH_ALL else f"signature hash type {pq.sig[-1]:#x} is not SIGHASH_ALL"
     sigs = [c.data for c in chunks if c.data is not None and looks_like_signature(c.data)]
     if not sigs:
         return "scriptSig carries no signature"
@@ -33,21 +38,28 @@ def check_sighash_all(script_sig: bytes) -> str | None:
 
 
 def address_of_script(spk: bytes, network: str) -> str:
-    """The address of a P2PKH or P2SH scriptPubKey, or "" for any other script."""
+    """The address of a P2PKH, P2SH or TX_PQPKH scriptPubKey (the last as ``sq…``/``tq…``/``rq…``), or ""."""
     pkh = p2pkh_hash(spk)
     if pkh is not None:
         return encode_address(network, "p2pkh", pkh)
+    kid = pqpkh_key_id(spk)
+    if kid is not None:
+        return encode_pq_address(network, "pq", kid.scheme, kid.hash)
     sh = p2sh_hash(spk)
     return encode_address(network, "p2sh", sh) if sh is not None else ""
 
 
 def address_of_script_sig(script_sig: bytes, network: str) -> str:
     """The address a verified scriptSig spends from, for a settle that resumes after the inputs are
-    spent: ``<sig> <pubkey>`` is P2PKH, otherwise the last push is a P2SH redeem script."""
+    spent: ``<sig> <pubkey>`` is P2PKH, a chunked post-quantum spend the TX_PQPKH of SHA256(scheme ‖ pk),
+    otherwise the last push is a P2SH redeem script."""
     try:
         chunks: list[ScriptChunk] = parse_script(script_sig)
     except ValueError:
         return ""
+    pq = parse_pq_spend(chunks)
+    if pq is not None:
+        return encode_pq_address(network, "pq", pq.scheme, key_hash(pq.scheme, pq.pk))
     last = chunks[-1].data if chunks else None
     if not last:
         return ""

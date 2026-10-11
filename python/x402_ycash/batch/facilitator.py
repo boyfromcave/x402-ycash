@@ -26,6 +26,8 @@ from ..channel import (
     commitment_id_of,
     parse_channel_script,
     parse_close_script_sig,
+    parse_pq_channel_script,
+    parse_pq_close_script_sig,
 )
 from ..constants import ASSET_YED, YCASH_CAIP_FAMILY
 from ..node import SendRawTransactionError
@@ -185,23 +187,36 @@ class BatchYcashFacilitatorScheme:
         return payload.payload, terms
 
     async def _live_channel(self, tx_hex: str, channel_id: str, terms: BatchTerms) -> tuple[Channel, Tx]:
-        """The channel a voucher spends, rebuilt from its scriptSig's redeem script and the live output."""
+        """The channel a voucher spends, rebuilt from its scriptSig's redeem script (P2SH) or the live
+        output's script (a bare TX_PQCHANNEL, D-Q-19) and the live output."""
         tx = decode_tx(tx_hex, BatchError.VOUCHER_SHAPE)
         ss = parse_close_script_sig(tx.vin[0].script_sig) if len(tx.vin) == 1 else None
-        if ss is None:
+        pqs = parse_pq_close_script_sig(tx.vin[0].script_sig) if len(tx.vin) == 1 and ss is None else None
+        if ss is None and pqs is None:
             raise BatchSettlementError(BatchError.VOUCHER_SHAPE, "inputs")
         prevout = tx.vin[0].prevout
         if channel_id_of(prevout) != channel_id:
             raise BatchSettlementError(BatchError.VOUCHER_SHAPE, "the voucher does not spend channelId")
-        script = parse_channel_script(ss.redeem_script)
-        if script is None or script.server_pubkey != terms.server_pubkey:
-            raise BatchSettlementError(BatchError.REDEEM_SCRIPT, ss.redeem_script.hex())
+        rs: bytes | None = None
+        if ss is not None:
+            script = parse_channel_script(ss.redeem_script)
+            if script is None or script.server_pubkey != terms.server_pubkey:
+                raise BatchSettlementError(BatchError.REDEEM_SCRIPT, ss.redeem_script.hex())
+            rs = ss.redeem_script
         out = await self._chain.get_tx_out(prevout.txid, prevout.vout, True)
         if not out:
             raise BatchSettlementError(BatchError.CHANNEL_CLOSING, "the channel output is spent or unknown")
-        if out["scriptPubKey"]["hex"] != channel_script_pubkey(ss.redeem_script).hex():
+        if pqs is not None:
+            spk = bytes.fromhex(out["scriptPubKey"]["hex"])
+            q = parse_pq_channel_script(spk)
+            if q is None or q.server_pubkey != terms.server_pubkey:
+                raise BatchSettlementError(BatchError.REDEEM_SCRIPT, spk.hex())
+            if terms.asset != ASSET_YED:
+                raise BatchSettlementError(BatchError.REDEEM_SCRIPT, "a YEC channel uses the P2SH channel script")
+            rs = spk
+        if rs is None or out["scriptPubKey"]["hex"] != channel_script_pubkey(rs).hex():
             raise BatchSettlementError(BatchError.REDEEM_SCRIPT, "not the channel output's script")
-        channel = Channel.from_script(prevout, ss.redeem_script, zat_of(out), terms.close_fee, address_to_script(terms.pay_to, terms.network))
+        channel = Channel.from_script(prevout, rs, zat_of(out), terms.close_fee, address_to_script(terms.pay_to, terms.network))
         return channel, tx
 
     async def _record_claim(self, channel_id: str, cumulative: int) -> None:

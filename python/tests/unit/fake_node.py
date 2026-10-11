@@ -107,7 +107,14 @@ class FakeNode:
         return None
 
     def _verify(self, hex_tx: str) -> VerifyScriptsResult:
-        from x402_ycash.channel import parse_channel_script, parse_close_script_sig
+        from x402_ycash.channel import (
+            parse_channel_script,
+            parse_close_script_sig,
+            parse_pq_channel_script,
+            parse_pq_close_script_sig,
+        )
+        from x402_ycash.pq import parse_pq_spend, pqpkh_key_id, spend_matches
+        from x402_ycash.pq import verify as pq_verify
         from x402_ycash.tx import p2sh_hash
 
         tx = parse_tx(hex_tx)
@@ -118,6 +125,30 @@ class FakeNode:
             u = self._prevout(self._key(inp.prevout.txid, inp.prevout.vout))
             if not u:
                 err("Input not found or already spent")
+                continue
+            q = parse_pq_channel_script(u[1])
+            if q is not None:  # a TX_PQCHANNEL: client PQ + server ECDSA (OP_1), or the client's PQ refund after t (OP_0)
+                digest = sighash_v4(tx, i, u[1], u[0], SIGHASH_ALL, BRANCH_ID)
+                coop = parse_pq_close_script_sig(inp.script_sig)
+                if coop is not None:
+                    sp, ok = coop.spend, bool(coop.sig_s) and verify_input_sig(coop.sig_s, digest, q.server_pubkey)
+                else:
+                    cs = parse_script(inp.script_sig)
+                    sp = parse_pq_spend(cs[:-1]) if cs and cs[-1].op == 0 else None
+                    ok = sp is not None and tx.lock_time >= q.refund_height and inp.sequence != 0xFFFFFFFF
+                if sp is None or not ok or not spend_matches(sp, q.client) or sp.sig[-1] != SIGHASH_ALL \
+                        or not pq_verify(sp.scheme, sp.pk, sp.sig[:-1], digest):
+                    err("Script evaluated without error but finished with a false/empty top stack element")
+                continue
+            kid = pqpkh_key_id(u[1])
+            if kid is not None:  # TX_PQPKH: the chunked spend by the key the script names
+                sp = parse_pq_spend(parse_script(inp.script_sig))
+                if sp is None or not spend_matches(sp, kid):
+                    err("Operation not valid with the current stack size")
+                    continue
+                digest = sighash_v4(tx, i, u[1], u[0], sp.sig[-1], BRANCH_ID)
+                if not pq_verify(sp.scheme, sp.pk, sp.sig[:-1], digest):
+                    err("Script evaluated without error but finished with a false/empty top stack element")
                 continue
             if p2sh_hash(u[1]) is not None:  # a channel close: both signatures over the redeem script
                 ss = parse_close_script_sig(inp.script_sig)

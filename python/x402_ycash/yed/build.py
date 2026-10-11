@@ -14,13 +14,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from ..constants import DUST_ZAT, TOKEN_VALUE_ZAT, YED_MAX_OUTPUT_CENTS, YED_MIN_OUTPUT_CENTS
+from ..pq import max_script_sig_size_of
 from ..tx import OutPoint, Tx, TxIn, TxOut, fee_floor
 from .payload import Assignment
 from .rules import validate_transfer_assignments
 from .script import transfer_op_return_script
-
-_MAX_P2PKH_SCRIPTSIG = 1 + 73 + 1 + 33
-"""A P2PKH scriptSig at its largest: push(72-byte DER + hash type) + push(33-byte key)."""
 
 
 @dataclass(frozen=True)
@@ -128,7 +126,8 @@ def build_yed_transfer(recipients: Sequence[TransferRecipient], tokens: Sequence
     yec = sorted(yec_coins, key=lambda c: -c.value)
 
     def draft(inputs: Sequence[YecCoin], vout: list[TxOut]) -> Tx:
-        return Tx(vin=[TxIn(c.outpoint, bytes(_MAX_P2PKH_SCRIPTSIG)) for c in inputs], vout=vout, expiry_height=expiry_height)
+        # sized by each coin's script: a TX_PQPKH token coin (a node wallet's post-quantum holder) spends with an ≈ 8 KB scriptSig
+        return Tx(vin=[TxIn(c.outpoint, bytes(max_script_sig_size_of(c.script_pubkey))) for c in inputs], vout=vout, expiry_height=expiry_height)
 
     for n in range(len(yec) + 1):
         inputs = [*token_inputs, *yec[:n]]
