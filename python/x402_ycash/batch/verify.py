@@ -33,7 +33,7 @@ from ..constants import (
 )
 from ..node import RPC_METHOD_NOT_FOUND, RpcError, VerifyScriptsResult
 from ..pq import SCHEME_FN_DSA_512
-from ..tx import OutPoint, Tx, address_to_script, fee_floor, parse_tx, tx_fee, txid
+from ..tx import NetworkFees, OutPoint, Tx, address_to_script, fee_floor, parse_tx, read_network_fees, tx_fee, txid
 from ..yed import (
     FindPayloadFailure,
     assigned_to,
@@ -57,7 +57,7 @@ class ChainView(Protocol):
     async def get_blockchain_info(self) -> dict[str, Any]: ...
     async def get_tx_out(self, txid: str, n: int, include_mempool: bool) -> dict[str, Any] | None: ...
     async def verify_scripts(self, hex_tx: str) -> VerifyScriptsResult: ...
-    async def send_raw_transaction(self, hex_tx: str) -> str: ...
+    async def send_raw_transaction(self, hex_tx: str, allow_high_fees: bool = False) -> str: ...
 
 
 def yed_chain(chain: Any) -> Any:
@@ -143,6 +143,8 @@ class ChainContext:
     falcon_height: int = -1
     """The node's Falcon height F (``yed_getinfo.params.pq.falconHeight``; -1 = never; the network's
     default when the node does not answer ``yed_getinfo``)."""
+    network_fees: NetworkFees | None = None
+    """The node's network fee rates (``yed_getinfo.params.fees.network``, rpcversion 8), when it reports them."""
 
 
 async def chain_context(chain: ChainView, network: str) -> ChainContext:
@@ -150,7 +152,8 @@ async def chain_context(chain: ChainView, network: str) -> ChainContext:
     info = await chain.get_blockchain_info()
     if info["chain"] != chain_of_network(network):
         raise BatchSettlementError(BatchError.NETWORK, f"node is on {info['chain']}, not {network}")
-    return ChainContext(int(info["blocks"]), int(info["consensus"]["nextblock"], 16), await read_falcon_height(chain, network))
+    return ChainContext(int(info["blocks"]), int(info["consensus"]["nextblock"], 16), await read_falcon_height(chain, network),
+                        await read_network_fees(chain))
 
 
 def decode_tx(hex_tx: str, reason: str) -> Tx:
@@ -274,6 +277,10 @@ async def verify_open(p: dict[str, Any], terms: BatchTerms, chain: ChainView, ct
         fee = tx_fee(funding, values)
         if fee < fee_floor(funding):
             raise BatchSettlementError(BatchError.FUNDING, f"fee {fee} is below the floor {fee_floor(funding)}")
+        # A YED funding pays the Yellowback rate (rpcversion 8) and may be relayed past -maxtxfee
+        # (relay.py), so it is held to the node's PQ/Yellowback cap here.
+        if yed and ctx.network_fees is not None and fee > ctx.network_fees.yellowback_max_tx_fee_zat:
+            raise BatchSettlementError(BatchError.FUNDING, f"fee {fee} is above the node's Yellowback fee cap {ctx.network_fees.yellowback_max_tx_fee_zat}")
         scripts = await chain.verify_scripts(p["fundingTx"])
         if not scripts.complete or scripts.errors:
             raise BatchSettlementError(BatchError.FUNDING, "the funding scripts do not verify")

@@ -15,14 +15,18 @@ from ..node import NodeCapabilities, VerifyScriptsResult
 from ..pq import pqpkh_key_id
 from ..store import SettlementStore, txid_key
 from ..tx import (
+    FeeKind,
     Tx,
     address_to_script,
     decode_address,
     encode_address,
     encode_pq_address,
     fee_floor,
+    needs_high_fees,
+    network_fee_cap,
     p2pkh_hash,
     parse_tx,
+    read_network_fees,
     tx_fee,
     txid,
 )
@@ -76,7 +80,7 @@ class ExactFacilitatorRpc(Protocol):
     async def get_block_count(self) -> int: ...
     async def get_tx_out(self, txid: str, n: int, include_mempool: bool) -> dict[str, Any] | None: ...
     async def verify_scripts(self, hex_tx: str) -> VerifyScriptsResult: ...
-    async def send_raw_transaction(self, hex_tx: str) -> str: ...
+    async def send_raw_transaction(self, hex_tx: str, allow_high_fees: bool = False) -> str: ...
     async def capabilities(self) -> NodeCapabilities: ...
     async def yed_validate_raw_transaction(self, hex_tx: str) -> dict[str, Any]: ...
     async def yed_decode_payload(self, hex_tx: str) -> dict[str, Any]: ...
@@ -139,6 +143,8 @@ class VerifiedPayment:
     payment: ResolvedPayment
     payer: str
     fee_zat: int
+    allow_high_fees: bool = False
+    """Settle submits with ``allowhighfees``: a PQ or YED fee above -maxtxfee within the node's cap (rule 7)."""
 
 
 _HEX = re.compile(r"^(?:[0-9a-f]{2})+$")
@@ -298,6 +304,7 @@ async def verify_transparent(
     # Rule 6: every input confirmed and unspent, and not spent in the mempool (plan R-6, X-F10).
     values: list[int] = []
     payer = ""
+    pq_input = False
     for i, inp in enumerate(s.tx.vin):
         prev = inp.prevout
         confirmed = await rpc.get_tx_out(prev.txid, prev.vout, False)
@@ -306,6 +313,8 @@ async def verify_transparent(
         if not await rpc.get_tx_out(prev.txid, prev.vout, True):
             return Failure(ERR_INPUT_SPENT, f"input {i} ({prev.txid}:{prev.vout}) is spent by a mempool transaction")
         values.append(int(confirmed["value_zat"]))
+        if pqpkh_key_id(bytes.fromhex(confirmed["scriptPubKey"]["hex"])) is not None:
+            pq_input = True
         if i == 0:
             payer = payer_of(bytes.fromhex(confirmed["scriptPubKey"]["hex"]), s)
 
@@ -317,13 +326,18 @@ async def verify_transparent(
         if decoded.op_return_index != s.yed.op_return_index or not same_assignments(decoded.assignments, s.yed.assignments):
             return Failure(ERR_YED_PAYLOAD, "yed_decodepayload disagrees with the transaction's TRANSFER", payer)
 
-    # Rule 7: fee floor (SDK and facilitator policy, X-F3) and sanity cap.
+    # Rule 7: fee floor (SDK and facilitator policy, X-F3) and sanity cap. A YED or post-quantum
+    # payment pays a dollar-per-KB rate (rpcversion 8, yed_getinfo.params.fees.network), far above a
+    # plain cap: its cap is the node's PQ/Yellowback cap. The floor stays S-6, what both lines mine.
     fee = tx_fee(s.tx, values)
     floor = fee_floor(s.tx)
     if fee < floor:
         return Failure(ERR_FEE_TOO_LOW, f"fee {fee} is below the floor {floor}", payer)
-    if fee > limits.fee_cap_zat:
-        return Failure(ERR_FEE_TOO_HIGH, f"fee {fee} is above the cap {limits.fee_cap_zat}", payer)
+    kind: FeeKind = "yellowback" if s.yed is not None else "pq" if pq_input else "plain"
+    fees = None if kind == "plain" else await read_network_fees(rpc)
+    cap = network_fee_cap(kind, limits.fee_cap_zat, fees)
+    if fee > cap:
+        return Failure(ERR_FEE_TOO_HIGH, f"fee {fee} is above the cap {cap}", payer)
 
     # Rule 8: expiry window, read against the tip rule 2 saw.
     lo, hi = expiry_window(tip, req.max_timeout_seconds)
@@ -352,4 +366,4 @@ async def verify_transparent(
     # Rule 10: not claimed (re-read: the claim may have landed while the lookups ran).
     if await store.is_claimed(s.key):
         return Failure(ERR_DUPLICATE_SETTLEMENT, f"{s.txid} is already claimed", payer)
-    return VerifiedPayment(s, payer, fee)
+    return VerifiedPayment(s, payer, fee, needs_high_fees(fee, kind, fees))

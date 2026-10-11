@@ -13,12 +13,24 @@ import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 
-from ..pq import PQKeyId, PQKeyPair, PQSpend, parse_pq_spend, pq_spend_items, pubkey_size, sig_size, spend_matches
+from ..pq import (
+    SCHEME_FN_DSA_512,
+    SCHEME_SLH_DSA_SHA2_128S,
+    PQKeyId,
+    PQKeyPair,
+    PQSpend,
+    parse_pq_spend,
+    pq_spend_items,
+    pubkey_size,
+    sig_size,
+    spend_matches,
+)
 from ..pq import sign as pq_sign
 from ..pq import verify as pq_verify
 from ..tx import (
     OP,
     SIGHASH_ALL,
+    NetworkFees,
     OutPoint,
     Tx,
     TxIn,
@@ -26,6 +38,7 @@ from ..tx import (
     build_script,
     fee_floor,
     hash160,
+    network_fee,
     p2pkh_hash,
     p2pkh_script_sig,
     p2sh_script_sig,
@@ -139,6 +152,21 @@ def pq_close_fee_floor(scheme: int, outputs: Sequence[TxOut]) -> int:
     """The fee floor of a TX_PQCHANNEL close: ``<sigS> <sigC chunks> <s> <pk chunks> <p> OP_1``."""
     script_sig = pq_close_script_sig(_MAX_SIG, bytes(pubkey_size(scheme)), bytes(sig_size(scheme) + 1))
     return fee_floor(Tx(vin=[TxIn(OutPoint("00" * 32, 0), script_sig)], vout=list(outputs)))
+
+
+def pq_close_network_fee(scheme: int, outputs: Sequence[TxOut], fees: NetworkFees | None) -> int:
+    """The network fee of a YED channel's TX_PQCHANNEL close (rpcversion 8): the Yellowback rate by the
+    close's size, capped; the fee floor when the node gave no rates."""
+    script_sig = pq_close_script_sig(_MAX_SIG, bytes(pubkey_size(scheme)), bytes(sig_size(scheme) + 1))
+    return network_fee(Tx(vin=[TxIn(OutPoint("00" * 32, 0), script_sig)], vout=list(outputs)), "yellowback", fees)
+
+
+def yed_close_network_fee(falcon: bool, fees: NetworkFees | None) -> int:
+    """A YED close's network fee at the node's rates: a Falcon client with two Falcon TX_PQPKH outputs
+    from the Falcon height, an SLH-DSA client with two P2PKH outputs before; plus the TRANSFER."""
+    if falcon:
+        return pq_close_network_fee(SCHEME_FN_DSA_512, [TxOut(0, bytes(35)), TxOut(0, bytes(35)), TxOut(0, bytes(17))], fees)
+    return pq_close_network_fee(SCHEME_SLH_DSA_SHA2_128S, [TxOut(0, bytes(25)), TxOut(0, bytes(25)), TxOut(0, bytes(17))], fees)
 
 
 # --- funding -----------------------------------------------------------------------------------

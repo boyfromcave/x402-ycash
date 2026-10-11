@@ -178,7 +178,7 @@ class ExactYcashFacilitatorScheme:
                 return await self._observe(s, requirements, v.payer)
             await self._store.prune(await self._rpc.get_block_count())  # drops claims past expiry + 10
 
-            rejected = await self._submit(s)  # step 3
+            rejected = await self._submit(s, v.allow_high_fees)  # step 3
             log.info("exact settle broadcast txid=%s rejected=%s", s.txid, rejected and rejected[0])
             if rejected:
                 await self._store.release(s.key)  # the node answered and did not accept it
@@ -188,11 +188,12 @@ class ExactYcashFacilitatorScheme:
             log.warning("exact settle failed txid=%s error=%s", s.txid, e)
             return _failure(ERR_SETTLEMENT_FAILED, network, s.txid, str(e))
 
-    async def _submit(self, s: ResolvedPayment) -> tuple[str, str] | None:
+    async def _submit(self, s: ResolvedPayment, allow_high_fees: bool = False) -> tuple[str, str] | None:
         """``sendrawtransaction``. A terminal rejection only when the node certainly did not take the
-        tx; −27 and transport failures continue to observation, keeping the claim (X-F6)."""
+        tx; −27 and transport failures continue to observation, keeping the claim (X-F6).
+        ``allow_high_fees``: verify found a PQ/YED fee above -maxtxfee within the node's cap."""
         try:
-            sent = await self._rpc.send_raw_transaction(s.hex)
+            sent = await (self._rpc.send_raw_transaction(s.hex, True) if allow_high_fees else self._rpc.send_raw_transaction(s.hex))
         except SendRawTransactionError as e:
             if e.kind == "already-in-chain":
                 return None

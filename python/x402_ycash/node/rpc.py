@@ -211,11 +211,13 @@ class YcashRpc:
         r = await self.call("signrawtransaction", [hex_tx, [], []])
         return VerifyScriptsResult(bool(r["complete"]), list(r.get("errors") or []))
 
-    async def send_raw_transaction(self, hex_tx: str) -> str:
+    async def send_raw_transaction(self, hex_tx: str, allow_high_fees: bool = False) -> str:
         """Relay a signed tx. A resubmission of a mempool tx returns its txid with no error (plan R-3),
-        so callers deduplicate by txid. Node refusals raise SendRawTransactionError with a ``kind``."""
+        so callers deduplicate by txid. Node refusals raise SendRawTransactionError with a ``kind``.
+        ``allow_high_fees`` skips the node's -maxtxfee check: a PQ or YED transaction priced at the
+        published rate whose fee the caller checked against the node's cap (rpcversion 8)."""
         try:
-            return await self.call("sendrawtransaction", [hex_tx])
+            return await self.call("sendrawtransaction", [hex_tx, True] if allow_high_fees else [hex_tx])
         except RpcError as e:
             if e.transport:
                 raise
