@@ -23,7 +23,6 @@ from ..channel import (
 )
 from ..channel.falcon import channel_close_by, is_falcon_active_at, read_falcon_height, yed_holder_problem
 from ..channel.yed import YED_TRANSFER_VOUT, yed_channel_value, yed_voucher_assignments, yed_voucher_layout
-from ..pq import SCHEME_FN_DSA_512
 from ..constants import (
     ASSET_YEC,
     ASSET_YED,
@@ -33,6 +32,7 @@ from ..constants import (
     chain_of_network,
 )
 from ..node import RPC_METHOD_NOT_FOUND, RpcError, VerifyScriptsResult
+from ..pq import SCHEME_FN_DSA_512
 from ..tx import OutPoint, Tx, address_to_script, fee_floor, parse_tx, tx_fee, txid
 from ..yed import (
     FindPayloadFailure,

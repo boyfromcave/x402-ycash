@@ -42,9 +42,9 @@ from ..channel import (
     close_fee_floor,
     pq_close_fee_floor,
 )
+from ..channel.falcon import DEFAULT_FALCON_HEIGHT, is_falcon_active_at
 from ..constants import ASSET_YEC, ASSET_YED, YED_MAX_OUTPUT_CENTS
 from ..node import yec_to_zat
-from ..channel.falcon import DEFAULT_FALCON_HEIGHT, is_falcon_active_at
 from ..pq import SCHEME_FN_DSA_512, SCHEME_SLH_DSA_SHA2_128S
 from ..store import DEFAULT_CLOSED_RETENTION_MS, ChannelStore
 from ..tx import TxOut
