@@ -42,7 +42,7 @@ export interface CliConfig {
   maxDepositCents?: bigint;
   /** The most a channel this CLI opens may lock, zatoshis; default 1 YEC, whatever the server allows. */
   maxDepositZat?: bigint;
-  /** The largest server closeFee a channel this CLI opens may lock, zatoshis, both assets (default the mechanism's 5,000; plan X-F50). */
+  /** The largest server closeFee a channel this CLI opens may lock, zatoshis, both assets (default the mechanism's 5,000 YEC, 40,000 YED; plan X-F50). */
   maxCloseFeeZat?: bigint;
   /** Coins held by signed, unconfirmed spends, shared by every run (default next to the channel store). */
   reservationsPath: string;

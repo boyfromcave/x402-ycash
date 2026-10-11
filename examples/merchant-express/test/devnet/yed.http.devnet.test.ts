@@ -9,7 +9,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { tx } from "x402-ycash-mechanism";
+import { channel, tx } from "x402-ycash-mechanism";
 import { DEVNET_JSON, describeDevnet, devnet, record, waitFor, type Devnet } from "../../../../packages/ycash/test/devnet/harness.js";
 import { runAgent, runCli, startCli, startService, type Proc } from "./procs.js";
 
@@ -50,11 +50,17 @@ describeDevnet("YED over HTTP: exact at ≥ $1 and YED channels through the merc
   }
 
   /** The YED token records paying `address`, from node 0's index. */
-  /** Nothing ever sits at the channel key C: its key hash holds no token record. */
+  /**
+   * Nothing ever sits at the channel key C: its key hash holds no token record. On the quantum line a
+   * YED channel is a TX_PQCHANNEL and C is the client's SLH-DSA key (the record holds its seed).
+   */
   async function nothingAtC(storePath: string, channelId: string): Promise<{ returnAddress: string }> {
-    const rec = (JSON.parse(readFileSync(storePath, "utf8")) as { channels: Record<string, { returnAddress: string; clientPrivKey: string }> }).channels[channelId]!;
+    const rec = (JSON.parse(readFileSync(storePath, "utf8")) as { channels: Record<string, { returnAddress: string; clientPrivKey: string; redeemScript: string }> }).channels[channelId]!;
     expect(rec.returnAddress).toBeDefined();
-    expect(await tokensOf(tx.encodeAddress(NETWORK, "yed", tx.hash160(tx.pubkeyFromPriv(tx.hexToBytes(rec.clientPrivKey)))))).toEqual([]);
+    const pqc = channel.parsePQChannelScript(tx.hexToBytes(rec.redeemScript));
+    expect(pqc).not.toBeNull(); // YED channels open on TX_PQCHANNEL by default (D-Q-19)
+    const c = pqc ? tx.encodePQAddress(NETWORK, "yedpq", pqc.client) : tx.encodeAddress(NETWORK, "yed", tx.hash160(tx.pubkeyFromPriv(tx.hexToBytes(rec.clientPrivKey))));
+    expect(await tokensOf(c)).toEqual([]);
     return rec;
   }
 

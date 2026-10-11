@@ -180,7 +180,7 @@ sequenceDiagram
 | Field | Required | Constraint |
 |---|---|---|
 | `amount` | yes | the per-request ceiling, in zatoshis (YEC) or cents (YED); positive |
-| `payTo` | yes | the server's receiving address: transparent P2PKH or P2SH (YEC), `ye…` (YED) |
+| `payTo` | yes | the server's receiving address: transparent P2PKH or P2SH (YEC), a Yellowback address of either form (YED; `yb…`/`yt…`/`yr…`) |
 | `extra.serverPubKey` | yes | S, 66 lowercase hex characters, a compressed secp256k1 key |
 | `extra.minLockBlocks` | yes | the least t − tip the server accepts at open; default 1152 (about 24 hours at 75 seconds) |
 | `extra.closeMarginBlocks` | yes | the server stops accepting vouchers at t − `closeMarginBlocks` and closes; default 96 (about 2 hours); MUST be less than `minLockBlocks` |
@@ -229,7 +229,7 @@ close fee.
   example client wallet")). The client's own address that every voucher of the channel (and so
   the close) pays the client's remainder to, and where the client's refund normally goes. For a
   YEC channel a transparent P2PKH or P2SH address; for a YED channel a P2PKH address, transparent
-  (`s1…`) or Yellowback (`ye…`), since a YED holder is a key hash. It is never `payTo`, and it
+  (`s1…`) or Yellowback (`yb…`/`yt…`/`yr…`, either form), or post-quantum (`sq…`), since a YED holder is a key hash. It is never `payTo`, and it
   takes its network from `PaymentRequirements.network`. The server binds it for the channel's
   life. A client SHOULD use an address of the wallet that funded the channel: a remainder paid to
   C's own key hash would sit where no wallet looks, since C exists only in the client's channel
@@ -318,7 +318,7 @@ The server (or a facilitator's `/verify`) MUST check:
 6. The fee floor (`exact` rule 7) and the scripts (`exact` rule 9) hold for the funding
    transaction.
 7. `returnAddress` decodes on `PaymentRequirements.network`, is P2PKH or P2SH for YEC and P2PKH
-   (`s…` or `ye…`) for YED, and its script is not `payTo`'s
+   (`s…` or a Yellowback address) or `TX_PQPKH` (53-character Yellowback, or `sq…`) for YED, and its script is not `payTo`'s
    (`invalid_batch_settlement_ycash_return_address`).
 8. Unless the funding transaction is already in a block, its `nExpiryHeight` is 0 or at least
    tip + 3 + d ([Funding expiry](#open)).
@@ -439,8 +439,12 @@ open|status|refund`.
 A YED channel is the YEC channel with these changes. It REQUIRES a Yellowback node on the server's
 side (`-experimentalfeatures -yellowback`) to verify vouchers.
 
+**On the quantum line, the channel script is the hybrid `TX_PQCHANNEL`** (see "YED channels on
+`TX_PQCHANNEL`" below); the P2SH channel described here stays valid for YED only before the node's
+Falcon height and is deprecated there.
+
 **Funding.** A TRANSFER (see [`exact`, YED](./scheme_exact_ycash.md#transaction-construction-transparent))
-that assigns D cents to the P2SH output, with D in [100, 10,000,000] and D ≤ `maxDeposit`. The
+that assigns D cents to the channel output (P2SH, or the bare `TX_PQCHANNEL`), with D in [100, 10,000,000] and D ≤ `maxDeposit`. The
 client's YED change is 0 or at least $1.00. The P2SH output carries V = 2 × `TOKEN_VALUE` +
 `closeFee` = 21,500 zatoshis at the defaults, which pays the two voucher outputs' YEC and the close
 fee. There is no P2SH Yellowback address (a `ye…` address is P2PKH only) and the node's
@@ -503,6 +507,64 @@ strictly between $0 and $1.00; a remainder of exactly 0 is allowed.
 `amount` and `cumulative` are in cents; `closeFee` and V are in zatoshis.
 
 Yellowback's halts stop mints only, never transfers, so YED channels keep working through a halt.
+
+### YED channels on `TX_PQCHANNEL` (the quantum line)
+
+On ycash-dd/ycash6 `upgrade/quantum-vaults` (`rpcversion` 7, riding the vault upgrade, branch ID
+`6d5b7a31`) a YED channel uses the hybrid post-quantum template of owner decision D-Q-19. After the
+node's Falcon height the module's `TOK-PQ` rule lets only a scheme-2 `TX_PQPKH` or a `TX_PQCHANNEL`
+with a scheme-2 client hold YED, so the P2SH 2-of-2 above cannot be funded with YED then. YEC
+channels are unchanged (always P2SH); a server MUST refuse a YEC `open` on `TX_PQCHANNEL`
+(`invalid_batch_settlement_ycash_redeem_script`).
+
+**Script.** A bare output (never P2SH: a redeem script holding `OP_CHECKPQSIG` is non-standard):
+
+```
+OP_IF   <clientHash:32> OP_1|OP_2 OP_CHECKPQSIG OP_VERIFY  <S:33> OP_CHECKSIG
+OP_ELSE <t> OP_CHECKLOCKTIMEVERIFY OP_DROP  <clientHash:32> OP_1|OP_2 OP_CHECKPQSIG
+OP_ENDIF
+```
+
+bytes `63 20<h> 5n c2 69 21<S> ac 67 <push(t)> b1 75 20<h> 5n c2 68`, 112–117 bytes; both client
+slots byte-identical (clientHash = SHA256(scheme ‖ pk)), S a valid compressed secp256k1 point (the
+offer's `serverPubKey`), t a minimal CScriptNum in (0, 500,000,000). Parsers MUST rebuild and compare,
+as the node's `MatchPQChannel` does; `vectors/pq/yellowback_pq_vectors.json` ("scripts") is the node's
+matcher differential. Before the Falcon height the node's policy refuses a scheme-2 client, so the
+client key is SLH-DSA-SHA2-128s.
+
+**Wire.** The `open` payload's `redeemScript` carries this script; the funding output's
+scriptPubKey MUST equal it (not its P2SH hash). Everything else in the payload is unchanged.
+
+**Spends.** One `OP_CHECKPQSIG` executes on either path (the node's one-per-evaluation cap).
+
+- Voucher (client-signed, server slot empty): `OP_0 <sig_1>…<sig_s> <s> <pk_1>…<pk_p> <p> OP_1`,
+  the client's post-quantum signature `SIGHASH_ALL` over the ZIP-243 sighash with script code the
+  channel script and amount V. The client's key must hash to clientHash.
+- Cooperative close (server-completed): the server replaces the leading `OP_0` with its ECDSA
+  signature over the same sighash: `<sigS> <sig chunks> <s> <pk chunks> <p> OP_1` (s + p + 4 pushes;
+  ≈ 8,013 bytes with an SLH-DSA client, under the node's 9,000-byte post-quantum scriptSig limit).
+- Refund (the client alone, from t): `<sig chunks> <s> <pk chunks> <p> OP_0` (s + p + 3 pushes),
+  nLockTime ≥ t, nSequence non-final, with a TRANSFER of all of D as before.
+
+Verification is the P2SH channel's with the client signature check replaced by the post-quantum
+one. A stateless facilitator reads the channel script from the live output (`gettxout`), since the
+scriptSig carries no redeem script.
+
+**Fees.** A close's fee floor follows the binding's one rule (ZIP-317 conventional, 500 per logical
+action over the actual size): 27,000 zatoshis for an SLH-DSA client. A server's YED `closeFee` MUST be
+at least that (the SDK's default is 30,000); the client's default `closeFee` cap for YED is 40,000.
+
+**Transport.** A voucher is ≈ 8.1 KB (≈ 22 KB of base64 in the `PAYMENT-SIGNATURE` header; an
+`open` with its funding ≈ 25 KB), above Node's default 16 KB header limit: an HTTP server taking YED
+vouchers MUST raise its header limit (the example merchant uses 64 KB), or it answers 431.
+
+**Cost.** Each new voucher is one SLH-DSA signature (≈ 1–2 s in the TypeScript SDK, ≈ 0.75 s in the
+Python mirror on Apple silicon); a client reuses the identical voucher while the cumulative is unchanged
+(the pre-paid dollar). Verification is milliseconds.
+
+**Security.** The client's funds and the refund need the client's post-quantum key. The server's
+in-channel balance is secp256k1-secure only: a quantum-capable client could forge S's signature and
+close at a state paying itself; servers settle or close promptly (D-Q-19, as for the P2SH channel).
 
 ## The Seven Network Requirements
 

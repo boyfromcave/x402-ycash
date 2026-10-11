@@ -46,7 +46,7 @@ export interface ClientSchemeDeps {
   yedChannelDepositCents?: bigint;
   /** YED channels: the client's cap on D, cents (default $50). */
   yedChannelMaxDepositCents?: bigint;
-  /** batch-settlement: the largest server closeFee accepted, zatoshis, for both assets (default 5,000). */
+  /** batch-settlement: the largest server closeFee accepted, zatoshis, for both assets (default 5,000 YEC, 40,000 YED: the post-quantum close). */
   channelMaxCloseFeeZat?: bigint;
 }
 

@@ -65,7 +65,7 @@ export interface AgentConfig {
   yedChannelMaxDepositCents?: bigint;
   /**
    * batch-settlement: the largest server-chosen closeFee this agent opens with, zatoshis, for both
-   * assets (default 5,000; plan X-F50). The fee is locked in V and paid to miners at close.
+   * assets (default 5,000 YEC, 40,000 YED; plan X-F50). The fee is locked in V and paid to miners at close.
    */
   channelMaxCloseFeeZat?: bigint;
   /**

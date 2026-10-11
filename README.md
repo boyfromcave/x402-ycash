@@ -33,6 +33,19 @@ The binding specs are in [`specs/`](specs/), language-neutral test vectors in
 [`vectors/`](vectors/); the plan behind them is in the
 [Yellowback workspace](https://github.com/boyfromcave/yellowback).
 
+## The quantum line
+
+On the `upgrade/quantum-vaults` node line (`rpcversion` 7; it rides the vault upgrade, branch ID
+`6d5b7a31`) the SDKs speak post-quantum Ycash: YED addresses take a 53-character post-quantum form
+beside the 35-character one (mainnet `yb…`, testnet `yt…`, regtest `yr…`), plain YEC an `sq…`/`tq…`/`rq…`
+form; YED can be paid to a `TX_PQPKH` holder; and **YED payment channels open on the hybrid
+`TX_PQCHANNEL`** (the client's SLH-DSA key plus the server's secp256k1 key, a CLTV refund to the
+client's post-quantum key). The P2SH YED channel is deprecated there (`yedChannelTemplate: "p2sh"`,
+valid only before the node's Falcon height); YEC channels stay P2SH. A YED voucher is ≈ 8 KB, so a
+server taking them raises its HTTP header limit (the example merchant: 64 KB), and a YED channel's
+`closeFee` is 30,000 zatoshis. See `specs/scheme_batch_settlement_ycash.md`, "YED channels on
+`TX_PQCHANNEL`".
+
 ## Layout
 
 ```
@@ -111,13 +124,13 @@ RESOURCE_URL=http://127.0.0.1:4021/yed/stream REQUESTS=150 AGENT_YED_CHANNEL_DEP
 npm start -s -w x402-ycash-cli -- channel close http://127.0.0.1:4021/yed/stream --asset YED --devnet $PWD/scratch/dd-181/devnet.json --channels $PWD/scratch/yed.json
 ```
 
-The agent pays YED from `AGENT_WIF` (the key's `ye…` token outputs) or the node's wallet, with
+The agent pays YED from `AGENT_WIF` (the key's Yellowback-address token outputs) or the node's wallet, with
 `MAX_PAYMENT_YED_CENTS` (default 100), `AGENT_YED_CHANNEL_DEPOSIT_CENTS` and
 `AGENT_YED_CHANNEL_MAX_DEPOSIT_CENTS` (default $50). The CLI takes `--asset YED` on `pay` and
 `channel open|close` (`--deposit` is then in cents), `--max-payment-yed` and `--max-deposit-yed`;
 `channel refund` of a YED channel carries a TRANSFER of all of D, by default to the channel's
 return address. Every channel's remainder (its vouchers, the close, the refund) returns to the
-`returnAddress` the client names at open: the WIF key's address (its `ye…` form for YED) or a new
+`returnAddress` the client names at open: the WIF key's address (its Yellowback form for YED) or a new
 address of the node's wallet, never the channel key, which no wallet watches.
 
 ## Facilitator
@@ -205,7 +218,7 @@ be used, with the same keys in camelCase; the environment wins over the file.
     limits; an explicit `AGENT_CHANNEL_DEPOSIT_ZAT` above the client's cap refuses the `open`. In
     code: `new BatchYcashClientScheme({ maxDeposit: { YEC: … , YED: … } })`, whose defaults are
     `DEFAULT_CLIENT_MAX_DEPOSIT` (1 YEC and $50).
-  - **`AGENT_CHANNEL_MAX_CLOSE_FEE_ZAT`** (default `5000`) caps the server-chosen `closeFee`, which
+  - **`AGENT_CHANNEL_MAX_CLOSE_FEE_ZAT`** (default `5000` for YEC, `40000` for YED: its close is a post-quantum spend) caps the server-chosen `closeFee`, which
     is also locked in the channel and paid to miners at close; an offer above it refuses the
     `open` (`maxCloseFee` in code, default `DEFAULT_CLIENT_MAX_CLOSE_FEE`).
 

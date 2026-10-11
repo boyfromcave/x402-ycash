@@ -292,8 +292,10 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
   async function yedHome(p: Party, channelId: string, txid: string, vout: number, cents: number): Promise<void> {
     const rec = (await p.client.storage.get(channelId))!;
     expect(rec.returnAddress).toMatch(/^yr/);
-    const c = T.hash160(T.pubkeyFromPriv(T.hexToBytes(rec.clientPrivKey)));
-    expect(await tokensOf(T.encodeAddress(NET, "yed", c))).toEqual([]);
+    // C: on the quantum line a YED channel is a TX_PQCHANNEL and C the client's SLH-DSA key (D-Q-19)
+    const ch = batch.client.channelOfRecord(rec);
+    const c = ch.template === "pq" ? T.encodePQAddress(NET, "yedpq", ch.client) : T.encodeAddress(NET, "yed", T.hash160(T.pubkeyFromPriv(T.hexToBytes(rec.clientPrivKey))));
+    expect(await tokensOf(c)).toEqual([]);
     expect(await tokensOf(rec.returnAddress!)).toMatchObject([{ txid, vout, cents }]);
     await waitFor(async () => (await d.wallet.call<{ txid: string; vout: number; cents: number }[]>("yed_listunspent")).some((u) => u.txid === txid && u.vout === vout && u.cents === cents), {
       timeoutMs: 15_000, what: `node 0's YED wallet to list ${txid}:${vout}`,
@@ -423,7 +425,7 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
       { value: 10_000n, scriptPubKey: clientScript! },
       { value: 0n, scriptPubKey: yed.transferOpReturnScript([{ vout: 0, cents: 100 }]) },
     ];
-    const voucher = channel.buildVoucher({ channel: ch, cumulative: 100n, clientScript: T.hexToBytes(rec.clientScript), clientPrivKey: T.hexToBytes(rec.clientPrivKey), branchId, layout: burning });
+    const voucher = channel.buildVoucher({ channel: ch, cumulative: 100n, clientScript: T.hexToBytes(rec.clientScript), ...batch.client.clientKeysOfRecord(rec), branchId, layout: burning });
     const completed = T.serializeTxHex(channel.completeVoucher(voucher, ch, p.serverPriv, branchId)); // the test plays a colluding server
     const overlay = await d.wallet.yedValidateRawTransaction(completed);
     expect(overlay).toMatchObject({ valid: true, verdict: "burned", yedIn: 300, yedOut: 100, burned: 200 });

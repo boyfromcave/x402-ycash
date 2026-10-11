@@ -70,8 +70,21 @@ network:
 | Address | `ycash:mainnet` | `ycash:testnet` | `ycash:regtest` |
 |---|---|---|---|
 | transparent P2PKH / P2SH | `s1…` / `s2…` or `s3…` | `sm…` / `s2…` | `sm…` / `s2…` |
-| Yellowback (YED, P2PKH only) | `ye…` | `yt…` | `yr…` |
+| Yellowback (YED), a P2PKH holder: version ‖ 20-byte key hash, 35 characters | `yb…` (`1F DD`) | `yt…` (`20 07`) | `yr…` (`20 02`) |
+| Yellowback (YED), a post-quantum holder: version ‖ scheme ‖ 32-byte key hash, 53 characters | `yb…` (`56 AB`) | `yt…` (`57 1E`) | `yr…` (`57 10`) |
+| post-quantum YEC (`TX_PQPKH`), 53 characters | `sq…` (`4D D9`) | `tq…` (`4F 61`) | `rq…` (`4C 51`) |
 | Sapling | `ys1…` | `ytestsapling1…` | `yregtestsapling1…` |
+
+**The quantum line** (ycash-dd/ycash6 `upgrade/quantum-vaults`, `rpcversion` 7; it rides the vault
+upgrade, branch ID `6d5b7a31`). The mainnet YED prefix is `yb…` there (owner decision D-Q-21; `ye…`,
+version `1F E4`, before it). A post-quantum holder or payee is `TX_PQPKH`, the 35-byte script
+`20 <keyHash:32> 51|52 c2` (`<hash> OP_1|OP_2 OP_CHECKPQSIG`), keyHash = SHA256(scheme ‖ pk); scheme
+`0x01` is SLH-DSA-SHA2-128s (FIPS 205), `0x02` FN-DSA-512 (gated by the node's Falcon height). The
+two YED forms share a prefix and differ in length; a decoder accepts both and refuses a scheme
+other than 1 or 2. The `sq…` form is the same script for plain YEC (D-Q-20); a YED `payTo` MUST be a
+Yellowback address of either form, never `sq…`. A YEC `payTo` MAY be `sq…`; its output is dust below
+the post-quantum threshold (2,406 zatoshis for SLH-DSA at the default relay fee, the node's
+`GetPQDustThreshold`), and a client MUST refuse a smaller `amount` to it.
 
 **Client spend controls.** YED is a dollar (cents, 2 decimals), so a client SDK recognises it as
 a default asset (the TypeScript SDK's `findDefaultAsset` returns it) and its USD spend cap
@@ -81,8 +94,8 @@ with a per-payment cap in zatoshis (the SDK's `yecSpendControl(network, maxZat)`
 the client refuses every YEC requirement.
 
 Ycash's transparent addresses are not Zcash's `t1…`/`t3…`: the node decodes only its own
-prefixes. A `ye…` address encodes the same 20-byte key hash as an `s1…` address, so a YED output
-is an ordinary P2PKH output; the different prefix exists so that YED is never sent to a wallet
+prefixes. A 35-character Yellowback address encodes the same 20-byte key hash as an `s1…` address, so a YED output
+is an ordinary P2PKH output (a 53-character one, a `TX_PQPKH` output); the different prefix exists so that YED is never sent to a wallet
 that cannot see it.
 
 Testnet and regtest share their transparent version bytes (P2PKH `1C 95`, P2SH `1C 2A`, and WIF
@@ -506,7 +519,11 @@ Any failure is a rejection with the reason in parentheses.
    (`invalid_exact_ycash_amount_mismatch`).
 5. **Signature hash types.** Every input's scriptSig ends in signatures whose hash type is
    `SIGHASH_ALL` (0x01), so no one who sees the payload can change its outputs
-   (`invalid_exact_ycash_sighash`).
+   (`invalid_exact_ycash_sighash`). A `TX_PQPKH` input's scriptSig is the chunked post-quantum spend
+   `<sig_1>…<sig_s> <s> <pk_1>…<pk_p> <p>` (every chunk but the last 520 bytes; SLH-DSA s = 16, p = 1,
+   7,938 bytes); its one signature's hash type is the last byte of its last signature chunk. The
+   response's `payer` for such a coin is its post-quantum address (`sq…`/`tq…`/`rq…`; for YED the
+   53-character Yellowback form).
 6. **Inputs.** For every input, `gettxout(txid, n, false)` finds the coin (confirmed and unspent)
    and `gettxout(txid, n, true)` still finds it (no transaction in the mempool spends it)
    (`invalid_exact_ycash_input_spent`). Before first submission this check is authoritative;
