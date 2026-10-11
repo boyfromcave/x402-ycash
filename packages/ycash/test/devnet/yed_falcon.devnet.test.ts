@@ -9,9 +9,13 @@
 // cooperatively; another refunded after t; the channel left open across F refunded to the wallet's
 // Falcon address; and the node's TOK-PQ confirmed by a P2PKH-paying close refused after F.
 // Runs only when the node reports a Falcon height at least 60 blocks above the tip.
-import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
+import type { PaymentPayload, PaymentRequirements, SupportedResponse } from "@x402/core/types";
 import { beforeAll, expect, it } from "vitest";
-import { batch, channel, pq, BatchYcashClientScheme, BatchYcashServerScheme, rpcWalletFunder } from "../../src/index.js";
+import { x402Client } from "@x402/core/client";
+import { x402Facilitator } from "@x402/core/facilitator";
+import { x402ResourceServer } from "@x402/core/server";
+import { batch, channel, exact, pq, yed, BatchYcashClientScheme, BatchYcashServerScheme, rpcWalletFunder } from "../../src/index.js";
+import { InMemorySettlementStore } from "../../src/store/index.js";
 import * as T from "../../src/tx/index.js";
 import { describeDevnet, devnet, record, waitFor, type Devnet } from "./harness.js";
 
@@ -258,6 +262,41 @@ describeDevnet("YED channels across the Falcon height (-pqfalconheight)", () => 
     await mineOnPool(txid);
     expect(await outType(txid, 1)).toBe("pqpubkeyhash");
     record(d.line, "pre-Falcon channel refunded after F", { channelId: a4.channelId, txid });
+  });
+
+  it("from F: exact YED to the wallet's Falcon address, Falcon YED change; a P2PKH payTo refused before signing, and by the facilitator", async ({ skip }) => {
+    if (!applicable) skip();
+    const fac = new exact.ExactYcashFacilitatorScheme(d.wallet, { settlementStore: new InMemorySettlementStore(), confirmationTimeoutMs: 30_000, confirmationPollMs: 250, yellowback: true });
+    const facilitator = new x402Facilitator().register(NET, fac);
+    const server = new x402ResourceServer({
+      verify: (p: PaymentPayload, r: PaymentRequirements) => facilitator.verify(p, r),
+      settle: (p: PaymentPayload, r: PaymentRequirements) => facilitator.settle(p, r),
+      getSupported: async () => facilitator.getSupported() as SupportedResponse,
+    }).register(NET, new exact.ExactYcashServerScheme({ usdAsset: "YED" }));
+    await server.initialize();
+    const client = new x402Client().register(NET, new exact.ExactYcashScheme(new exact.RpcWalletSigner(d.wallet)));
+    client.setSpendControls({ maxAmountPerPayment: "$50" });
+    const payTo = await d.wallet.call<string>("yed_getnewaddress");
+    expect(T.decodeAddress(payTo, NET)).toMatchObject({ kind: "yedpq", scheme: 2 });
+    const [req] = await server.buildPaymentRequirements({ scheme: "exact", network: NET, payTo, price: "$2", maxTimeoutSeconds: 600 });
+    const pl = await client.createPaymentPayload(await server.createPaymentRequiredResponse([req as PaymentRequirements], { url: "https://merchant.test/falcon" }));
+    const hex = (pl.payload as { transaction: string }).transaction;
+    const tx = T.parseTx(hex);
+    const found = yed.findPayload(tx.vout);
+    const assignments = found && "payload" in found && found.payload.type === "transfer" ? found.payload.assignments : [];
+    expect(assignments.length).toBeGreaterThan(0);
+    for (const a of assignments) expect(channel.isFalconHolder(tx.vout[a.vout]!.scriptPubKey)).toBe(true); // payTo and the YED change
+    expect(await d.wallet.yedValidateRawTransaction(hex)).toMatchObject({ verdict: "ok", burned: 0 });
+    expect(await server.verifyPayment(pl, req as PaymentRequirements)).toMatchObject({ isValid: true });
+    const settling = server.settlePayment(pl, req as PaymentRequirements);
+    await mineOnPool(T.txid(hex));
+    expect(await settling).toMatchObject({ success: true, transaction: T.txid(hex) });
+    expect((await tokensOf(payTo)).filter((t) => t.txid === T.txid(hex))).toMatchObject([{ vout: 0, cents: 200 }]);
+    // a P2PKH YED payee after F: the client refuses before the wallet signs
+    const p2pkh = await d.wallet.call<string>("yed_getnewaddress", ["p2pkh"]);
+    const [bad] = await server.buildPaymentRequirements({ scheme: "exact", network: NET, payTo: p2pkh, price: "$2", maxTimeoutSeconds: 600 });
+    await expect(client.createPaymentPayload(await server.createPaymentRequiredResponse([bad as PaymentRequirements], { url: "https://merchant.test/p2pkh" }))).rejects.toThrow(/TOK-PQ/);
+    record(d.line, "exact YED after F", { payTo, txid: T.txid(hex), assignments: assignments.length });
   });
 
   it("from F: a P2SH YED channel is refused by the client before anything is funded", async ({ skip }) => {

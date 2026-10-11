@@ -9,6 +9,7 @@ import type { PaymentPayload, PaymentRequirements, SupportedResponse } from "@x4
 import { x402Client } from "@x402/core/client";
 import { x402Facilitator } from "@x402/core/facilitator";
 import { x402ResourceServer } from "@x402/core/server";
+import { randomBytes } from "node:crypto";
 import { beforeAll, expect, it } from "vitest";
 import { batch, channel, exact, pq, BatchYcashClientScheme, BatchYcashServerScheme, BatchYcashFacilitatorScheme, rpcWalletFunder } from "../../src/index.js";
 import { InMemorySettlementStore } from "../../src/store/index.js";
@@ -85,7 +86,7 @@ describeDevnet("the quantum line: post-quantum YED addresses, exact payees and T
   });
 
   it("exact YED to a TX_PQPKH holder: a 35-byte output, verified and settled; the node lists the YED under the 53-character address", async () => {
-    const seed = T.hexToBytes("5a".repeat(48));
+    const seed = randomBytes(48); // a fresh holder per run: the suite may run again on the same devnet
     const holder = pq.pqKeygen(1, seed);
     const payTo = T.encodePQAddress(NET, "yedpq", pq.keyIdOf(1, holder.publicKey));
     const payerPriv = T.randomPrivKey();
@@ -118,7 +119,7 @@ describeDevnet("the quantum line: post-quantum YED addresses, exact payees and T
     await mineOnPool(T.txid(hex));
     expect(await settling).toMatchObject({ success: true, transaction: T.txid(hex) });
     expect(await outType(T.txid(hex), 0)).toBe("pqpubkeyhash");
-    expect(await tokensOf(payTo)).toMatchObject([{ txid: T.txid(hex), vout: 0, cents: 200 }]);
+    expect((await tokensOf(payTo)).filter((t) => t.txid === T.txid(hex))).toMatchObject([{ txid: T.txid(hex), vout: 0, cents: 200 }]);
     record(d.line, "exact YED to PQPKH", { payTo, txid: T.txid(hex) });
   });
 
