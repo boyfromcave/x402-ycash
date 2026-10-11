@@ -3,6 +3,7 @@
 import type { DefaultAsset, PaymentPayloadContext, PaymentPayloadResult, PaymentRequirements, SchemeNetworkClient } from "@x402/core/types";
 import { ASSET_YEC, ASSET_YED, type YcashNetwork } from "../../constants.js";
 import { addressToScript, equalBytes, parseTx, type Tx } from "../../tx/index.js";
+import { DEFAULT_FALCON_HEIGHT, isFalconActiveAt, yedHolderProblem } from "../../channel/falcon.js";
 import { findPayload, isFindPayloadFailure, validateTransferAssignments } from "../../yed/index.js";
 import { chainOfNetwork, isYcashNetwork, checkTransparentMethod, checkTransparentRequirements, clientExpiryHeight, DUST_ZAT, resolveConfirmationPolicy } from "../policy.js";
 import { SCHEME_EXACT, type ExactYcashTransparentPayload } from "../types.js";
@@ -81,8 +82,15 @@ export class ExactYcashScheme implements SchemeNetworkClient {
 
     const expiryHeight = clientExpiryHeight(chain.height, requirements.maxTimeoutSeconds);
     const base = { network, payTo: requirements.payTo, expiryHeight, tip: chain.height, branchId: chain.branchId };
+    // The Falcon height (TOK-PQ): from it a YED payTo must be a Falcon TX_PQPKH holder; below it a
+    // scheme-2 output does not relay. Refused before the wallet signs anything.
+    const falconActive = isFalconActiveAt(chain.falconHeight ?? DEFAULT_FALCON_HEIGHT[network], chain.height + 1);
+    if (yed) {
+      const problem = yedHolderProblem(addressToScript(requirements.payTo, network), falconActive);
+      if (problem) throw new Error(`payTo ${requirements.payTo}: ${problem}`);
+    }
     let signed: SignedPayment;
-    if (yed) signed = await this.signer.signYedPayment!({ ...base, amountCents: Number(requirements.amount) }); // checked above
+    if (yed) signed = await this.signer.signYedPayment!({ ...base, amountCents: Number(requirements.amount), falconActive }); // checked above
     else signed = await this.signer.signPayment({ ...base, amount: BigInt(requirements.amount) });
 
     // A signer is pluggable: check its tx has the shape the facilitator will demand.

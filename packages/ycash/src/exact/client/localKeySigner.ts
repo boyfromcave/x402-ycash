@@ -23,6 +23,15 @@ import { selectCoins } from "./coinSelection.js";
 import type { ChainState, PaymentOrder, SignedPayment, YcashClientSigner, YedPaymentOrder } from "./signer.js";
 import type { UtxoSource } from "./utxoSource.js";
 
+export interface LocalKeySignerOptions {
+  /**
+   * Where YED change goes (default: this key's own P2PKH). From the node's Falcon height only a Falcon
+   * (scheme-2) post-quantum address may receive YED (TOK-PQ), so a payment leaving YED change after
+   * it needs one here; without it such a payment is refused before signing.
+   */
+  yedChangeAddress?: string;
+}
+
 /**
  * One P2PKH key: coins from the UtxoSource at the key's `s…`/`sm…` address, change back to it.
  * The WIF prefix is shared by testnet and regtest (plan X-F1), so the address is encoded per
@@ -44,6 +53,7 @@ export class LocalKeySigner implements YcashClientSigner {
   constructor(
     wif: string,
     private readonly source: UtxoSource,
+    private readonly options: LocalKeySignerOptions = {},
   ) {
     const k = decodeWif(wif);
     this.privKey = k.privKey;
@@ -153,9 +163,11 @@ export class LocalKeySigner implements YcashClientSigner {
       recipients: [{ scriptPubKey: addressToScript(order.payTo, order.network), cents: order.amountCents }],
       tokens: sel.coins,
       yecCoins: yec,
-      yedChangeScript: this.script,
+      // From the Falcon height the YED change must go to a Falcon TX_PQPKH (TOK-PQ), never this P2PKH key.
+      yedChangeScript: this.options.yedChangeAddress ? addressToScript(this.options.yedChangeAddress, order.network) : this.script,
       yecChangeScript: this.script,
       expiryHeight: order.expiryHeight,
+      ...(order.falconActive !== undefined ? { falconActive: order.falconActive } : {}),
     });
     const inputs = built.inputs.map((c) => c.outpoint);
     for (const o of inputs) this.reserved.set(`${o.txid}:${o.vout}`, order.expiryHeight);

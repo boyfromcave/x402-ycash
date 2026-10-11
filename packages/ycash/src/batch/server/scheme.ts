@@ -20,9 +20,11 @@ import type {
   VerifyContext,
   VerifyResultContext,
 } from "@x402/core/types";
-import { DEFAULT_CLOSE_FEE, DEFAULT_CLOSE_MARGIN_BLOCKS, DEFAULT_MIN_LOCK_BLOCKS, DEFAULT_YED_CLOSE_FEE } from "../../channel/constants.js";
+import { DEFAULT_CLOSE_FEE, DEFAULT_CLOSE_MARGIN_BLOCKS, DEFAULT_MIN_LOCK_BLOCKS, DEFAULT_YED_CLOSE_FEE, DEFAULT_YED_CLOSE_FEE_FALCON } from "../../channel/constants.js";
+import { isFalconActiveAt, readFalconHeight, type FalconHeightSource } from "../../channel/falcon.js";
 import { closeFeeFloor, pqCloseFeeFloor } from "../../channel/outputs.js";
-import { SCHEME_SLH_DSA_SHA2_128S } from "../../pq/scheme.js";
+import { SCHEME_FN_DSA_512, SCHEME_SLH_DSA_SHA2_128S } from "../../pq/scheme.js";
+import type { YcashNetwork } from "../../constants.js";
 import { ASSET_YEC, ASSET_YED, YED_MAX_OUTPUT_CENTS } from "../../constants.js";
 import { yecToZat } from "../../node/amount.js";
 import { bytesToHex } from "../../tx/bytes.js";
@@ -38,8 +40,10 @@ export interface BatchYcashServerConfig extends ChannelManagerConfig {
   /** zatoshis, YEC channels; at least the P2SH close's fee floor */
   closeFee?: bigint;
   /**
-   * zatoshis, YED channels; at least the TX_PQCHANNEL close's fee floor with an SLH-DSA client
-   * (27,000: its scriptSig is ≈ 8 KB). Default DEFAULT_YED_CLOSE_FEE (30,000).
+   * zatoshis, YED channels: a fixed override. Default: scheme-aware, by the node's Falcon height at
+   * the time of the offer: DEFAULT_YED_CLOSE_FEE_FALCON (12,000, twice the Falcon close's floor) from
+   * it, DEFAULT_YED_CLOSE_FEE (30,000; the SLH-DSA close's floor is 27,000) below it. An override must
+   * be at least the Falcon floor, and below the Falcon height at least the SLH-DSA floor.
    */
   yedCloseFee?: bigint;
   /** the funding policy depth (−1 = mempool, a YEC-only opt-in); default 1 */
@@ -76,6 +80,15 @@ const CLOSE_FLOOR_OUTPUTS = [
 ];
 /** A YED close adds its TRANSFER (two assignments: OP_RETURN, push, 15 payload bytes). */
 const CLOSE_FLOOR_OUTPUTS_YED = [...CLOSE_FLOOR_OUTPUTS, { value: 0n, scriptPubKey: new Uint8Array(17) }];
+/** A Falcon-era YED close pays two 35-byte Falcon TX_PQPKH outputs and the TRANSFER. */
+const CLOSE_FLOOR_OUTPUTS_YED_FALCON = [
+  { value: 0n, scriptPubKey: new Uint8Array(35) },
+  { value: 0n, scriptPubKey: new Uint8Array(35) },
+  { value: 0n, scriptPubKey: new Uint8Array(17) },
+];
+/** The YED close's fee floor with an SLH-DSA client (27,000) and with a Falcon client (6,000). */
+export const YED_CLOSE_FLOOR_SLH = pqCloseFeeFloor(SCHEME_SLH_DSA_SHA2_128S, CLOSE_FLOOR_OUTPUTS_YED);
+export const YED_CLOSE_FLOOR_FALCON = pqCloseFeeFloor(SCHEME_FN_DSA_512, CLOSE_FLOOR_OUTPUTS_YED_FALCON);
 
 /**
  * The `batch-settlement` resource-server scheme for Ycash. It advertises the channel terms, and its
@@ -93,10 +106,13 @@ export class BatchYcashScheme implements SchemeNetworkServer {
   readonly manager: ChannelManager;
 
   private readonly verified = new WeakMap<DeepReadonly<PaymentPayload>, VerifiedVoucher>();
-  private readonly cfg: Required<Pick<BatchYcashServerConfig, "minLockBlocks" | "closeMarginBlocks" | "closeFee" | "yedCloseFee" | "confirmations" | "maxDepositCents">> & {
+  private readonly cfg: Required<Pick<BatchYcashServerConfig, "minLockBlocks" | "closeMarginBlocks" | "closeFee" | "confirmations" | "maxDepositCents">> & {
     maxDeposit: bigint;
     usdAsset: typeof ASSET_YED | undefined;
+    /** The configured override; undefined = scheme-aware by the Falcon height. */
+    yedCloseFee: bigint | undefined;
   };
+  private readonly chain: BatchYcashServerConfig["chain"];
 
   /**
    * Creates the scheme and its channel manager.
@@ -110,7 +126,7 @@ export class BatchYcashScheme implements SchemeNetworkServer {
       minLockBlocks: config.minLockBlocks ?? DEFAULT_MIN_LOCK_BLOCKS,
       closeMarginBlocks: config.closeMarginBlocks ?? DEFAULT_CLOSE_MARGIN_BLOCKS,
       closeFee: config.closeFee ?? DEFAULT_CLOSE_FEE,
-      yedCloseFee: config.yedCloseFee ?? DEFAULT_YED_CLOSE_FEE,
+      yedCloseFee: config.yedCloseFee,
       confirmations: config.confirmations ?? 1,
       maxDepositCents: config.maxDepositCents ?? BigInt(YED_MAX_OUTPUT_CENTS),
       usdAsset: config.usdAsset,
@@ -118,9 +134,12 @@ export class BatchYcashScheme implements SchemeNetworkServer {
     if (this.cfg.closeMarginBlocks >= this.cfg.minLockBlocks) throw new Error("closeMarginBlocks must be below minLockBlocks");
     const floor = closeFeeFloor(CLOSE_FLOOR_SCRIPT, CLOSE_FLOOR_OUTPUTS_YED); // ≥ the YEC close's floor
     if (this.cfg.closeFee < floor) throw new Error(`closeFee ${this.cfg.closeFee} is below the close's fee floor ${floor}`);
-    // A YED close is a TX_PQCHANNEL spend (D-Q-19), with the larger SLH-DSA scriptSig.
-    const yedFloor = pqCloseFeeFloor(SCHEME_SLH_DSA_SHA2_128S, CLOSE_FLOOR_OUTPUTS_YED);
-    if (this.cfg.yedCloseFee < yedFloor) throw new Error(`yedCloseFee ${this.cfg.yedCloseFee} is below the post-quantum close's fee floor ${yedFloor}`);
+    // A YED close is a TX_PQCHANNEL spend (D-Q-19): at least the Falcon client's floor; below the Falcon
+    // height the SLH-DSA client's (checked per offer, enhancePaymentRequirements).
+    if (this.cfg.yedCloseFee !== undefined && this.cfg.yedCloseFee < YED_CLOSE_FLOOR_FALCON) {
+      throw new Error(`yedCloseFee ${this.cfg.yedCloseFee} is below the post-quantum close's fee floor ${YED_CLOSE_FLOOR_FALCON}`);
+    }
+    this.chain = config.chain;
     this.manager = new ChannelManager(config);
     this.schemeHooks = {
       onBeforeVerify: (ctx) => this.beforeVerify(ctx),
@@ -166,6 +185,7 @@ export class BatchYcashScheme implements SchemeNetworkServer {
     const yed = req.asset === ASSET_YED;
     // YED vouchers are checkable only against confirmed token records (plan X-F14).
     if (yed && this.cfg.confirmations < 0) throw new Error("YED channels require a funding depth of at least 0 (in a block)");
+    const closeFee = yed ? await this.yedCloseFeeFor(req.network as YcashNetwork) : this.cfg.closeFee;
     return {
       ...req,
       extra: {
@@ -174,11 +194,31 @@ export class BatchYcashScheme implements SchemeNetworkServer {
         minLockBlocks: this.cfg.minLockBlocks,
         closeMarginBlocks: this.cfg.closeMarginBlocks,
         maxDeposit: (yed ? this.cfg.maxDepositCents : this.cfg.maxDeposit).toString(),
-        closeFee: (yed ? this.cfg.yedCloseFee : this.cfg.closeFee).toString(),
+        closeFee: closeFee.toString(),
         areFeesSponsored: false,
         confirmationPolicy: { confirmations: this.cfg.confirmations },
       },
     };
+  }
+
+  /**
+   * The YED close fee of an offer made now: the override, else the Falcon-era default once Falcon
+   * applies to the next block (every channel opened from now has a Falcon client), else the SLH-DSA one.
+   *
+   * @param network - The offer's network (its default Falcon height when the node cannot say).
+   * @returns The close fee, zatoshis.
+   * @throws Error when an override is below the SLH-DSA close's floor before the Falcon height.
+   */
+  private async yedCloseFeeFor(network: YcashNetwork): Promise<bigint> {
+    const falconHeight = await readFalconHeight(this.chain as typeof this.chain & FalconHeightSource, network);
+    const falcon = falconHeight >= 0 && isFalconActiveAt(falconHeight, (await this.chain.getBlockCount()) + 1);
+    if (this.cfg.yedCloseFee !== undefined) {
+      if (!falcon && this.cfg.yedCloseFee < YED_CLOSE_FLOOR_SLH) {
+        throw new Error(`yedCloseFee ${this.cfg.yedCloseFee} is below the SLH-DSA close's fee floor ${YED_CLOSE_FLOOR_SLH} (before the Falcon height ${falconHeight})`);
+      }
+      return this.cfg.yedCloseFee;
+    }
+    return falcon ? DEFAULT_YED_CLOSE_FEE_FALCON : DEFAULT_YED_CLOSE_FEE;
   }
 
   /**

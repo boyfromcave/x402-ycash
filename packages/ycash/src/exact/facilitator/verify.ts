@@ -7,6 +7,7 @@ import { yecToZat, type YcashRpc } from "../../node/index.js";
 import type { SettlementStore } from "../../store/index.js";
 import { txidKey } from "../../store/index.js";
 import { pqpkhKeyId } from "../../pq/script.js";
+import { isFalconActiveAt, readFalconHeight, yedHolderProblem, type FalconHeightSource } from "../../channel/falcon.js";
 import { addressToScript, encodeAddress, encodePQAddress, equalBytes, feeFloor, hasShielded, hexToBytes, p2pkhHash, parseTx, txFee, txid as txidOf, type Tx } from "../../tx/index.js";
 import { checkTransferVerdict, decodedTransferOf, findPayload, isFindPayloadFailure, sameAssignments, validateTransferAssignments, type Assignment } from "../../yed/index.js";
 import {
@@ -24,6 +25,7 @@ import {
   ERR_SCRIPT,
   ERR_SIGHASH,
   ERR_TRANSACTION,
+  ERR_YED_HOLDER,
   ERR_YED_INPUT,
   ERR_YED_NODE_REQUIRED,
   ERR_YED_PAYLOAD,
@@ -223,6 +225,16 @@ export async function verifyTransparent(
   const s = resolved.state;
   const net = await checkNetwork(rpc, s.network);
   if (!net.ok) return net;
+  // Rule 4Y, the Falcon height (quantum spec TOK-PQ): from F every output the TRANSFER assigns YED to,
+  // payTo included, is a Falcon TX_PQPKH (the node would refuse the transaction, not burn it); below F
+  // a scheme-2 output does not relay.
+  if (s.yed) {
+    const falconActive = isFalconActiveAt(await readFalconHeight(rpc as ExactFacilitatorRpc & FalconHeightSource, s.network), net.tip + 1);
+    for (const a of s.yed.assignments) {
+      const problem = yedHolderProblem(s.tx.vout[a.vout]?.scriptPubKey ?? new Uint8Array(), falconActive);
+      if (problem) return fail(ERR_YED_HOLDER, `${a.vout === s.payToVout ? "payTo" : `output ${a.vout}`}: ${problem}`);
+    }
+  }
 
   if (await store.isClaimed(s.key)) {
     return fail(ERR_DUPLICATE_SETTLEMENT, `${s.txid} is already claimed`, addressOfScriptSig(s.tx.vin[0]?.scriptSig ?? new Uint8Array(), s.network));

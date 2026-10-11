@@ -284,3 +284,38 @@ describe("before the Falcon height: SLH-DSA clients, closed below F", () => {
     expect(await s.chain.yedValidateRawTransaction(s.chain.sent.at(-1)!)).toMatchObject({ verdict: "ok" });
   });
 });
+
+describe("the YED close fee follows the Falcon height", () => {
+  const offer = async (server: BatchYcashServerScheme) => {
+    const base: PaymentRequirements = { scheme: "batch-settlement", network: NET, asset: "YED", amount: "1", payTo: FALCON_PAYTO, maxTimeoutSeconds: 300, extra: {} };
+    return (await server.enhancePaymentRequirements(base, { x402Version: 2, scheme: "batch-settlement", network: NET }, [])).extra.closeFee;
+  };
+  const server = (falconHeight: number, yedCloseFee?: bigint) =>
+    new BatchYcashServerScheme({ chain: new FalconYedChain(falconHeight), serverPrivKey: serverPriv, maxDeposit: 1n, usdAsset: "YED", ...(yedCloseFee !== undefined ? { yedCloseFee } : {}) });
+  it("defaults: 12,000 (twice the Falcon close's floor) from F, 30,000 below it", async () => {
+    expect(batch.server.YED_CLOSE_FLOOR_FALCON).toBe(6_000n);
+    expect(batch.server.YED_CLOSE_FLOOR_SLH).toBe(27_000n);
+    expect(channel.DEFAULT_YED_CLOSE_FEE_FALCON).toBe(2n * batch.server.YED_CLOSE_FLOOR_FALCON);
+    expect(await offer(server(0))).toBe("12000");
+    expect(await offer(server(1_001))).toBe("12000"); // tip 1000: Falcon applies to the next block
+    expect(await offer(server(1_002))).toBe("30000");
+    expect(await offer(server(-1))).toBe("30000");
+  });
+  it("an override is kept, but must clear the Falcon floor, and below F the SLH-DSA floor", async () => {
+    expect(await offer(server(0, 8_000n))).toBe("8000");
+    expect(await offer(server(-1, 35_000n))).toBe("35000");
+    await expect(offer(server(-1, 8_000n))).rejects.toThrow(/SLH-DSA close's fee floor 27000/);
+    expect(() => server(0, 5_999n)).toThrow(/fee floor 6000/);
+  });
+  it("a Falcon channel at the Falcon-era default closes with the node-valid fee", async () => {
+    const s = await setup({ falconHeight: 0, payTo: FALCON_PAYTO });
+    expect(s.req.extra.closeFee).toBe("12000");
+    const id = await s.open();
+    await s.request();
+    expect(await s.server.manager.close(id)).toBeDefined();
+    const close = T.parseTx(s.chain.sent.at(-1)!);
+    const fee = channel.yedChannelValue(12_000n) - close.vout.reduce((a, o) => a + o.value, 0n);
+    expect(fee).toBe(12_000n);
+    expect(fee >= channel.pqCloseFeeFloor(2, close.vout)).toBe(true);
+  });
+});

@@ -5,7 +5,7 @@ import { heldOutpoints, InMemoryCoinReservationStore, type CoinReservationStore 
 import { addressToScript, hexToBytes, p2pkhHash, serializeTxHex, txid, type OutPoint } from "../../tx/index.js";
 import { buildYedTransfer, selectTokenCoins, type TokenCoin } from "../../yed/index.js";
 import { selectCoins, type Coin } from "./coinSelection.js";
-import { chainStateOf, type ChainState, type PaymentOrder, type SignedPayment, type YcashClientSigner, type YedPaymentOrder } from "./signer.js";
+import { chainStateWithFalcon, type ChainState, type PaymentOrder, type SignedPayment, type YcashClientSigner, type YedPaymentOrder } from "./signer.js";
 
 export type RpcWalletSignerRpc = Pick<
   YcashRpc,
@@ -69,7 +69,7 @@ export class RpcWalletSigner implements YcashClientSigner {
    * @returns The node's chain state.
    */
   async chainState(): Promise<ChainState> {
-    return chainStateOf(await this.rpc.getBlockchainInfo());
+    return chainStateWithFalcon(this.rpc as RpcWalletSignerRpc & Partial<Pick<YcashRpc, "yedGetInfo">>);
   }
 
   /**
@@ -140,6 +140,7 @@ export class RpcWalletSigner implements YcashClientSigner {
         yedChangeScript: yedChange,
         yecChangeScript: yecChange,
         expiryHeight: order.expiryHeight,
+        ...(order.falconActive !== undefined ? { falconActive: order.falconActive } : {}),
       });
       const inputs: OutPoint[] = built.inputs.map((c) => c.outpoint);
       await this.lock(inputs);

@@ -23,3 +23,5 @@ export const ERR_YED_NODE_REQUIRED = "invalid_exact_ycash_yed_node_required";
 export const ERR_YED_PAYLOAD = "invalid_exact_ycash_yed_payload";
 export const ERR_YED_VERDICT = "invalid_exact_ycash_yed_verdict";
 export const ERR_YED_UNCONFIRMED_INPUT = "invalid_exact_ycash_yed_unconfirmed_input";
+/** From the node's Falcon height an output the TRANSFER assigns YED to is not a Falcon TX_PQPKH (TOK-PQ), or below it a scheme-2 one (policy). */
+export const ERR_YED_HOLDER = "invalid_exact_ycash_yed_holder";

@@ -6,7 +6,7 @@ import { heldOutpoints, InMemoryCoinReservationStore, type CoinReservationStore 
 import { addressToScript, hexToBytes, type OutPoint } from "../../tx/index.js";
 import type { TokenCoin } from "../../yed/index.js";
 import type { Coin } from "./coinSelection.js";
-import { chainStateOf, type ChainState } from "./signer.js";
+import { chainStateWithFalcon, type ChainState } from "./signer.js";
 
 export interface UtxoSource {
   chainState(): Promise<ChainState>;
@@ -81,7 +81,7 @@ export class RpcUtxoSource implements UtxoSource {
    * @returns The node's chain state.
    */
   async chainState(): Promise<ChainState> {
-    return chainStateOf(await this.rpc.getBlockchainInfo());
+    return chainStateWithFalcon(this.rpc);
   }
 
   /**

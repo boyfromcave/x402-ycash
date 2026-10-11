@@ -35,6 +35,11 @@ export class FakeNode implements ExactFacilitatorRpc {
   chain = "regtest";
   tip = 300;
   yellowback = false;
+  /** The Falcon height `yed_getinfo` reports (unset: the node reports none, so the network default applies). */
+  falconHeight: number | undefined;
+  async yedGetInfo(): Promise<Record<string, unknown>> {
+    return this.falconHeight === undefined ? { rpcversion: 7, params: {} } : { rpcversion: 7, params: { pq: { falconHeight: this.falconHeight } } };
+  }
   /** cents of YED each outpoint holds (Yellowback node only) */
   yedCents = new Map<string, number>();
   utxos = new Map<string, Utxo>();
@@ -232,7 +237,7 @@ function out(u: { value: bigint; script: Uint8Array }, confirmations: number): T
 export class FakeUtxoSource implements UtxoSource {
   constructor(private readonly node: FakeNode) {}
   async chainState(): Promise<ChainState> {
-    return { chain: this.node.chain, height: this.node.tip, branchId: BRANCH_ID };
+    return { chain: this.node.chain, height: this.node.tip, branchId: BRANCH_ID, ...(this.node.falconHeight !== undefined ? { falconHeight: this.node.falconHeight } : {}) };
   }
   async listTokens(address: string): Promise<TokenCoin[]> {
     void address;

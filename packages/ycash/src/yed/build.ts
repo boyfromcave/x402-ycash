@@ -7,6 +7,7 @@
 // ycash6): token inputs confirmed only, each YED output carrying TOKEN_VALUE (params.h:78), every
 // cent of yedIn assigned.
 import { TOKEN_VALUE_ZAT, YED_MAX_OUTPUT_CENTS, YED_MIN_OUTPUT_CENTS } from "../constants.js";
+import { yedHolderProblem } from "../channel/falcon.js";
 import { maxScriptSigSizeOf } from "../pq/script.js";
 import { feeFloor } from "../tx/fee.js";
 import { SEQUENCE_FINAL, newTx, type OutPoint, type Tx, type TxOut } from "../tx/tx.js";
@@ -108,6 +109,12 @@ export interface BuildYedTransferParams {
   /** Where YEC change goes. */
   yecChangeScript: Uint8Array;
   expiryHeight?: number;
+  /**
+   * Whether Falcon applies to the block the transfer lands in (tip + 1 ≥ the node's Falcon height).
+   * When given, every recipient and the YED change must be valid holders then: a Falcon TX_PQPKH from
+   * F (TOK-PQ), anything but a scheme-2 output below it (policy). Refused before anything is signed.
+   */
+  falconActive?: boolean;
 }
 
 export interface BuiltYedTransfer {
@@ -137,6 +144,14 @@ export function buildYedTransfer(p: BuildYedTransferParams): BuiltYedTransfer {
   const paid = p.recipients.reduce((s, r) => s + r.cents, 0);
   const changeCents = yedIn - paid;
   if (!validChange(changeCents)) throw new Error(`YED change ${changeCents} cents would burn (it must be 0 or ${YED_MIN_OUTPUT_CENTS}..${YED_MAX_OUTPUT_CENTS})`);
+  if (p.falconActive !== undefined) {
+    for (const [i, r] of p.recipients.entries()) {
+      const problem = yedHolderProblem(r.scriptPubKey, p.falconActive);
+      if (problem) throw new Error(`YED recipient ${i}: ${problem}`);
+    }
+    const problem = changeCents > 0 ? yedHolderProblem(p.yedChangeScript, p.falconActive) : null;
+    if (problem) throw new Error(`the YED change: ${problem}`);
+  }
 
   const assigned: TxOut[] = p.recipients.map((r) => ({ value: r.value ?? TOKEN_VALUE, scriptPubKey: r.scriptPubKey }));
   const assignments: Assignment[] = p.recipients.map((r, vout) => ({ vout, cents: r.cents }));
