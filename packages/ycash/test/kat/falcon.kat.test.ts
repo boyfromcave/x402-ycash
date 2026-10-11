@@ -133,7 +133,7 @@ const variants = {
 } as const;
 
 /** The NIST round-3 falcon512 KAT file, regenerated (PQCgenKAT_sign.c's two passes). */
-function nistRound3Rsp(): { text: string; entries: Map<number, Record<string, string>> } {
+async function nistRound3Rsp(): Promise<{ text: string; entries: Map<number, Record<string, string>> }> {
   const outer = new NistDrbg(Uint8Array.from({ length: 48 }, (_, i) => i));
   const reqs: { seed: Uint8Array; msg: Uint8Array }[] = [];
   for (let i = 0; i < 100; i++) {
@@ -142,7 +142,9 @@ function nistRound3Rsp(): { text: string; entries: Map<number, Record<string, st
   }
   let text = "# Falcon-512\n\n";
   const entries = new Map<number, Record<string, string>>();
-  reqs.forEach(({ seed, msg }, count) => {
+  for (const [count, { seed, msg }] of reqs.entries()) {
+    // Yield to the event loop between entries: a long synchronous loop starves vitest's worker RPC.
+    await new Promise((res) => setImmediate(res));
     const drbg = new NistDrbg(seed);
     const rng: Rng = (n) => drbg.randombytes(n);
     const kp = keygen(falcon512, rng);
@@ -151,7 +153,7 @@ function nistRound3Rsp(): { text: string; entries: Map<number, Record<string, st
     entries.set(count, e);
     text += `count = ${count}\nseed = ${e.seed}\nmlen = ${e.mlen}\nmsg = ${e.msg}\npk = ${e.pk}\nsk = ${e.sk}\nsmlen = ${e.smlen}\nsm = ${e.sm}\n\n`;
     expect(falcon512.attached.open(sm, kp.publicKey)).toEqual(msg);
-  });
+  }
   return { text, entries };
 }
 
@@ -188,8 +190,8 @@ function pqcleanNistkat(name: keyof typeof variants): string {
 }
 
 describe("Falcon known answers (noble 0.7.1 vs NIST round 3 and PQClean)", () => {
-  it("NIST round-3 falcon512-KAT.rsp: all 100 entries", () => {
-    const { text, entries } = nistRound3Rsp();
+  it("NIST round-3 falcon512-KAT.rsp: all 100 entries", async () => {
+    const { text, entries } = await nistRound3Rsp();
     const file = process.env.FALCON_KAT_RSP;
     if (file) {
       // The downloaded file is untrusted data: only parsed as `key = HEX` lines.
