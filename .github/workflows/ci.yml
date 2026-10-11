@@ -16,8 +16,9 @@ name: ci
 on:
   push:
     # The one branch list: harden/yellowback (P1 hardening), upgrade/vault (the network upgrade),
-    # main (the branch of record, AGENTS.md rule 2).
-    branches: &branches [main, harden/yellowback, upgrade/vault]
+    # upgrade/quantum-vaults (post-quantum owners, rpcversion 7), main (the branch of record, AGENTS.md
+    # rule 2).
+    branches: &branches [main, harden/yellowback, upgrade/vault, upgrade/quantum-vaults]
   pull_request:
     branches: *branches
   workflow_dispatch:
@@ -145,7 +146,8 @@ jobs:
   # this job downloads (NODE_ARTIFACT: the node line's yellowback-tests `build` job artifact
   # `node-bin`, ycash-dd's node-bin.tar with src/ycashd and src/ycash-cli executable; 3 days).
   # Node branch: upgrade/vault -> upgrade/vault (whose
-  # devnet tool activates the Vault upgrade itself), harden/yellowback -> harden/yellowback,
+  # devnet tool activates the Vault upgrade itself), upgrade/quantum-vaults -> upgrade/quantum-vaults
+  # (the PQ-owner node, rpcversion 7), harden/yellowback -> harden/yellowback,
   # anything else -> ycash-dd's branch of record. scripts/devnet.sh wants the workspace layout:
   # ws/ycash-dd (with src/ycashd), ws/x402-ycash, a Python with the test framework's packages.
   # Not here: light/'s regtest test (it needs lightwalletd-dd as well) and the Python devnet
@@ -171,7 +173,7 @@ jobs:
         id: node
         run: |
           case "$REF_NAME" in
-            upgrade/vault|harden/yellowback) branch=$REF_NAME ;;
+            upgrade/vault|upgrade/quantum-vaults|harden/yellowback) branch=$REF_NAME ;;
             *) branch=$NODE_OF_RECORD ;;
           esac
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
