@@ -20,8 +20,9 @@ import type {
   VerifyContext,
   VerifyResultContext,
 } from "@x402/core/types";
-import { DEFAULT_CLOSE_FEE, DEFAULT_CLOSE_MARGIN_BLOCKS, DEFAULT_MIN_LOCK_BLOCKS } from "../../channel/constants.js";
-import { closeFeeFloor } from "../../channel/outputs.js";
+import { DEFAULT_CLOSE_FEE, DEFAULT_CLOSE_MARGIN_BLOCKS, DEFAULT_MIN_LOCK_BLOCKS, DEFAULT_YED_CLOSE_FEE } from "../../channel/constants.js";
+import { closeFeeFloor, pqCloseFeeFloor } from "../../channel/outputs.js";
+import { SCHEME_SLH_DSA_SHA2_128S } from "../../pq/scheme.js";
 import { ASSET_YEC, ASSET_YED, YED_MAX_OUTPUT_CENTS } from "../../constants.js";
 import { yecToZat } from "../../node/amount.js";
 import { bytesToHex } from "../../tx/bytes.js";
@@ -34,8 +35,13 @@ export interface BatchYcashServerConfig extends ChannelManagerConfig {
   maxDeposit: bigint;
   minLockBlocks?: number;
   closeMarginBlocks?: number;
-  /** zatoshis; at least the close's fee floor */
+  /** zatoshis, YEC channels; at least the P2SH close's fee floor */
   closeFee?: bigint;
+  /**
+   * zatoshis, YED channels; at least the TX_PQCHANNEL close's fee floor with an SLH-DSA client
+   * (27,000: its scriptSig is ≈ 8 KB). Default DEFAULT_YED_CLOSE_FEE (30,000).
+   */
+  yedCloseFee?: bigint;
   /** the funding policy depth (−1 = mempool, a YEC-only opt-in); default 1 */
   confirmations?: number;
   /** the largest D of a YED channel, cents; default $100,000 (the largest YED output) */
@@ -87,7 +93,7 @@ export class BatchYcashScheme implements SchemeNetworkServer {
   readonly manager: ChannelManager;
 
   private readonly verified = new WeakMap<DeepReadonly<PaymentPayload>, VerifiedVoucher>();
-  private readonly cfg: Required<Pick<BatchYcashServerConfig, "minLockBlocks" | "closeMarginBlocks" | "closeFee" | "confirmations" | "maxDepositCents">> & {
+  private readonly cfg: Required<Pick<BatchYcashServerConfig, "minLockBlocks" | "closeMarginBlocks" | "closeFee" | "yedCloseFee" | "confirmations" | "maxDepositCents">> & {
     maxDeposit: bigint;
     usdAsset: typeof ASSET_YED | undefined;
   };
@@ -96,7 +102,7 @@ export class BatchYcashScheme implements SchemeNetworkServer {
    * Creates the scheme and its channel manager.
    *
    * @param config - The manager's config plus the advertised channel terms.
-   * @throws Error when `closeMarginBlocks` is not below `minLockBlocks`, or `closeFee` is below a YED close's fee floor.
+   * @throws Error when `closeMarginBlocks` is not below `minLockBlocks`, `closeFee` is below a P2SH close's fee floor, or `yedCloseFee` below a TX_PQCHANNEL close's.
    */
   constructor(config: BatchYcashServerConfig) {
     this.cfg = {
@@ -104,6 +110,7 @@ export class BatchYcashScheme implements SchemeNetworkServer {
       minLockBlocks: config.minLockBlocks ?? DEFAULT_MIN_LOCK_BLOCKS,
       closeMarginBlocks: config.closeMarginBlocks ?? DEFAULT_CLOSE_MARGIN_BLOCKS,
       closeFee: config.closeFee ?? DEFAULT_CLOSE_FEE,
+      yedCloseFee: config.yedCloseFee ?? DEFAULT_YED_CLOSE_FEE,
       confirmations: config.confirmations ?? 1,
       maxDepositCents: config.maxDepositCents ?? BigInt(YED_MAX_OUTPUT_CENTS),
       usdAsset: config.usdAsset,
@@ -111,6 +118,9 @@ export class BatchYcashScheme implements SchemeNetworkServer {
     if (this.cfg.closeMarginBlocks >= this.cfg.minLockBlocks) throw new Error("closeMarginBlocks must be below minLockBlocks");
     const floor = closeFeeFloor(CLOSE_FLOOR_SCRIPT, CLOSE_FLOOR_OUTPUTS_YED); // ≥ the YEC close's floor
     if (this.cfg.closeFee < floor) throw new Error(`closeFee ${this.cfg.closeFee} is below the close's fee floor ${floor}`);
+    // A YED close is a TX_PQCHANNEL spend (D-Q-19), with the larger SLH-DSA scriptSig.
+    const yedFloor = pqCloseFeeFloor(SCHEME_SLH_DSA_SHA2_128S, CLOSE_FLOOR_OUTPUTS_YED);
+    if (this.cfg.yedCloseFee < yedFloor) throw new Error(`yedCloseFee ${this.cfg.yedCloseFee} is below the post-quantum close's fee floor ${yedFloor}`);
     this.manager = new ChannelManager(config);
     this.schemeHooks = {
       onBeforeVerify: (ctx) => this.beforeVerify(ctx),
@@ -164,7 +174,7 @@ export class BatchYcashScheme implements SchemeNetworkServer {
         minLockBlocks: this.cfg.minLockBlocks,
         closeMarginBlocks: this.cfg.closeMarginBlocks,
         maxDeposit: (yed ? this.cfg.maxDepositCents : this.cfg.maxDeposit).toString(),
-        closeFee: this.cfg.closeFee.toString(),
+        closeFee: (yed ? this.cfg.yedCloseFee : this.cfg.closeFee).toString(),
         areFeesSponsored: false,
         confirmationPolicy: { confirmations: this.cfg.confirmations },
       },

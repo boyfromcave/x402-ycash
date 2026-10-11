@@ -4,6 +4,7 @@
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import { RpcError, SendRawTransactionError, type BlockchainInfo, type NodeCapabilities, type TxOutInfo, type VerifyScriptsResult, type YedPayload, type YedValidation } from "../../../src/node/index.js";
 import { findPayload, isFindPayloadFailure } from "../../../src/yed/index.js";
+import { parsePQSpend, pqpkhKeyId, pqVerify, spendMatches } from "../../../src/pq/index.js";
 import type { ChainState, Coin, ExactFacilitatorRpc, UtxoSource } from "../../../src/exact/index.js";
 import type { TokenCoin } from "../../../src/yed/index.js";
 import {
@@ -106,6 +107,15 @@ export class FakeNode implements ExactFacilitatorRpc {
       const e = (error: string) => errors.push({ txid: input.prevout.txid, vout: input.prevout.vout, scriptSig: bytesToHex(input.scriptSig), sequence: input.sequence, error });
       if (!u) return e("Input not found or already spent");
       const chunks = parseScript(input.scriptSig);
+      const pqId = pqpkhKeyId(u.script);
+      if (pqId) {
+        // TX_PQPKH: the chunked spend by the key the script names, its signature over the sighash
+        const sp = parsePQSpend(chunks);
+        if (!sp || !spendMatches(sp, pqId)) return e("Operation not valid with the current stack size");
+        const d = sighashV4(tx, i, u.script, u.value, sp.sig[sp.sig.length - 1] as number, BRANCH_ID);
+        if (!pqVerify(sp.scheme, sp.pk, sp.sig.subarray(0, -1), d)) return e("Script evaluated without error but finished with a false/empty top stack element");
+        return;
+      }
       const sig = chunks[0]?.data;
       const pub = chunks[1]?.data;
       const pkh = p2pkhHash(u.script);

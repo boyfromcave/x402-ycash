@@ -7,6 +7,7 @@
 // ycash6): token inputs confirmed only, each YED output carrying TOKEN_VALUE (params.h:78), every
 // cent of yedIn assigned.
 import { TOKEN_VALUE_ZAT, YED_MAX_OUTPUT_CENTS, YED_MIN_OUTPUT_CENTS } from "../constants.js";
+import { maxScriptSigSizeOf } from "../pq/script.js";
 import { feeFloor } from "../tx/fee.js";
 import { SEQUENCE_FINAL, newTx, type OutPoint, type Tx, type TxOut } from "../tx/tx.js";
 import type { Assignment } from "./payload.js";
@@ -17,8 +18,6 @@ import { validateTransferAssignments } from "./transfer.js";
 export const TOKEN_VALUE = BigInt(TOKEN_VALUE_ZAT);
 /** Dust threshold of a P2PKH output at the default relay fee (plan S-5, X-F15). */
 const DUST = 54n;
-/** A P2PKH scriptSig at its largest: push(72-byte DER + hash type) + push(33-byte key). */
-const MAX_P2PKH_SCRIPTSIG = 1 + 73 + 1 + 33;
 
 /** A confirmed output holding YED (a token record: `yed_listtokens`, `yed_listunspent`). */
 export interface TokenCoin {
@@ -155,7 +154,8 @@ export function buildYedTransfer(p: BuildYedTransferParams): BuiltYedTransfer {
   const yec = [...p.yecCoins].sort((a, b) => (b.value > a.value ? 1 : b.value < a.value ? -1 : 0));
   const draft = (inputs: readonly YecCoin[], vout: TxOut[]): Tx =>
     newTx({
-      vin: inputs.map((c) => ({ prevout: c.outpoint, scriptSig: new Uint8Array(MAX_P2PKH_SCRIPTSIG), sequence: SEQUENCE_FINAL })),
+      // sized by each coin's script: a TX_PQPKH token coin (a node wallet's post-quantum holder) spends with an ≈ 8 KB scriptSig
+      vin: inputs.map((c) => ({ prevout: c.outpoint, scriptSig: new Uint8Array(maxScriptSigSizeOf(c.scriptPubKey)), sequence: SEQUENCE_FINAL })),
       vout,
       expiryHeight: p.expiryHeight ?? 0,
     });

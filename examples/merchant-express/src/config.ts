@@ -170,7 +170,7 @@ const YED_MAX_CENTS = 10_000_000n;
 function yedOf(env: Env, network: YcashNetwork): YedConfig | undefined {
   const payTo = env.MERCHANT_YED_PAY_TO;
   if (!payTo) return undefined;
-  if (tx.decodeAddress(payTo, network).kind !== "yed") throw new Error("MERCHANT_YED_PAY_TO must be a Yellowback (ye…/yt…/yr…) address");
+  if (!tx.isYedKind(tx.decodeAddress(payTo, network).kind)) throw new Error("MERCHANT_YED_PAY_TO must be a Yellowback (yb…/yt…/yr…) address");
   const report = dollars(env, "PRICE_YED_REPORT", "$2", YED_MIN_CENTS);
   if (report.cents > YED_MAX_CENTS) throw new Error("PRICE_YED_REPORT must be at most $100,000");
   const maxDeposit = env.MERCHANT_MAX_DEPOSIT_CENTS ?? "10000";
@@ -188,7 +188,7 @@ export function loadMerchantConfig(env: Env = process.env): MerchantConfig {
   if (!payTo) throw new Error("MERCHANT_PAY_TO (a transparent address) is required");
   // The network comes from config, never from the address: testnet and regtest share prefixes (X-F1).
   const decoded = tx.decodeAddress(payTo, network);
-  if (decoded.kind === "yed") throw new Error("MERCHANT_PAY_TO must be a YEC address, not a YED (ye…) address");
+  if (tx.isYedKind(decoded.kind)) throw new Error("MERCHANT_PAY_TO must be a YEC address, not a YED (yb…/yt…/yr…) address");
 
   const wallet = nodeOf(env);
   const port = Number(env.PORT ?? "4021");

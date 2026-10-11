@@ -3,7 +3,7 @@
 // an in-process chain with the Yellowback overlay.
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import { describe, expect, it } from "vitest";
-import { batch, channel, tx as T, yed, BatchYcashClientScheme, BatchYcashFacilitatorScheme, BatchYcashServerScheme } from "../../../src/index.js";
+import { batch, channel, pq, tx as T, yed, BatchYcashClientScheme, BatchYcashFacilitatorScheme, BatchYcashServerScheme } from "../../../src/index.js";
 import { FakeChain } from "./fakeChain.js";
 import { FakeYedChain } from "./fakeYedChain.js";
 import { NET, reasonOf, serverPriv } from "./setup.js";
@@ -30,7 +30,7 @@ interface YedSetup {
  * A YED channel offer at `price` with deposit D; the funder spends a token coin of `tokenCents`
  * (default D + 500) and a YEC coin. `tamper` rewrites the unsigned funding before it is signed.
  */
-async function setup(o: { deposit?: bigint; price?: string; tokenCents?: number; tamper?: (tx: T.Tx) => void; chain?: FakeYedChain } = {}): Promise<YedSetup> {
+async function setup(o: { deposit?: bigint; price?: string; tokenCents?: number; tamper?: (tx: T.Tx) => void; chain?: FakeYedChain; template?: batch.client.YedChannelTemplate } = {}): Promise<YedSetup> {
   const chain = o.chain ?? new FakeYedChain();
   const closes: YedSetup["closes"] = [];
   const server = new BatchYcashServerScheme({
@@ -56,7 +56,7 @@ async function setup(o: { deposit?: bigint; price?: string; tokenCents?: number;
       return T.serializeTxHex(channel.signFundingTx(built.tx, built.inputs, built.inputs.map(() => coinKey), fr.branchId));
     },
   };
-  const client = new BatchYcashClientScheme({ chain, funder, deposit: () => o.deposit ?? 2_000n, lockSlackBlocks: 0 });
+  const client = new BatchYcashClientScheme({ chain, funder, deposit: () => o.deposit ?? 2_000n, lockSlackBlocks: 0, ...(o.template ? { yedChannelTemplate: o.template } : {}) });
   const wrap = (payload: Record<string, unknown>, r = req): PaymentPayload => ({ x402Version: 2, accepted: r, payload });
   const pay = async (r = req) => wrap((await client.createPaymentPayload(2, r)).payload, r);
   const request = async (charge?: bigint, r = req) => {
@@ -86,7 +86,7 @@ function assignmentsOf(hex: string): yed.Assignment[] {
 describe("YED channel requirements and prices", () => {
   it("prices $0.01 as one cent (the floor binds the cumulative, not a request) and offers D in cents", async () => {
     const s = await setup();
-    expect(s.req).toMatchObject({ asset: "YED", amount: "1", extra: { maxDeposit: "5000", closeFee: "1500", confirmationPolicy: { confirmations: 1 } } });
+    expect(s.req).toMatchObject({ asset: "YED", amount: "1", extra: { maxDeposit: "5000", closeFee: "30000", confirmationPolicy: { confirmations: 1 } } });
     expect(await s.server.parsePrice("0.25 YED", NET)).toEqual({ amount: "25", asset: "YED" });
     expect(await s.server.parsePrice({ amount: "7", asset: "YED" }, NET)).toEqual({ amount: "7", asset: "YED" });
     await expect(s.server.parsePrice("$0.001", NET)).rejects.toThrow(/whole number of cents/);
@@ -99,13 +99,16 @@ describe("YED channel requirements and prices", () => {
 });
 
 describe("open: the funding TRANSFER", () => {
-  it("assigns D to the P2SH output of V = 2 × TOKEN_VALUE + closeFee, YED change to the funder; the first voucher pre-pays $1.00", async () => {
+  it("assigns D to the bare TX_PQCHANNEL output of V = 2 × TOKEN_VALUE + closeFee, YED change to the funder; the first voucher pre-pays $1.00", async () => {
     const s = await setup();
     const { channelId, first } = await s.open();
     expect(first).toBe("100");
     const funding = s.chain.sent[0]!;
     const tx = T.parseTx(funding);
-    expect(tx.vout[0]?.value).toBe(21_500n);
+    expect(tx.vout[0]?.value).toBe(50_000n);
+    const script = channel.parsePQChannelScript(tx.vout[0]!.scriptPubKey);
+    expect(script?.client.scheme).toBe(pq.SCHEME_SLH_DSA_SHA2_128S);
+    expect(T.bytesToHex(script!.serverPubKey)).toBe(s.req.extra.serverPubKey);
     expect(assignmentsOf(funding)).toEqual([{ vout: 0, cents: 2_000 }, { vout: 1, cents: 500 }]);
     expect(s.chain.tokens.get(channelId)).toBe(2_000);
     expect((await s.server.manager.channelState(channelId)).deposit).toBe("2000");
@@ -157,7 +160,7 @@ describe("vouchers under the dollar floor", () => {
     const { channelId } = await s.open();
     const rec = (await s.client.storage.get(channelId))!;
     const ch = batch.client.channelOfRecord(rec);
-    const low = channel.buildVoucher({ channel: ch, cumulative: 50n, clientScript: T.hexToBytes(rec.clientScript), clientPrivKey: T.hexToBytes(rec.clientPrivKey), branchId: s.chain.branchId,
+    const low = channel.buildVoucher({ channel: ch, cumulative: 50n, clientScript: T.hexToBytes(rec.clientScript), ...batch.client.clientKeysOfRecord(rec), branchId: s.chain.branchId,
       layout: ({ channel: c, clientScript }) => [{ value: 10_000n, scriptPubKey: c.payToScript }, { value: 10_000n, scriptPubKey: clientScript! }, { value: 0n, scriptPubKey: yed.transferOpReturnScript([{ vout: 0, cents: 100 }, { vout: 1, cents: 1_900 }]) }] });
     // the server answers stale first (its stored voucher is at 100); a stateless facilitator checks the floor
     expect(await reasonOf(s.server.manager.verify(s.wrap({ type: "voucher", channelId, tx: T.serializeTxHex(low), cumulative: "50" }), s.req))).toBe(E.STALE_VOUCHER);
@@ -211,7 +214,7 @@ describe("vouchers under the dollar floor", () => {
 });
 
 function voucherArgs(rec: batch.client.ClientChannelRecord | undefined, branchId: number) {
-  return { channel: batch.client.channelOfRecord(rec!), clientScript: T.hexToBytes(rec!.clientScript), clientPrivKey: T.hexToBytes(rec!.clientPrivKey), branchId };
+  return { channel: batch.client.channelOfRecord(rec!), clientScript: T.hexToBytes(rec!.clientScript), ...batch.client.clientKeysOfRecord(rec!), branchId };
 }
 
 describe("refund with payload", () => {
@@ -264,6 +267,26 @@ describe("a stateless facilitator", () => {
     const o = openPayload.payload as unknown as batch.BatchOpenPayload;
     const channelId = `${T.txid(o.fundingTx)}:0`;
     expect(await fac.verify(s.wrap({ type: "voucher", channelId, tx: o.voucher.tx, cumulative: o.voucher.cumulative }), s.req)).toMatchObject({ isValid: false, invalidReason: E.FUNDING_DEPTH });
+  });
+});
+
+describe("the deprecated P2SH YED channel (valid only before the Falcon height)", () => {
+  it("still opens, pays and closes on the 2-of-2 when the client asks for it", async () => {
+    const s = await setup({ template: "p2sh", price: "$0.25" });
+    const { channelId } = await s.open();
+    const funding = T.parseTx(s.chain.sent[0]!);
+    expect(T.p2shHash(funding.vout[0]!.scriptPubKey)).not.toBeNull();
+    expect(batch.client.channelOfRecord((await s.client.storage.get(channelId))!).template).toBe("p2sh");
+    await s.request();
+    const v = await s.server.manager.verify(s.wrap((await s.client.closePayload(channelId)).payload), s.req);
+    expect((await s.server.manager.settle(v, 0n)).success).toBe(true);
+    expect(assignmentsOf(s.chain.sent.at(-1)!)).toEqual([{ vout: 0, cents: 100 }, { vout: 1, cents: 1_900 }]);
+  });
+  it("a YEC open on a TX_PQCHANNEL is refused: YEC channels stay P2SH", async () => {
+    const s = await setup();
+    const p = (await s.pay()).payload as unknown as batch.BatchOpenPayload;
+    const terms = { ...batch.parseTerms(s.req), asset: "YEC" as const };
+    expect(await reasonOf(batch.verifyOpen(p, terms, s.chain, { tip: s.chain.tip, branchId: s.chain.branchId }))).toBe(E.REDEEM_SCRIPT);
   });
 });
 

@@ -1,8 +1,8 @@
 // The stateless verification rules shared by the server and a facilitator
 // (specs/scheme_batch_settlement_ycash.md, "Verification"). State (charged total, stored voucher,
 // in-flight lock) lives in the server's ledger.
-import { channelFromScript, channelIdOf, yecDeposit, type Channel } from "../channel/channel.js";
-import { channelScriptPubKey, parseChannelScript } from "../channel/script.js";
+import { channelFromScript, channelIdOf, channelTermsOf, yecDeposit, type Channel } from "../channel/channel.js";
+import { channelScriptPubKey } from "../channel/script.js";
 import { checkVoucherShape, verifyVoucherSignature } from "../channel/voucher.js";
 import { yecVoucherOutputs, type VoucherLayout } from "../channel/outputs.js";
 import { assignedTo, YED_TRANSFER_VOUT, yedChannelValue, yedVoucherAssignments, yedVoucherLayout } from "../channel/yed.js";
@@ -281,10 +281,11 @@ export async function verifyOpen(
 ): Promise<VerifiedOpen> {
   const yed = terms.asset === ASSET_YED;
   if (yed) yedChain(chain);
-  // 2. the redeem script
+  // 2. the channel script: the P2SH redeem script, or (YED only) the bare TX_PQCHANNEL (D-Q-19)
   const rs = hexToBytes(p.redeemScript);
-  const script = parseChannelScript(rs);
+  const script = channelTermsOf(rs);
   if (!script) throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, "not the channel script");
+  if (script.template === "pq" && !yed) throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, "a YEC channel uses the P2SH channel script");
   if (!equalBytes(script.serverPubKey, terms.serverPubKey)) throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, "S is not extra.serverPubKey");
   if (script.refundHeight < ctx.tip + terms.minLockBlocks) {
     throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, `t = ${script.refundHeight} is below tip + minLockBlocks = ${ctx.tip + terms.minLockBlocks}`);

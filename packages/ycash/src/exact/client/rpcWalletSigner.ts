@@ -2,7 +2,7 @@
 // (with the expiry) + `signrawtransaction`, which both lines have (plan §5.6).
 import { RPC_METHOD_NOT_FOUND, RpcError, yecToZat, type YcashRpc } from "../../node/index.js";
 import { heldOutpoints, InMemoryCoinReservationStore, type CoinReservationStore } from "../../store/coinReservations.js";
-import { addressToScript, hexToBytes, serializeTxHex, txid, type OutPoint } from "../../tx/index.js";
+import { addressToScript, hexToBytes, p2pkhHash, serializeTxHex, txid, type OutPoint } from "../../tx/index.js";
 import { buildYedTransfer, selectTokenCoins, type TokenCoin } from "../../yed/index.js";
 import { selectCoins, type Coin } from "./coinSelection.js";
 import { chainStateOf, type ChainState, type PaymentOrder, type SignedPayment, type YcashClientSigner, type YedPaymentOrder } from "./signer.js";
@@ -183,7 +183,9 @@ export class RpcWalletSigner implements YcashClientSigner {
   private async candidates(): Promise<Coin[]> {
     // listunspent omits locked coins, so a coin held by a pending payment is not offered again.
     // Coinbase outputs are left out: outside regtest, consensus makes them go to the shielded pool first.
-    const unspent = (await this.rpc.listUnspent(1)).filter((u) => u.spendable && !u.generated);
+    // P2PKH only: the selection sizes P2PKH inputs, and a post-quantum (sq…) coin costs an ≈ 8 KB
+    // scriptSig, so the wallet keeps those for spends that ask for them.
+    const unspent = (await this.rpc.listUnspent(1)).filter((u) => u.spendable && !u.generated && p2pkhHash(hexToBytes(u.scriptPubKey)) !== null);
     const yed = await this.yedOutpoints();
     const coins: Coin[] = [];
     for (const u of unspent) {

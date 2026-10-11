@@ -37,6 +37,8 @@ export const OP = {
   OP_CHECKMULTISIG: 0xae,
   OP_CHECKMULTISIGVERIFY: 0xaf,
   OP_CHECKLOCKTIMEVERIFY: 0xb1,
+  /** The vault upgrade's post-quantum signature check (quantum spec §0; ycash-dd src/script/script.h). */
+  OP_CHECKPQSIG: 0xc2,
 } as const;
 
 /** A script element: a number is an opcode, bytes are a data push, a bigint is a number push. */

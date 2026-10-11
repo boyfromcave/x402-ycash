@@ -6,7 +6,8 @@ import { ASSET_YED, type YcashNetwork } from "../../constants.js";
 import { yecToZat, type YcashRpc } from "../../node/index.js";
 import type { SettlementStore } from "../../store/index.js";
 import { txidKey } from "../../store/index.js";
-import { addressToScript, encodeAddress, equalBytes, feeFloor, hasShielded, hexToBytes, p2pkhHash, parseTx, txFee, txid as txidOf, type Tx } from "../../tx/index.js";
+import { pqpkhKeyId } from "../../pq/script.js";
+import { addressToScript, encodeAddress, encodePQAddress, equalBytes, feeFloor, hasShielded, hexToBytes, p2pkhHash, parseTx, txFee, txid as txidOf, type Tx } from "../../tx/index.js";
 import { checkTransferVerdict, decodedTransferOf, findPayload, isFindPayloadFailure, sameAssignments, validateTransferAssignments, type Assignment } from "../../yed/index.js";
 import {
   ERR_AMOUNT_MISMATCH,
@@ -283,13 +284,19 @@ export async function verifyTransparent(
 }
 
 /**
- * The response's `payer`: input 0's address, in the `ye…` form for a YED payment from a P2PKH coin.
+ * The response's `payer`: input 0's address, in the Yellowback form (`yb…`/`yt…`/`yr…`, 35 or 53
+ * characters) for a YED payment from a P2PKH or TX_PQPKH coin.
  *
  * @param spk - The scriptPubKey of the coin input 0 spends.
  * @param s - The payment's network and, for YED, its decoded transfer.
  * @returns The payer address.
  */
 export function payerOf(spk: Uint8Array, s: Pick<ResolvedPayment, "network" | "yed">): string {
-  const pkh = s.yed ? p2pkhHash(spk) : null;
-  return pkh ? encodeAddress(s.network, "yed", pkh) : addressOfScript(spk, s.network);
+  if (s.yed) {
+    const pkh = p2pkhHash(spk);
+    if (pkh) return encodeAddress(s.network, "yed", pkh);
+    const pq = pqpkhKeyId(spk);
+    if (pq) return encodePQAddress(s.network, "yedpq", pq);
+  }
+  return addressOfScript(spk, s.network);
 }

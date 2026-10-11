@@ -2,12 +2,15 @@
 // channel's script and spends, with a Yellowback TRANSFER on every spend, because a YED spend without
 // one burns (plan Y-4; ycash-dd/src/yellowback/state.cpp:860-865, same on ycash6).
 //
-//   funding  a TRANSFER assigning D cents to the P2SH output, whose YEC value is
-//            V = 2 × TOKEN_VALUE + closeFee (plan Y-12)
+//   funding  a TRANSFER assigning D cents to the channel output, whose YEC value is
+//            V = 2 × TOKEN_VALUE + closeFee (plan Y-12). On the quantum line the channel output is
+//            the bare hybrid TX_PQCHANNEL (D-Q-19); the P2SH 2-of-2 is deprecated there, valid for
+//            YED only before the node's Falcon height (TOK-PQ refuses a P2SH holder after it)
 //   voucher  vout 0 payTo TOKEN_VALUE, vout 1 client TOKEN_VALUE, vout 2 the TRANSFER of the split
 //   refund   the CLTV branch, a TRANSFER assigning all of D to the client's output
 import { TOKEN_VALUE_ZAT } from "../constants.js";
 import { equalBytes } from "../tx/bytes.js";
+import { pqpkhKeyId } from "../pq/script.js";
 import { p2pkhHash } from "../tx/script.js";
 import type { Tx } from "../tx/tx.js";
 import { buildYedTransfer, type BuiltYedTransfer, type TokenCoin, type YecCoin } from "../yed/build.js";
@@ -54,7 +57,7 @@ export function yedVoucherAssignments(depositCents: bigint, cumulative: bigint):
 /**
  * The YED voucher layout of a channel holding D cents. Constant shape: three outputs whatever the
  * split, so the fee is always V − 2 × TOKEN_VALUE = closeFee. Throws when V is not
- * 2 × TOKEN_VALUE + closeFee, the client script is missing, not P2PKH or payTo's, or the cumulative breaks
+ * 2 × TOKEN_VALUE + closeFee, the client script is missing, not a key hash (P2PKH or TX_PQPKH) or is payTo's, or the cumulative breaks
  * the dollar floor.
  *
  * @param depositCents - D, cents.
@@ -66,8 +69,8 @@ export function yedVoucherLayout(depositCents: bigint): VoucherLayout {
       throw new RangeError(`a YED channel's value must be 2 × TOKEN_VALUE + closeFee = ${yedChannelValue(channel.closeFee)}, not ${channel.value}`);
     }
     if (!clientScript) throw new Error("a YED voucher always has a client output script");
-    // A YED holder is a key hash: there is no P2SH Yellowback address (plan Y-8).
-    if (!p2pkhHash(clientScript)) throw new Error("a YED voucher returns the client's YED to a P2PKH script");
+    // A YED holder is a key hash, P2PKH or TX_PQPKH: there is no P2SH Yellowback address (plan Y-8; quantum spec §4).
+    if (!p2pkhHash(clientScript) && !pqpkhKeyId(clientScript)) throw new Error("a YED voucher returns the client's YED to a P2PKH or post-quantum key-hash script");
     if (equalBytes(clientScript, channel.payToScript)) throw new Error("the client output must not pay payTo");
     return [
       { value: TOKEN_VALUE, scriptPubKey: channel.payToScript },
@@ -78,6 +81,7 @@ export function yedVoucherLayout(depositCents: bigint): VoucherLayout {
 }
 
 export interface BuildYedFundingParams {
+  /** The channel script: a TX_PQCHANNEL (paid bare), or the deprecated P2SH redeem script. */
   redeemScript: Uint8Array;
   depositCents: bigint;
   closeFee: bigint;
@@ -91,9 +95,9 @@ export interface BuildYedFundingParams {
 }
 
 /**
- * The unsigned funding TRANSFER: vout 0 the channel's P2SH output carrying V and assigned D, then
- * the YED change, the OP_RETURN and YEC change. The SDK builds it: there is no P2SH `ye…` address
- * and `yed_send` refuses one (plan Y-8).
+ * The unsigned funding TRANSFER: vout 0 the channel output (the bare TX_PQCHANNEL, or the deprecated
+ * P2SH) carrying V and assigned D, then the YED change, the OP_RETURN and YEC change. The SDK builds
+ * it: no Yellowback address names a channel and `yed_send` pays none (plan Y-8).
  *
  * @param p - Redeem script, D, close fee, the coins to spend and the change scripts.
  * @returns The unsigned transaction with its per-vin coins, assignments and fee.

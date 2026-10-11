@@ -8,6 +8,7 @@ import { DUST_THRESHOLD } from "../../channel/constants.js";
 import { findChannelVout } from "../../channel/funding.js";
 import type { VoucherLayout } from "../../channel/outputs.js";
 import { buildRefund } from "../../channel/refund.js";
+import { buildPQChannelScript } from "../../channel/pqScript.js";
 import { buildChannelScript, channelAddress } from "../../channel/script.js";
 import { buildVoucher } from "../../channel/voucher.js";
 import { buildYedRefund, yedChannelValue } from "../../channel/yed.js";
@@ -15,13 +16,16 @@ import { ASSET_YEC, ASSET_YED, TX_EXPIRING_SOON_THRESHOLD, YED_MAX_OUTPUT_CENTS 
 import type { BlockchainInfo, TxOutInfo } from "../../node/types.js";
 import { bytesToHex, hexToBytes } from "../../tx/bytes.js";
 import { addressToScript } from "../../tx/address.js";
+import { randomBytes } from "@noble/hashes/utils.js";
+import { SCHEME_SLH_DSA_SHA2_128S, SEED_SIZE, keyIdOf } from "../../pq/scheme.js";
+import { pqKeygen } from "../../pq/sign.js";
 import { pubkeyFromPriv, randomPrivKey } from "../../tx/keys.js";
 import { parseTx, serializeTxHex, txid as txidOf } from "../../tx/tx.js";
 import { BatchError } from "../errors.js";
 import { returnScriptOf } from "../returnAddress.js";
 import { parseTerms, type BatchChannelState, type BatchClientPayload, type BatchTerms } from "../types.js";
 import { closeCumulative, cumulativeFloor, layoutFor } from "../verify.js";
-import { channelOfRecord, InMemoryClientChannelStorage, offerKeyOf, type ClientChannelRecord, type ClientChannelStorage } from "./channel.js";
+import { channelOfRecord, clientKeysOfRecord, InMemoryClientChannelStorage, offerKeyOf, type ClientChannelRecord, type ClientChannelStorage } from "./channel.js";
 import type { ChannelFunder } from "./funder.js";
 
 /** The node calls the client needs: tip and branch id, and broadcasting its refund. */
@@ -39,11 +43,20 @@ export interface ClientChain {
 export const DEFAULT_CLIENT_MAX_DEPOSIT: Readonly<Record<string, bigint>> = { [ASSET_YEC]: 100_000_000n, [ASSET_YED]: 5_000n };
 
 /**
- * The client's cap on the server-chosen `closeFee`, zatoshis for both assets (plan X-F50): the fee
- * is locked in V and paid to miners at close, so a hostile server could inflate it. The default is
- * a little over three times the close's fee floor (1,500).
+ * The client's cap on the server-chosen `closeFee`, zatoshis per asset (plan X-F50): the fee is
+ * locked in V and paid to miners at close, so a hostile server could inflate it. YEC: a little over
+ * three times the P2SH close's fee floor (1,500). YED: a little over the TX_PQCHANNEL close's floor
+ * with an SLH-DSA client (≈ 8 KB of scriptSig, 27,000; the server's default is 30,000).
  */
-export const DEFAULT_CLIENT_MAX_CLOSE_FEE: Readonly<Record<string, bigint>> = { [ASSET_YEC]: 5_000n, [ASSET_YED]: 5_000n };
+export const DEFAULT_CLIENT_MAX_CLOSE_FEE: Readonly<Record<string, bigint>> = { [ASSET_YEC]: 5_000n, [ASSET_YED]: 40_000n };
+
+/**
+ * The script a YED channel is opened on. `pq` (the default): the hybrid TX_PQCHANNEL (D-Q-19), with
+ * an SLH-DSA client key. `p2sh`: the 2-of-2 secp256k1 channel, **deprecated** on the quantum line:
+ * valid for YED only before the node's Falcon height (TOK-PQ refuses a P2SH holder after it).
+ * YEC channels are always P2SH.
+ */
+export type YedChannelTemplate = "pq" | "p2sh";
 
 /**
  * Blocks a funding stays valid beyond the relay threshold: nExpiryHeight = tip + 3 + this (plan
@@ -76,6 +89,8 @@ export interface BatchYcashClientConfig {
   maxCloseFee?: Partial<Record<string, bigint>>;
   /** The funding's nExpiryHeight is tip + 3 + this (default DEFAULT_FUNDING_EXPIRY_BLOCKS). */
   fundingExpiryBlocks?: number;
+  /** The script YED channels open on (default `pq`; `p2sh` is deprecated, see {@link YedChannelTemplate}). */
+  yedChannelTemplate?: YedChannelTemplate;
   log?: (msg: string) => void;
 }
 
@@ -101,6 +116,8 @@ export class BatchYcashScheme implements SchemeNetworkClient {
   readonly scheme = "batch-settlement";
   readonly storage: ClientChannelStorage;
   readonly schemeHooks: SchemeClientHooks;
+  /** The last voucher signed per channel (see {@link sign}). */
+  private readonly lastVoucher = new Map<string, { key: string; hex: string }>();
   /**
    * Creates the scheme and its `onPaymentResponse` hook, which applies settle responses and
    * resyncs from a corrective 402's `channelState`.
@@ -259,7 +276,7 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     if (info.blocks < rec.refundHeight) throw new Error(`the refund is valid from height ${rec.refundHeight}; tip is ${info.blocks}`);
     const params = {
       channel: channelOfRecord(rec),
-      clientPrivKey: hexToBytes(rec.clientPrivKey),
+      ...clientKeysOfRecord(rec),
       toScript: opts.toScript ?? hexToBytes(rec.clientScript),
       branchId: parseInt(info.consensus.nextblock, 16) >>> 0,
       ...(opts.fee !== undefined ? { fee: opts.fee } : {}),
@@ -345,10 +362,20 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     const returnAddress = this.cfg.returnAddress ?? (await this.cfg.funder.returnAddress?.({ network: terms.network, asset: terms.asset }));
     if (!returnAddress) throw new Error("no return address: set returnAddress, or use a funder that has one (the channel key's remainder would be stranded)");
     const returnScript = returnScriptOf(returnAddress, terms.network, terms.asset, addressToScript(terms.payTo, terms.network));
-    const priv = randomPrivKey();
-    const clientPubKey = pubkeyFromPriv(priv);
     const refundHeight = tip + terms.minLockBlocks + (this.cfg.lockSlackBlocks ?? 10);
-    const redeemScript = buildChannelScript({ clientPubKey, serverPubKey: terms.serverPubKey, refundHeight });
+    // A YED channel opens on the hybrid TX_PQCHANNEL unless configured otherwise (D-Q-19): the
+    // client key is SLH-DSA (Falcon keys are for after the node's Falcon height), its seed stored.
+    const pq = yed && (this.cfg.yedChannelTemplate ?? "pq") === "pq";
+    let priv: Uint8Array;
+    let redeemScript: Uint8Array;
+    if (pq) {
+      priv = randomBytes(SEED_SIZE);
+      const kp = pqKeygen(SCHEME_SLH_DSA_SHA2_128S, priv);
+      redeemScript = buildPQChannelScript({ client: keyIdOf(SCHEME_SLH_DSA_SHA2_128S, kp.publicKey), serverPubKey: terms.serverPubKey, refundHeight });
+    } else {
+      priv = randomPrivKey();
+      redeemScript = buildChannelScript({ clientPubKey: pubkeyFromPriv(priv), serverPubKey: terms.serverPubKey, refundHeight });
+    }
     const cap = this.maxDepositFor(terms.asset);
     let deposit = this.cfg.deposit?.(terms) ?? terms.amount * BigInt(this.cfg.depositMultiplier ?? 100);
     const serverCap = yed && terms.maxDeposit > BigInt(YED_MAX_OUTPUT_CENTS) ? BigInt(YED_MAX_OUTPUT_CENTS) : terms.maxDeposit;
@@ -380,7 +407,7 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     };
     rec.open = open;
     await this.storage.put(rec);
-    this.cfg.log?.(`opened ${channelId} at ${channelAddress(terms.network, redeemScript)}: V=${value} D=${deposit} t=${refundHeight}`);
+    this.cfg.log?.(`opened ${channelId} ${pq ? "on TX_PQCHANNEL" : `at ${channelAddress(terms.network, redeemScript)}`}: V=${value} D=${deposit} t=${refundHeight}`);
     return open;
   }
 
@@ -398,7 +425,10 @@ export class BatchYcashScheme implements SchemeNetworkClient {
   }
 
   /**
-   * Signs a voucher of the channel at `cumulative` with the channel key C.
+   * Signs a voucher of the channel at `cumulative` with the channel key C. The voucher is a
+   * function of the channel, the cumulative and the branch id (both signatures are deterministic),
+   * so the last one is reused when those repeat: under YED's dollar floor every request until the
+   * pre-paid $1.00 is used carries the same voucher, and an SLH-DSA signature costs ≈ 1.4 s here.
    *
    * @param rec - The channel record.
    * @param cumulative - The total paid to the server so far, in the asset's unit.
@@ -406,11 +436,28 @@ export class BatchYcashScheme implements SchemeNetworkClient {
    * @returns The voucher transaction, hex.
    */
   private sign(rec: ClientChannelRecord, cumulative: bigint, branchId: number): string {
+    const key = `${rec.channelId}@${cumulative}@${branchId}@${rec.clientScript}`;
+    const cached = this.lastVoucher.get(rec.channelId);
+    if (cached?.key === key) return cached.hex;
+    const hex = this.signFresh(rec, cumulative, branchId);
+    this.lastVoucher.set(rec.channelId, { key, hex });
+    return hex;
+  }
+
+  /**
+   * Builds and signs a voucher.
+   *
+   * @param rec - The channel record.
+   * @param cumulative - The cumulative.
+   * @param branchId - The branch id.
+   * @returns The voucher transaction, hex.
+   */
+  private signFresh(rec: ClientChannelRecord, cumulative: bigint, branchId: number): string {
     return serializeTxHex(buildVoucher({
       channel: channelOfRecord(rec),
       cumulative,
       clientScript: hexToBytes(rec.clientScript),
-      clientPrivKey: hexToBytes(rec.clientPrivKey),
+      ...clientKeysOfRecord(rec),
       branchId,
       layout: this.layoutFor(rec.asset, BigInt(rec.deposit)),
     }));

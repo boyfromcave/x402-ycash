@@ -4,21 +4,27 @@
 import type { ClientChain } from "../batch/client/scheme.js";
 import { zatToYecString } from "../node/amount.js";
 import type { BlockchainInfo, TxOutInfo } from "../node/types.js";
-import { bytesToHex, decodeAddress, encodeAddress, p2pkhHash, parseTx } from "../tx/index.js";
+import { pqpkhKeyId } from "../pq/script.js";
+import { bytesToHex, decodeAddress, encodeAddress, encodePQAddress, p2pkhHash, parseTx } from "../tx/index.js";
 import type { ChainState } from "../exact/client/signer.js";
 import { LwdError, type LwdClient } from "./client.js";
+
+/** The node's GetTxnOutputType names of the kinds addressOf returns. */
+const TYPE_OF: Record<string, string> = { p2pkh: "pubkeyhash", p2sh: "scripthash", pq: "pqpubkeyhash" };
 
 /**
  * Recovers the transparent address an output pays, since lightwalletd's UTXO index is keyed by address.
  *
  * @param script - The output's scriptPubKey.
  * @param chain - The node's chain name (`main`, `test` or `regtest`).
- * @returns The P2PKH or P2SH address, or undefined for any other script.
+ * @returns The P2PKH, P2SH or post-quantum (`sq…`) address, or undefined for any other script.
  */
 function addressOf(script: Uint8Array, chain: string): string | undefined {
   const network = chain === "main" ? "ycash:mainnet" : chain === "test" ? "ycash:testnet" : "ycash:regtest";
   const pkh = p2pkhHash(script);
   if (pkh) return encodeAddress(network, "p2pkh", pkh);
+  const pq = pqpkhKeyId(script);
+  if (pq) return encodePQAddress(network, "pq", pq);
   if (script.length === 23 && script[0] === 0xa9 && script[1] === 0x14 && script[22] === 0x87) return encodeAddress(network, "p2sh", script.slice(2, 22));
   return undefined;
 }
@@ -91,7 +97,7 @@ export class LwdChain implements ClientChain {
       bestblock: "",
       confirmations,
       value: Number(zatToYecString(out.value)),
-      scriptPubKey: { asm: "", hex: bytesToHex(out.scriptPubKey), type: address ? (decodeAddress(address).kind === "p2sh" ? "scripthash" : "pubkeyhash") : "nonstandard", ...(address ? { addresses: [address] } : {}) },
+      scriptPubKey: { asm: "", hex: bytesToHex(out.scriptPubKey), type: address ? (TYPE_OF[decodeAddress(address).kind] ?? "nonstandard") : "nonstandard", ...(address ? { addresses: [address] } : {}) },
       version: 4,
       coinbase: false,
     });
