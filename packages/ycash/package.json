@@ -12,6 +12,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --dir test/unit --testTimeout=20000",
+    "test:kat": "vitest run --dir test/kat --testTimeout=600000",
     "test:devnet": "vitest run --dir test/devnet --passWithNoTests --no-file-parallelism --testTimeout=300000 --hookTimeout=300000"
   },
   "dependencies": {
