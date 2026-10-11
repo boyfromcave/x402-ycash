@@ -49,6 +49,7 @@ export class LocalKeySigner implements YcashClientSigner {
    *
    * @param wif - The private key in Ycash WIF.
    * @param source - Where the key's coins (and, for YED, token outputs) are listed.
+   * @param options - Where YED change goes (a Falcon address from the Falcon height).
    */
   constructor(
     wif: string,

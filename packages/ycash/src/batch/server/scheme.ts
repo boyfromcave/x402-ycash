@@ -91,6 +91,28 @@ export const YED_CLOSE_FLOOR_SLH = pqCloseFeeFloor(SCHEME_SLH_DSA_SHA2_128S, CLO
 export const YED_CLOSE_FLOOR_FALCON = pqCloseFeeFloor(SCHEME_FN_DSA_512, CLOSE_FLOOR_OUTPUTS_YED_FALCON);
 
 /**
+ * The YED close fee of an offer made now: the override, else the Falcon-era default once Falcon
+ * applies to the next block (every channel opened from now has a Falcon client), else the SLH-DSA one.
+ *
+ * @param chain - The server's node.
+ * @param override - The configured yedCloseFee, if any.
+ * @param network - The offer's network (its default Falcon height when the node cannot say).
+ * @returns The close fee, zatoshis.
+ * @throws Error when an override is below the SLH-DSA close's floor before the Falcon height.
+ */
+async function yedCloseFeeFor(chain: BatchYcashServerConfig["chain"], override: bigint | undefined, network: YcashNetwork): Promise<bigint> {
+  const falconHeight = await readFalconHeight(chain as BatchYcashServerConfig["chain"] & FalconHeightSource, network);
+  const falcon = falconHeight >= 0 && isFalconActiveAt(falconHeight, (await chain.getBlockCount()) + 1);
+  if (override !== undefined) {
+    if (!falcon && override < YED_CLOSE_FLOOR_SLH) {
+      throw new Error(`yedCloseFee ${override} is below the SLH-DSA close's fee floor ${YED_CLOSE_FLOOR_SLH} (before the Falcon height ${falconHeight})`);
+    }
+    return override;
+  }
+  return falcon ? DEFAULT_YED_CLOSE_FEE_FALCON : DEFAULT_YED_CLOSE_FEE;
+}
+
+/**
  * The `batch-settlement` resource-server scheme for Ycash. It advertises the channel terms, and its
  * hooks run the {@link ChannelManager}: verify locally before the handler (skipping the facilitator)
  * and charge the actual price, the settle-time `requirements.amount`, after it.
@@ -185,7 +207,7 @@ export class BatchYcashScheme implements SchemeNetworkServer {
     const yed = req.asset === ASSET_YED;
     // YED vouchers are checkable only against confirmed token records (plan X-F14).
     if (yed && this.cfg.confirmations < 0) throw new Error("YED channels require a funding depth of at least 0 (in a block)");
-    const closeFee = yed ? await this.yedCloseFeeFor(req.network as YcashNetwork) : this.cfg.closeFee;
+    const closeFee = yed ? await yedCloseFeeFor(this.chain, this.cfg.yedCloseFee, req.network as YcashNetwork) : this.cfg.closeFee;
     return {
       ...req,
       extra: {
@@ -199,26 +221,6 @@ export class BatchYcashScheme implements SchemeNetworkServer {
         confirmationPolicy: { confirmations: this.cfg.confirmations },
       },
     };
-  }
-
-  /**
-   * The YED close fee of an offer made now: the override, else the Falcon-era default once Falcon
-   * applies to the next block (every channel opened from now has a Falcon client), else the SLH-DSA one.
-   *
-   * @param network - The offer's network (its default Falcon height when the node cannot say).
-   * @returns The close fee, zatoshis.
-   * @throws Error when an override is below the SLH-DSA close's floor before the Falcon height.
-   */
-  private async yedCloseFeeFor(network: YcashNetwork): Promise<bigint> {
-    const falconHeight = await readFalconHeight(this.chain as typeof this.chain & FalconHeightSource, network);
-    const falcon = falconHeight >= 0 && isFalconActiveAt(falconHeight, (await this.chain.getBlockCount()) + 1);
-    if (this.cfg.yedCloseFee !== undefined) {
-      if (!falcon && this.cfg.yedCloseFee < YED_CLOSE_FLOOR_SLH) {
-        throw new Error(`yedCloseFee ${this.cfg.yedCloseFee} is below the SLH-DSA close's fee floor ${YED_CLOSE_FLOOR_SLH} (before the Falcon height ${falconHeight})`);
-      }
-      return this.cfg.yedCloseFee;
-    }
-    return falcon ? DEFAULT_YED_CLOSE_FEE_FALCON : DEFAULT_YED_CLOSE_FEE;
   }
 
   /**

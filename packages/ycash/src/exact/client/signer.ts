@@ -79,6 +79,12 @@ export function chainStateOf(info: { chain: string; blocks: number; consensus: {
   return { chain: info.chain, height: info.blocks, branchId: parseInt(info.consensus.nextblock, 16) >>> 0 };
 }
 
+/** A node view for {@link chainStateWithFalcon}. */
+export interface ChainStateRpc {
+  getBlockchainInfo(): Promise<{ chain: string; blocks: number; consensus: { nextblock: string } }>;
+  yedGetInfo?(): Promise<YedInfo>;
+}
+
 const NETWORK_OF_CHAIN: Readonly<Record<string, YcashNetwork>> = { main: YCASH_MAINNET, test: YCASH_TESTNET, regtest: YCASH_REGTEST };
 
 /**
@@ -87,9 +93,7 @@ const NETWORK_OF_CHAIN: Readonly<Record<string, YcashNetwork>> = { main: YCASH_M
  * @param rpc - A node view: `getblockchaininfo`, and optionally `yed_getinfo`.
  * @returns The chain state with `falconHeight` (the network's default when the node cannot say).
  */
-export async function chainStateWithFalcon(
-  rpc: { getBlockchainInfo(): Promise<{ chain: string; blocks: number; consensus: { nextblock: string } }>; yedGetInfo?(): Promise<YedInfo> },
-): Promise<ChainState> {
+export async function chainStateWithFalcon(rpc: ChainStateRpc): Promise<ChainState> {
   const st = chainStateOf(await rpc.getBlockchainInfo());
   const network = NETWORK_OF_CHAIN[st.chain];
   return network ? { ...st, falconHeight: await readFalconHeight(rpc as FalconHeightSource, network) } : st;
