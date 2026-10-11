@@ -2,7 +2,7 @@
 import { YCASH_MAINNET, YCASH_REGTEST, YCASH_TESTNET, type YcashNetwork } from "../../constants.js";
 import { readFalconHeight, type FalconHeightSource } from "../../channel/falcon.js";
 import type { YedInfo } from "../../node/types.js";
-import type { OutPoint } from "../../tx/index.js";
+import { readNetworkFees, type NetworkFees, type OutPoint } from "../../tx/index.js";
 
 /** What the client sees of the chain: the tip it counts expiry from, and the branch id it signs at. */
 export interface ChainState {
@@ -16,6 +16,11 @@ export interface ChainState {
    * ask it; absent: the network's default (0 on mainnet and testnet, never on regtest).
    */
   falconHeight?: number;
+  /**
+   * The node's network fee rates (`yed_getinfo.params.fees.network`, rpcversion 8), read fresh: a YED
+   * payment pays the Yellowback rate by size. Absent (an older node, no overlay): the S-6 floor.
+   */
+  networkFees?: NetworkFees;
 }
 
 /** One payment to build: exactly `amount` to `payTo`, valid through `expiryHeight`. */
@@ -55,6 +60,8 @@ export interface YedPaymentOrder {
    * relays. Signers refuse to sign anything else (buildYedTransfer's `falconActive`).
    */
   falconActive?: boolean;
+  /** The node's network fee rates (ChainState.networkFees): the TRANSFER pays the Yellowback rate. */
+  networkFees?: NetworkFees;
 }
 
 export interface YcashClientSigner {
@@ -88,13 +95,18 @@ export interface ChainStateRpc {
 const NETWORK_OF_CHAIN: Readonly<Record<string, YcashNetwork>> = { main: YCASH_MAINNET, test: YCASH_TESTNET, regtest: YCASH_REGTEST };
 
 /**
- * {@link chainStateOf} plus the node's Falcon height, read through `yed_getinfo` when the node answers it.
+ * {@link chainStateOf} plus the node's Falcon height and network fee rates, read through `yed_getinfo`
+ * when the node answers it.
  *
  * @param rpc - A node view: `getblockchaininfo`, and optionally `yed_getinfo`.
- * @returns The chain state with `falconHeight` (the network's default when the node cannot say).
+ * @returns The chain state with `falconHeight` (the network's default when the node cannot say) and,
+ * from an rpcversion-8 node, `networkFees`.
  */
 export async function chainStateWithFalcon(rpc: ChainStateRpc): Promise<ChainState> {
   const st = chainStateOf(await rpc.getBlockchainInfo());
   const network = NETWORK_OF_CHAIN[st.chain];
-  return network ? { ...st, falconHeight: await readFalconHeight(rpc as FalconHeightSource, network) } : st;
+  if (!network) return st;
+  const networkFees = await readNetworkFees(rpc);
+  return { ...st, falconHeight: await readFalconHeight(rpc as FalconHeightSource, network), ...(networkFees ? { networkFees } : {}) };
 }
+

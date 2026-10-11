@@ -9,7 +9,7 @@
 import { TOKEN_VALUE_ZAT, YED_MAX_OUTPUT_CENTS, YED_MIN_OUTPUT_CENTS } from "../constants.js";
 import { yedHolderProblem } from "../channel/falcon.js";
 import { maxScriptSigSizeOf } from "../pq/script.js";
-import { feeFloor } from "../tx/fee.js";
+import { networkFee, type NetworkFees } from "../tx/networkFee.js";
 import { SEQUENCE_FINAL, newTx, type OutPoint, type Tx, type TxOut } from "../tx/tx.js";
 import type { Assignment } from "./payload.js";
 import { transferOpReturnScript } from "./script.js";
@@ -115,6 +115,12 @@ export interface BuildYedTransferParams {
    * F (TOK-PQ), anything but a scheme-2 output below it (policy). Refused before anything is signed.
    */
   falconActive?: boolean;
+  /**
+   * The node's network fee rates (`yed_getinfo.params.fees.network`, rpcversion 8): a TRANSFER pays the
+   * Yellowback rate by size, capped (ycash-dd src/yellowback/txbuilder.cpp YedNetworkFee). Absent: the
+   * S-6 floor, as before rpcversion 8.
+   */
+  networkFees?: NetworkFees;
 }
 
 export interface BuiltYedTransfer {
@@ -130,8 +136,9 @@ export interface BuiltYedTransfer {
 
 /**
  * The TRANSFER: recipients at vouts 0..n−1, the YED change (if any) next, then the OP_RETURN, then
- * YEC change (if not dust). Every cent of yedIn is assigned, so nothing burns; the fee is the fee
- * floor (feeFloor) of the tx with signatures at their largest.
+ * YEC change (if not dust). Every cent of yedIn is assigned, so nothing burns; the fee is the
+ * network fee (networkFee, the Yellowback rate when the node gave its rates, else the S-6 floor) of
+ * the tx with signatures at their largest.
  *
  * @param p - Recipients, token and YEC coins, change scripts and expiry.
  * @returns The unsigned transaction with its spent coins, assignments and fee.
@@ -178,14 +185,14 @@ export function buildYedTransfer(p: BuildYedTransferParams): BuiltYedTransfer {
     const inputs = [...tokenInputs, ...yec.slice(0, n)];
     const total = inputs.reduce((s, c) => s + c.value, 0n);
     const withChange = [...assigned, opReturn, { value: 1n, scriptPubKey: p.yecChangeScript }];
-    const feeWith = feeFloor(draft(inputs, withChange));
+    const feeWith = networkFee(draft(inputs, withChange), "yellowback", p.networkFees);
     let vout: TxOut[] | undefined;
     let fee = 0n;
     if (total >= outValue + feeWith + DUST) {
       fee = feeWith;
       vout = [...assigned, opReturn, { value: total - outValue - feeWith, scriptPubKey: p.yecChangeScript }];
     } else {
-      const feeAlone = feeFloor(draft(inputs, [...assigned, opReturn]));
+      const feeAlone = networkFee(draft(inputs, [...assigned, opReturn]), "yellowback", p.networkFees);
       if (total >= outValue + feeAlone) {
         fee = total - outValue; // a sub-dust remainder pays the fee
         vout = [...assigned, opReturn];

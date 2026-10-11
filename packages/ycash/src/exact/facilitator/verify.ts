@@ -8,7 +8,7 @@ import type { SettlementStore } from "../../store/index.js";
 import { txidKey } from "../../store/index.js";
 import { pqpkhKeyId } from "../../pq/script.js";
 import { isFalconActiveAt, readFalconHeight, yedHolderProblem, type FalconHeightSource } from "../../channel/falcon.js";
-import { addressToScript, encodeAddress, encodePQAddress, equalBytes, feeFloor, hasShielded, hexToBytes, p2pkhHash, parseTx, txFee, txid as txidOf, type Tx } from "../../tx/index.js";
+import { addressToScript, encodeAddress, encodePQAddress, equalBytes, feeFloor, hasShielded, hexToBytes, needsHighFees, networkFeeCap, p2pkhHash, parseTx, readNetworkFees, txFee, txid as txidOf, type FeeKind, type Tx } from "../../tx/index.js";
 import { checkTransferVerdict, decodedTransferOf, findPayload, isFindPayloadFailure, sameAssignments, validateTransferAssignments, type Assignment } from "../../yed/index.js";
 import {
   ERR_AMOUNT_MISMATCH,
@@ -83,6 +83,11 @@ export interface ResolvedPayment {
 export interface VerifiedPayment extends ResolvedPayment {
   payer: string;
   feeZat: bigint;
+  /**
+   * Settle submits with `allowhighfees`: a PQ or YED payment's fee is above -maxtxfee but within the
+   * node's PQ/Yellowback cap (rule 7, rpcversion 8).
+   */
+  allowHighFees?: boolean;
 }
 
 const fail = (reason: string, message: string, payer?: string): Failure => ({ ok: false, reason, message, ...(payer !== undefined ? { payer } : {}) });
@@ -243,12 +248,14 @@ export async function verifyTransparent(
   // Rule 6: every input confirmed and unspent, and not spent in the mempool (plan R-6, X-F10).
   const values: bigint[] = [];
   let payer = "";
+  let pqInput = false;
   for (const [i, input] of s.tx.vin.entries()) {
     const { txid, vout } = input.prevout;
     const confirmed = await rpc.getTxOut(txid, vout, false);
     if (!confirmed) return fail(ERR_INPUT_SPENT, `input ${i} (${txid}:${vout}) is unknown, unconfirmed or spent`);
     if (!(await rpc.getTxOut(txid, vout, true))) return fail(ERR_INPUT_SPENT, `input ${i} (${txid}:${vout}) is spent by a mempool transaction`);
     values.push(yecToZat(confirmed.value));
+    if (pqpkhKeyId(hexToBytes(confirmed.scriptPubKey.hex))) pqInput = true;
     if (i === 0) payer = payerOf(hexToBytes(confirmed.scriptPubKey.hex), s);
   }
 
@@ -261,11 +268,17 @@ export async function verifyTransparent(
     }
   }
 
-  // Rule 7: fee floor (SDK and facilitator policy, X-F3) and sanity cap.
+  // Rule 7: fee floor (SDK and facilitator policy, X-F3) and sanity cap. A YED or post-quantum
+  // payment pays a dollar-per-KB rate (rpcversion 8, yed_getinfo.params.fees.network), far above a
+  // plain cap: its cap is the node's PQ/Yellowback cap. The floor stays S-6, what both lines mine:
+  // the rate is the payer's policy and moves with the price between build and verify.
   const fee = txFee(s.tx, values);
   const floor = feeFloor(s.tx);
   if (fee < floor) return fail(ERR_FEE_TOO_LOW, `fee ${fee} is below the floor ${floor}`, payer);
-  if (fee > limits.feeCapZat) return fail(ERR_FEE_TOO_HIGH, `fee ${fee} is above the cap ${limits.feeCapZat}`, payer);
+  const kind: FeeKind = s.yed ? "yellowback" : pqInput ? "pq" : "plain";
+  const fees = kind === "plain" ? undefined : await readNetworkFees(rpc as { yedGetInfo?: YcashRpc["yedGetInfo"] });
+  const cap = networkFeeCap(kind, limits.feeCapZat, fees);
+  if (fee > cap) return fail(ERR_FEE_TOO_HIGH, `fee ${fee} is above the cap ${cap}`, payer);
 
   // Rule 8: expiry window, read against the tip rule 2 saw.
   const w = expiryWindow(net.tip, req.maxTimeoutSeconds);
@@ -292,7 +305,7 @@ export async function verifyTransparent(
 
   // Rule 10: not claimed (re-read: the claim may have landed while the lookups ran).
   if (await store.isClaimed(s.key)) return fail(ERR_DUPLICATE_SETTLEMENT, `${s.txid} is already claimed`, payer);
-  return { ok: true, state: { ...s, payer, feeZat: fee } };
+  return { ok: true, state: { ...s, payer, feeZat: fee, ...(needsHighFees(fee, kind, fees) ? { allowHighFees: true } : {}) } };
 }
 
 /**

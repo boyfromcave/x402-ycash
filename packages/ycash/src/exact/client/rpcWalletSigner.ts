@@ -141,6 +141,7 @@ export class RpcWalletSigner implements YcashClientSigner {
         yecChangeScript: yecChange,
         expiryHeight: order.expiryHeight,
         ...(order.falconActive !== undefined ? { falconActive: order.falconActive } : {}),
+        ...(order.networkFees ? { networkFees: order.networkFees } : {}),
       });
       const inputs: OutPoint[] = built.inputs.map((c) => c.outpoint);
       await this.lock(inputs);

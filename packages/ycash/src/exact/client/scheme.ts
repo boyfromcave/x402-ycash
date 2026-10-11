@@ -90,8 +90,10 @@ export class ExactYcashScheme implements SchemeNetworkClient {
       if (problem) throw new Error(`payTo ${requirements.payTo}: ${problem}`);
     }
     let signed: SignedPayment;
-    if (yed) signed = await this.signer.signYedPayment!({ ...base, amountCents: Number(requirements.amount), falconActive }); // checked above
-    else signed = await this.signer.signPayment({ ...base, amount: BigInt(requirements.amount) });
+    if (yed) {
+      const fees = chain.networkFees ? { networkFees: chain.networkFees } : {};
+      signed = await this.signer.signYedPayment!({ ...base, amountCents: Number(requirements.amount), falconActive, ...fees }); // checked above
+    } else signed = await this.signer.signPayment({ ...base, amount: BigInt(requirements.amount) });
 
     // A signer is pluggable: check its tx has the shape the facilitator will demand.
     const tx = parseTx(signed.hex);

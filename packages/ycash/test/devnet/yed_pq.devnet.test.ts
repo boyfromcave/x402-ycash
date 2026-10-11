@@ -75,7 +75,7 @@ describeDevnet("the quantum line: post-quantum YED addresses, exact payees and T
 
   it("the 53-character yr… form is the node's: vault_getnewowner's address re-encodes byte for byte", async () => {
     const info = await d.wallet.call<{ rpcversion: number; params: { pq: { schemes: number[]; falconActive: boolean } } }>("yed_getinfo");
-    expect(info.rpcversion).toBe(7);
+    expect(info.rpcversion).toBe(8); // the fee structure (rpcversion 8) on upgrade/quantum-vaults
     const o = await d.wallet.call<{ scheme: 1 | 2; keyhash: string; owner: string; address: string }>("vault_getnewowner");
     expect(o.address).toHaveLength(53);
     expect(T.encodePQAddress(NET, "yedpq", { scheme: o.scheme, hash: T.hexToBytes(o.keyhash) })).toBe(o.address);
