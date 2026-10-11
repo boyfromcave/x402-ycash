@@ -8,6 +8,7 @@ import type { VoucherLayout } from "../../channel/outputs.js";
 import { completeVoucher } from "../../channel/voucher.js";
 import { ASSET_YED } from "../../constants.js";
 import { SendRawTransactionError } from "../../node/errors.js";
+import { sendChannelTransaction } from "../relay.js";
 import { InMemoryChannelStore, type ChannelStore } from "../../store/channelStore.js";
 import { addressToScript } from "../../tx/address.js";
 import { bytesToHex, hexToBytes } from "../../tx/bytes.js";
@@ -161,7 +162,7 @@ export class ChannelManager {
         } else {
           const v = await verifyOpen(p, terms, this.chain, ctx);
           channelId = v.channelId;
-          if (!v.alreadyBroadcast) await this.relayFunding(p.fundingTx, v.fundingTxid, p.vout);
+          if (!v.alreadyBroadcast) await this.relayFunding(p.fundingTx, v.fundingTxid, p.vout, terms.asset === ASSET_YED);
           await this.ledger.open({
             ...this.termsOf(v.channel, channelId, p.fundingTx, terms, v.deposit), returnScript: bytesToHex(v.returnScript),
             ...(v.closeBy < v.channel.refundHeight ? { closeBy: v.closeBy } : {}),
@@ -480,7 +481,8 @@ export class ChannelManager {
   private async broadcastClose(channelId: string, hex: string): Promise<string | undefined> {
     const txid = txidOf(hexToBytes(hex));
     try {
-      await this.chain.sendRawTransaction(hex);
+      const ch = (await this.ledger.get(channelId)) as LedgerChannel | undefined;
+      await sendChannelTransaction(this.chain, hex, ch?.terms.asset === ASSET_YED);
     } catch (e) {
       if (!(e instanceof SendRawTransactionError) || e.kind !== "already-in-chain") {
         const ch = (await this.ledger.get(channelId)) as LedgerChannel;
@@ -504,11 +506,12 @@ export class ChannelManager {
    * @param hex - The funding transaction.
    * @param txid - Its txid, display-order hex.
    * @param vout - The channel output index.
+   * @param yed - A YED channel's funding (its fee checked against the node's cap by verifyOpen).
    * @throws BatchSettlementError (`funding`) when the relay fails and the output is not visible.
    */
-  private async relayFunding(hex: string, txid: string, vout: number): Promise<void> {
+  private async relayFunding(hex: string, txid: string, vout: number, yed: boolean): Promise<void> {
     try {
-      await this.chain.sendRawTransaction(hex);
+      await sendChannelTransaction(this.chain, hex, yed);
     } catch (e) {
       if (e instanceof SendRawTransactionError && e.kind === "already-in-chain") return;
       if (await this.chain.getTxOut(txid, vout, true)) return;

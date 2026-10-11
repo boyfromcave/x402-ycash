@@ -12,6 +12,7 @@ import { parsePQChannelScript } from "../../channel/pqScript.js";
 import { parseCloseScriptSig, parsePQCloseScriptSig } from "../../channel/voucher.js";
 import { ASSET_YED } from "../../constants.js";
 import { SendRawTransactionError } from "../../node/errors.js";
+import { sendChannelTransaction } from "../relay.js";
 import { DEFAULT_CLOSED_RETENTION_MS, InMemoryChannelStore, type ChannelStore } from "../../store/channelStore.js";
 import { RETAIN_FOREVER, txidKey, type SettlementStore } from "../../store/settlementStore.js";
 import { addressToScript } from "../../tx/address.js";
@@ -165,8 +166,8 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
           const tx = decodeTx(p.fundingTx, BatchError.FUNDING);
           const fundingTxid = txidOf(tx);
           const channelId = channelIdOf({ txid: fundingTxid, vout: p.vout });
-          await this.relay(p.fundingTx);
           const terms = parseTerms(requirements);
+          await this.relay(p.fundingTx, terms.asset === ASSET_YED);
           if (!(await this.waitForDepth(fundingTxid, p.vout, requiredDepth(terms.confirmations)))) {
             return { ...fail(new BatchSettlementError(BatchError.SETTLEMENT_PENDING, "funding below the policy depth"), fundingTxid), payer: channelId };
           }
@@ -183,7 +184,7 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
           if (store && !(await store.claim(txidKey(requirements.network as BatchTerms["network"], closeTxid), RETAIN_FOREVER))) {
             throw new BatchSettlementError("duplicate_settlement", closeTxid);
           }
-          await this.relay(p.tx);
+          await this.relay(p.tx, parseTerms(requirements).asset === ASSET_YED);
           await this.recordClaim(p.channelId, BigInt(p.cumulative));
           return { success: true, transaction: closeTxid, network, payer: p.channelId, amount: "", extra: { commitmentId: commitmentId(p.channelId) } };
         }
@@ -280,10 +281,11 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
    * Broadcasts a transaction, treating "already in chain" as success so a retried settle is idempotent.
    *
    * @param hex - The raw transaction.
+   * @param yed - A YED channel's transaction (verify bounded its fee; relay.ts).
    */
-  private async relay(hex: string): Promise<void> {
+  private async relay(hex: string, yed: boolean): Promise<void> {
     try {
-      await this.chain.sendRawTransaction(hex);
+      await sendChannelTransaction(this.chain, hex, yed);
     } catch (e) {
       if (e instanceof SendRawTransactionError && e.kind === "already-in-chain") return;
       throw e;

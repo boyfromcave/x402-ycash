@@ -47,6 +47,12 @@ export type SendRawTransactionErrorKind =
   | "missing-inputs"
   /** -26 "tx-expiring-soon" or an expired tx: nExpiryHeight is below next + 3. */
   | "expiring-soon"
+  /**
+   * The fee is above the node's -maxtxfee (v4.5.0: "absurdly high fees <txid>, <fee> > <max>", -25;
+   * 6.20.0: "256: absurdly-high-fee", -26). A PQ or YED transaction priced at the published rate
+   * (rpcversion 8) can be: resubmit with allowhighfees once its fee is checked against the node's cap.
+   */
+  | "absurd-fee"
   /** -26 any other consensus or policy rejection ("<code>: <reason>"). */
   | "rejected"
   /** Anything else (-25 with another reason, wallet guard, decode failure). */
@@ -92,6 +98,7 @@ export function classifySendError(code: number, reason: string): SendRawTransact
   if (code === RPC_VERIFY_ERROR && /^Missing inputs$/i.test(reason)) return "missing-inputs";
   if (/bad-txns-inputs-spent/.test(reason)) return "missing-inputs";
   if (/tx-expiring-soon|tx-overwinter-expired|expired/i.test(reason)) return "expiring-soon";
+  if (/absurdly[ -]high[ -]fee/.test(reason)) return "absurd-fee";
   if (code === RPC_VERIFY_REJECTED) return "rejected";
   return "failed";
 }

@@ -29,6 +29,7 @@ import { validateTransferAssignments } from "../yed/transfer.js";
 import { addressToScript } from "../tx/address.js";
 import { equalBytes, hexToBytes } from "../tx/bytes.js";
 import { feeFloor, txFee } from "../tx/fee.js";
+import { readNetworkFees } from "../tx/networkFee.js";
 import { hasShielded, parseTx, serializeTxHex, txid as txidOf, type Tx } from "../tx/tx.js";
 import { BatchError, BatchSettlementError } from "./errors.js";
 import { returnScriptOf } from "./returnAddress.js";
@@ -40,7 +41,9 @@ export interface ChainView {
   getBlockchainInfo(): Promise<BlockchainInfo>;
   getTxOut(txid: string, n: number, includeMempool: boolean): Promise<TxOutInfo | null>;
   verifyScripts(hex: string): Promise<VerifyScriptsResult>;
-  sendRawTransaction(hex: string): Promise<string>;
+  sendRawTransaction(hex: string, allowHighFees?: boolean): Promise<string>;
+  /** `yed_getinfo`, for the network fee cap of a YED funding (rpcversion 8). */
+  yedGetInfo?(): Promise<{ [field: string]: unknown }>;
 }
 
 /** A Yellowback node's view (`-experimentalfeatures -yellowback`): what YED channels need (plan Y-9). */
@@ -374,6 +377,14 @@ export async function verifyOpen(
     }
     const fee = txFee(fundingTx, values);
     if (fee < feeFloor(fundingTx)) throw new BatchSettlementError(BatchError.FUNDING, `fee ${fee} is below the floor ${feeFloor(fundingTx)}`);
+    // A YED funding pays the Yellowback rate (rpcversion 8) and may be relayed past -maxtxfee
+    // (relay.ts), so it is held to the node's PQ/Yellowback cap here.
+    if (yed) {
+      const fees = await readNetworkFees(chain);
+      if (fees && fee > fees.yellowbackMaxTxFeeZat) {
+        throw new BatchSettlementError(BatchError.FUNDING, `fee ${fee} is above the node's Yellowback fee cap ${fees.yellowbackMaxTxFeeZat}`);
+      }
+    }
     const scripts = await chain.verifyScripts(p.fundingTx);
     if (!scripts.complete || scripts.errors.length > 0) throw new BatchSettlementError(BatchError.FUNDING, "the funding scripts do not verify");
   }
