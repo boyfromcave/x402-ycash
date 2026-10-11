@@ -47,8 +47,11 @@ return and change addresses (the module's `TOK-PQ`), SLH-DSA below F. F is 0 on 
 below F (regtest `-pqfalconheight` only) is closed below F, and its refund after F pays a Falcon address.
 The P2SH YED channel (`yedChannelTemplate: "p2sh"`) is valid only below F, so never on mainnet; YEC
 channels stay P2SH. An SLH-DSA voucher is ≈ 8 KB (a server taking them raises its HTTP header limit; the
-example merchant: 64 KB), a Falcon one ≈ 1.8 KB; a YED channel's `closeFee` is 30,000 zatoshis (the floor:
-27,000 SLH-DSA, 6,000 Falcon). The Python mirror signs Falcon with the node's own C (`x402_ycash.pq.falcon`,
+example merchant: 64 KB), a Falcon one ≈ 1.8 KB; a YED channel's default `closeFee` is 12,000 zatoshis from
+F and 30,000 below it (the floor: 6,000 Falcon, 27,000 SLH-DSA). `exact` YED follows the same height: from F
+the payTo and every YED change output are Falcon addresses (clients refuse otherwise before signing, the
+facilitator answers `invalid_exact_ycash_yed_holder`). The SDKs trust the node's reported F (0 on
+mainnet once the node's `q/falcon1` lands). The Python mirror signs Falcon with the node's own C (`x402_ycash.pq.falcon`,
 compiled on first use). See `specs/scheme_batch_settlement_ycash.md`, "YED channels on `TX_PQCHANNEL`"
 and "The Falcon height".
 

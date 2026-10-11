@@ -554,9 +554,14 @@ one. A stateless facilitator reads the channel script from the live output (`get
 scriptSig carries no redeem script.
 
 **Fees.** A close's fee floor follows the binding's one rule (ZIP-317 conventional, 500 per logical
-action over the actual size): 27,000 zatoshis for an SLH-DSA client, 6,000 for a Falcon client. A
-server's YED `closeFee` MUST be at least the floor of the client scheme it accepts (the SDK's default,
-30,000, covers both); the client's default `closeFee` cap for YED is 40,000.
+action over the actual size): 27,000 zatoshis for an SLH-DSA client, 6,000 for a Falcon client (a
+1,650-byte scriptSig, 35-byte Falcon `TX_PQPKH` outputs). A server's YED `closeFee` MUST be at least the
+floor of the client scheme the offer admits. The SDKs' default is scheme-aware: **12,000** (twice the
+Falcon floor) once Falcon applies to the next block, 30,000 below it; a configured `yedCloseFee` (Python
+`yed_close_fee`) overrides it and must clear the Falcon floor, and below the Falcon height the SLH-DSA
+one. The TypeScript server asks its node at each offer; the Python one, whose requirement hook is
+synchronous, judges from its latest verify's node context and otherwise from the network's default F
+(so a mainnet offer is 12,000). The client's default `closeFee` cap for YED is 40,000.
 
 **Transport.** An SLH-DSA voucher is ≈ 8.1 KB (≈ 22 KB of base64 in the `PAYMENT-SIGNATURE` header;
 an `open` with its funding ≈ 25 KB), above Node's default 16 KB header limit: an HTTP server taking
@@ -603,8 +608,10 @@ node's policy relays no scheme-2 output. Hence:
   `yed_getnewaddress` does so by itself).
 
 The TypeScript SDK and the Python mirror implement these rules (`channel/falcon.ts`,
-`x402_ycash/channel/falcon.py`); a node that does not answer `yed_getinfo` is assumed to have the
-network's default F (0 on mainnet and testnet, never on regtest).
+`x402_ycash/channel/falcon.py`). They trust the node's `yed_getinfo`: the node's mainnet and testnet
+`pqFalconHeight` is 0 (owner decision 2026-10-10; ycash-dd/ycash6 branch `q/falcon1`), so a mainnet
+node reports F = 0 and the SDKs need no network-specific code. A node that does not answer
+`yed_getinfo` is assumed to have the network's default F (0 on mainnet and testnet, never on regtest).
 
 ## The Seven Network Requirements
 
