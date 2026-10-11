@@ -15,6 +15,7 @@ from typing import Any, Literal
 from x402.schemas import PaymentPayload, PaymentRequirements, SettleResponse
 
 from ..channel import Channel, channel_id_of, commitment_id_of, complete_voucher, parse_channel_id
+from ..channel.falcon import margin_height_of
 from ..constants import ASSET_YED
 from ..node import SendRawTransactionError
 from ..store import DEFAULT_CLOSED_RETENTION_MS, ChannelStore, InMemoryChannelStore
@@ -133,7 +134,8 @@ class ChannelManager:
                 if not v.already_broadcast:
                     await self._relay_funding(p["fundingTx"], v.funding_txid, int(p["vout"]))
                 await self.ledger.open({**_terms_of(v.channel, channel_id, p["fundingTx"], terms, v.deposit),
-                                        "returnScript": v.return_script.hex()})
+                                        "returnScript": v.return_script.hex(),
+                                        **({"closeBy": v.close_by} if v.close_by < v.channel.refund_height else {})})
                 log.info("open %s V=%s D=%s t=%s", channel_id, v.channel.value, v.deposit, v.channel.refund_height)
             self.track(channel_id)
             await self._wait_for_depth(channel_id)
@@ -153,13 +155,13 @@ class ChannelManager:
         _check_same_terms(before, terms)
         channel = _channel_of(before.terms)
         # 2. margin: refuse and close (a client close is still welcome until t)
-        margin_height = int(before.terms["refundHeight"]) - int(before.terms["closeMarginBlocks"])
+        margin_height = _margin_height(before.terms)  # t − margin, or the Falcon height − margin for a channel opened before it
         if kind != "close" and ctx.tip >= margin_height:
             try:
                 await self.close(channel_id, "margin")
             except Exception as e:  # noqa: BLE001  # the refusal stands whatever the close did
                 log.warning("margin close of %s failed: %s", channel_id, e)
-            raise BatchSettlementError(BatchError.CHANNEL_CLOSING, f"tip {ctx.tip} ≥ t − margin = {margin_height}")
+            raise BatchSettlementError(BatchError.CHANNEL_CLOSING, f"tip {ctx.tip} ≥ the close margin height {margin_height}")
         token = await self.ledger.acquire(channel_id)
         if token is None:
             raise BatchSettlementError(BatchError.CHANNEL_BUSY, "another voucher of this channel is in flight")
@@ -316,7 +318,7 @@ class ChannelManager:
                 self._last_activity.pop(cid, None)
                 continue
             reason: CloseReason | None = None
-            if height >= int(ch.terms["refundHeight"]) - int(ch.terms["closeMarginBlocks"]):
+            if height >= _margin_height(ch.terms):
                 reason = "margin"
             elif now - self._last_activity.get(cid, now) >= self._idle:
                 reason = "idle"
@@ -338,7 +340,8 @@ class ChannelManager:
             for cid in self.tracked():
                 ch = await self.ledger.get(cid)
                 if ch is not None and ch.state == CHANNEL_OPEN:
-                    out.append(WatchedChannel(cid, int(ch.terms["refundHeight"]), int(ch.terms["closeMarginBlocks"])))
+                    out.append(WatchedChannel(cid, int(ch.terms["refundHeight"]), int(ch.terms["closeMarginBlocks"]),
+                                              int(ch.terms["closeBy"]) if "closeBy" in ch.terms else None))
             return out
 
         async def on_margin(ch: WatchedChannel, tip: int) -> None:
@@ -392,6 +395,10 @@ def _terms_of(ch: Channel, channel_id: str, funding_tx: str, t: BatchTerms, depo
             "fundingTx": funding_tx, "redeemScript": ch.redeem_script.hex(), "value": str(ch.value), "closeFee": str(ch.close_fee),
             "deposit": str(deposit), "payTo": t.pay_to, "refundHeight": ch.refund_height, "closeMarginBlocks": t.close_margin_blocks,
             "confirmations": t.confirmations, "amount": str(t.amount)}
+
+
+def _margin_height(t: dict[str, Any]) -> int:
+    return margin_height_of(int(t["refundHeight"]), int(t["closeMarginBlocks"]), int(t["closeBy"]) if "closeBy" in t else None)
 
 
 def _channel_of(t: dict[str, Any]) -> Channel:

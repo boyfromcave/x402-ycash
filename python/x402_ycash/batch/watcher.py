@@ -11,6 +11,8 @@ import logging
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 
+from ..channel.falcon import margin_height_of
+
 log = logging.getLogger("x402_ycash.batch")
 
 
@@ -19,6 +21,12 @@ class WatchedChannel:
     channel_id: str
     refund_height: int
     close_margin_blocks: int
+    close_by: int | None = None
+    """The height it must be closed below when earlier than t (a YED channel opened before the Falcon height)."""
+
+    @property
+    def margin_height(self) -> int:
+        return margin_height_of(self.refund_height, self.close_margin_blocks, self.close_by)
 
 
 class ChannelWatcher:
@@ -40,13 +48,13 @@ class ChannelWatcher:
         tip = await self._tip()
         due: list[WatchedChannel] = []
         for ch in await self._channels():
-            if tip < ch.refund_height - ch.close_margin_blocks:
+            if tip < ch.margin_height:
                 continue
             due.append(ch)
             if ch.channel_id not in self._warned:
                 self._warned.add(ch.channel_id)
-                self._warn(f"channel {ch.channel_id}: tip {tip} reached t − margin = {ch.refund_height - ch.close_margin_blocks} "
-                           f"(t = {ch.refund_height})")
+                what = "the Falcon height" if ch.close_by is not None and ch.close_by < ch.refund_height else "t"
+                self._warn(f"channel {ch.channel_id}: tip {tip} reached {what} − margin = {ch.margin_height} (t = {ch.refund_height})")
             await self._on_margin(ch, tip)
         if self._on_tick is not None:
             await self._on_tick(tip)
