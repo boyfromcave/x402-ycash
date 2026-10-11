@@ -105,6 +105,8 @@ def parse_channel_script(rs: bytes) -> ChannelScript | None:
 
 
 DEFAULT_YED_CLOSE_FEE = 30_000
+DEFAULT_YED_CLOSE_FEE_FALCON = 12_000
+"""The YED close fee default from the Falcon height: twice the Falcon close's floor (6,000)."""
 """The close fee of a YED channel: a TX_PQCHANNEL close with an SLH-DSA client carries an ≈ 8,013-byte
 scriptSig (quantum spec D-Q-19), 54 logical actions, a 27,000 floor; a little over it."""
 

@@ -159,4 +159,4 @@ async def test_yec_on_tx_pqchannel_is_refused() -> None:
 def test_server_yed_close_fee_floor() -> None:
     node = FakeNode()
     with pytest.raises(ValueError, match="post-quantum close"):
-        BatchYcashServerScheme(node, SERVER.priv, max_deposit=1, yed_close_fee=26_999)
+        BatchYcashServerScheme(node, SERVER.priv, max_deposit=1, yed_close_fee=5_999)

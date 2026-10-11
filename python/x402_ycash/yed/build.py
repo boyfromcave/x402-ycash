@@ -100,16 +100,28 @@ class BuiltYedTransfer:
 
 
 def build_yed_transfer(recipients: Sequence[TransferRecipient], tokens: Sequence[TokenCoin], yec_coins: Sequence[YecCoin],
-                       yed_change_script: bytes, yec_change_script: bytes, expiry_height: int = 0) -> BuiltYedTransfer:
+                       yed_change_script: bytes, yec_change_script: bytes, expiry_height: int = 0,
+                       falcon_active: bool | None = None) -> BuiltYedTransfer:
     """Recipients at vouts 0..n−1, the YED change (if any) next, then the OP_RETURN, then YEC change
     (if not dust). Every cent of yedIn is assigned; the fee is the floor of the tx with signatures
-    at their largest. Raises when the coins cannot pay."""
+    at their largest. Raises when the coins cannot pay. With ``falcon_active`` (whether the node's
+    Falcon height applies to the next block) every recipient and the YED change must be a valid
+    holder then: a Falcon TX_PQPKH from F (TOK-PQ), no scheme-2 output below it; refused before
+    anything is signed."""
     if not recipients:
         raise ValueError("a transfer needs a recipient")
     yed_in = sum(t.cents for t in tokens)
     change_cents = yed_in - sum(r.cents for r in recipients)
     if not _valid_change(change_cents):
         raise ValueError(f"YED change {change_cents} cents would burn (it must be 0 or {YED_MIN_OUTPUT_CENTS}..{YED_MAX_OUTPUT_CENTS})")
+    if falcon_active is not None:
+        from ..channel.falcon import yed_holder_problem  # here: channel imports this module
+
+        for n, r in enumerate(recipients):
+            if problem := yed_holder_problem(r.script_pubkey, falcon_active):
+                raise ValueError(f"YED recipient {n}: {problem}")
+        if change_cents > 0 and (problem := yed_holder_problem(yed_change_script, falcon_active)):
+            raise ValueError(f"the YED change: {problem}")
     assigned = [TxOut(r.value, r.script_pubkey) for r in recipients]
     assignments = [Assignment(n, r.cents) for n, r in enumerate(recipients)]
     if change_cents > 0:

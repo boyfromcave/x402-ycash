@@ -92,6 +92,8 @@ class ChannelManager:
         self._idle = idle
         self._funding_wait = funding_wait
         self._funding_poll = funding_poll
+        self.last_context: ChainContext | None = None
+        """The node context of the latest verify (tip and Falcon height), for the server's scheme-aware close fee."""
         self._on_close = on_close
         self._last_activity: dict[str, float] = {}
 
@@ -123,6 +125,7 @@ class ChannelManager:
         if terms.asset == ASSET_YED:
             yed_chain(self.chain)  # vouchers are checked by the overlay
         ctx = await chain_context(self.chain, terms.network)
+        self.last_context = ctx
         if p["type"] == "open":
             funding_txid = txid(decode_tx(p["fundingTx"], BatchError.FUNDING))
             known = await self.ledger.get(channel_id_of(OutPoint(funding_txid, int(p["vout"]))))

@@ -50,6 +50,7 @@ from .constants import (
     ERR_SCRIPT,
     ERR_SIGHASH,
     ERR_TRANSACTION,
+    ERR_YED_HOLDER,
     ERR_YED_INPUT,
     ERR_YED_NODE_REQUIRED,
     ERR_YED_PAYLOAD,
@@ -281,6 +282,16 @@ async def verify_transparent(
     tip = await check_network(rpc, s.network)
     if isinstance(tip, Failure):
         return tip
+    # Rule 4Y, the Falcon height (TOK-PQ): from F every output the TRANSFER assigns YED to, payTo
+    # included, is a Falcon TX_PQPKH (the node refuses the transaction); below F none is scheme 2.
+    if s.yed is not None:
+        from ..channel.falcon import is_falcon_active_at, read_falcon_height, yed_holder_problem
+
+        falcon_active = is_falcon_active_at(await read_falcon_height(rpc, s.network), tip + 1)
+        for a in s.yed.assignments:
+            spk = s.tx.vout[a.vout].script_pubkey if a.vout < len(s.tx.vout) else b""
+            if holder_problem := yed_holder_problem(spk, falcon_active):
+                return Failure(ERR_YED_HOLDER, f"{'payTo' if a.vout == s.pay_to_vout else f'output {a.vout}'}: {holder_problem}")
     if await store.is_claimed(s.key):
         return Failure(ERR_DUPLICATE_SETTLEMENT, f"{s.txid} is already claimed", s.resumed_payer())
 

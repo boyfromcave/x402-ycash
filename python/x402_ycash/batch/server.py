@@ -38,12 +38,14 @@ from ..channel import (
     DEFAULT_CLOSE_MARGIN_BLOCKS,
     DEFAULT_MIN_LOCK_BLOCKS,
     DEFAULT_YED_CLOSE_FEE,
+    DEFAULT_YED_CLOSE_FEE_FALCON,
     close_fee_floor,
     pq_close_fee_floor,
 )
 from ..constants import ASSET_YEC, ASSET_YED, YED_MAX_OUTPUT_CENTS
 from ..node import yec_to_zat
-from ..pq import SCHEME_SLH_DSA_SHA2_128S
+from ..channel.falcon import DEFAULT_FALCON_HEIGHT, is_falcon_active_at
+from ..pq import SCHEME_FN_DSA_512, SCHEME_SLH_DSA_SHA2_128S
 from ..store import DEFAULT_CLOSED_RETENTION_MS, ChannelStore
 from ..tx import TxOut
 from .errors import BatchError, reason_of
@@ -58,6 +60,10 @@ _CANONICAL = re.compile(r"^[1-9][0-9]*$")
 _CLOSE_FLOOR = close_fee_floor(bytes(115), [TxOut(0, bytes(25)), TxOut(0, bytes(25)), TxOut(0, bytes(17))])
 # A YED close is a TX_PQCHANNEL spend (D-Q-19) with an SLH-DSA client: an ≈ 8 KB scriptSig.
 _PQ_CLOSE_FLOOR = pq_close_fee_floor(SCHEME_SLH_DSA_SHA2_128S, [TxOut(0, bytes(25)), TxOut(0, bytes(25)), TxOut(0, bytes(17))])
+YED_CLOSE_FLOOR_SLH = _PQ_CLOSE_FLOOR
+"""The YED close's fee floor with an SLH-DSA client (27,000)."""
+YED_CLOSE_FLOOR_FALCON = pq_close_fee_floor(SCHEME_FN_DSA_512, [TxOut(0, bytes(35)), TxOut(0, bytes(35)), TxOut(0, bytes(17))])
+"""With a Falcon client and Falcon TX_PQPKH outputs (6,000)."""
 
 
 def cents_of(s: str) -> str:
@@ -80,7 +86,7 @@ class BatchYcashServerScheme:
     payment_flows: ClassVar[Mapping[str, PaymentFlowConfig]] = {"default": {"supported": ("authorization",), "default": "authorization"}}
 
     def __init__(self, chain: ChainView, server_priv_key: bytes, *, max_deposit: int, min_lock_blocks: int = DEFAULT_MIN_LOCK_BLOCKS,
-                 close_margin_blocks: int = DEFAULT_CLOSE_MARGIN_BLOCKS, close_fee: int = DEFAULT_CLOSE_FEE, yed_close_fee: int = DEFAULT_YED_CLOSE_FEE, confirmations: int = 1,
+                 close_margin_blocks: int = DEFAULT_CLOSE_MARGIN_BLOCKS, close_fee: int = DEFAULT_CLOSE_FEE, yed_close_fee: int | None = None, confirmations: int = 1,
                  max_deposit_cents: int = YED_MAX_OUTPUT_CENTS, usd_asset: str | None = None, store: ChannelStore | None = None,
                  idle: float = 600.0, funding_wait: float = 0.0, funding_poll: float = 0.5, inflight_ttl_ms: int = 60_000,
                  closed_retention_ms: int = DEFAULT_CLOSED_RETENTION_MS, on_close: Any = None) -> None:
@@ -88,14 +94,17 @@ class BatchYcashServerScheme:
         one; ``confirmations`` the funding policy depth (−1 = mempool, a YEC-only opt-in);
         ``usd_asset="YED"`` prices "$0.01" as YED cents at par (without it a USD price is refused);
         ``closed_retention_ms`` keeps a closed channel's records that long (default 30 days);
-        ``close_fee`` is a YEC channel's (≥ the P2SH close's floor), ``yed_close_fee`` a YED channel's
-        (≥ the TX_PQCHANNEL close's floor, 27,000)."""
+        ``close_fee`` is a YEC channel's (≥ the P2SH close's floor); ``yed_close_fee`` a fixed YED close
+        fee (≥ the Falcon close's floor, 6,000, and below the Falcon height ≥ the SLH-DSA one, 27,000).
+        Without it the YED close fee is scheme-aware: 12,000 once Falcon applies to the next block,
+        30,000 below it, judged from the latest verify's node context (tip and Falcon height), else
+        the network's default Falcon height (0 on mainnet and testnet)."""
         if close_margin_blocks >= min_lock_blocks:
             raise ValueError("close_margin_blocks must be below min_lock_blocks")
         if close_fee < _CLOSE_FLOOR:
             raise ValueError(f"close_fee {close_fee} is below the close's fee floor {_CLOSE_FLOOR}")
-        if yed_close_fee < _PQ_CLOSE_FLOOR:
-            raise ValueError(f"yed_close_fee {yed_close_fee} is below the post-quantum close's fee floor {_PQ_CLOSE_FLOOR}")
+        if yed_close_fee is not None and yed_close_fee < YED_CLOSE_FLOOR_FALCON:
+            raise ValueError(f"yed_close_fee {yed_close_fee} is below the post-quantum close's fee floor {YED_CLOSE_FLOOR_FALCON}")
         if usd_asset not in (None, ASSET_YED):
             raise ValueError("usd_asset must be YED or None")
         self.max_deposit = max_deposit
@@ -142,8 +151,19 @@ class BatchYcashServerScheme:
             raise ValueError("YED channels require a funding depth of at least 0 (in a block)")
         extra = {**(requirements.extra or {}), "serverPubKey": self.manager.server_pubkey.hex(), "minLockBlocks": self.min_lock_blocks,
                  "closeMarginBlocks": self.close_margin_blocks, "maxDeposit": str(self.max_deposit_cents if yed else self.max_deposit),
-                 "closeFee": str(self.yed_close_fee if yed else self.close_fee), "areFeesSponsored": False, "confirmationPolicy": {"confirmations": self.confirmations}}
+                 "closeFee": str(self._yed_close_fee(requirements.network) if yed else self.close_fee), "areFeesSponsored": False, "confirmationPolicy": {"confirmations": self.confirmations}}
         return requirements.model_copy(update={"extra": extra})
+
+    def _yed_close_fee(self, network: str) -> int:
+        """The override, else 12,000 once Falcon applies to the next block, else 30,000."""
+        ctx = self.manager.last_context
+        f = ctx.falcon_height if ctx is not None else DEFAULT_FALCON_HEIGHT.get(network, -1)
+        falcon = f == 0 or (ctx is not None and is_falcon_active_at(f, ctx.tip + 1))
+        if self.yed_close_fee is not None:
+            if not falcon and self.yed_close_fee < YED_CLOSE_FLOOR_SLH:
+                raise ValueError(f"yed_close_fee {self.yed_close_fee} is below the SLH-DSA close's fee floor {YED_CLOSE_FLOOR_SLH} (before the Falcon height)")
+            return self.yed_close_fee
+        return DEFAULT_YED_CLOSE_FEE_FALCON if falcon else DEFAULT_YED_CLOSE_FEE
 
     async def enrich_payment_required_response(self, ctx: SchemePaymentRequiredContext) -> list[PaymentRequirements] | None:
         """The corrective 402 of a cumulative mismatch or a stale voucher carries ``channelState``."""
