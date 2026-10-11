@@ -16,6 +16,10 @@
 //      7 attached and 7 detached signatures over 0..1,024-byte messages;
 //    - `nistkat` (test/crypto_sign/nistkat.c over the NIST DRBG): 1 key pair and 1 attached signature.
 //
+// 3. With FALCON_DIFF_JSON (python/tests/kat/gen_falcon_differential.py N <file>): N key pairs and
+//    padded signatures from the node's own C (ycash-dd src/crypto/pq/falcon via the Python SDK's
+//    ctypes signer), each reproduced by noble byte for byte and verified.
+//
 // Nothing is downloaded: every input is generated from the published deterministic RNGs, and only the
 // expected digests are constants. Run with `npm run test:kat -w x402-ycash-mechanism`.
 import { createCipheriv, createHash } from "node:crypto";
@@ -204,6 +208,26 @@ describe("Falcon known answers (noble 0.7.1 vs NIST round 3 and PQClean)", () =>
       expect(failed).toEqual([]);
     }
     expect(sha256(text)).toBe(NIST_ROUND3_FALCON512_RSP_SHA256);
+  }, 600_000);
+
+  it.skipIf(!process.env.FALCON_DIFF_JSON)("the node's C vs noble: FALCON_DIFF_JSON key pairs and padded signatures", async () => {
+    // Generated locally by the Python SDK's C signer; parsed as hex fields only.
+    const rows = (JSON.parse(readFileSync(process.env.FALCON_DIFF_JSON as string, "utf8")) as { rows: Record<string, string>[] }).rows;
+    const h = (x: string | undefined): Uint8Array => new Uint8Array(Buffer.from(x ?? "", "hex"));
+    let pass = 0;
+    const failed: number[] = [];
+    for (const [i, r] of rows.entries()) {
+      // Yield to the event loop now and then: a minutes-long synchronous loop starves vitest's worker RPC.
+      if (i % 50 === 0) await new Promise((res) => setImmediate(res));
+      const kp = falcon512padded.keygen(h(r.seed));
+      const ent = h(r.entropy);
+      let off = 0;
+      const sig = falcon512padded.sign(h(r.msg), kp.secretKey, signOpts((n) => ent.slice(off, (off += n))));
+      if (hexL(kp.publicKey) === r.pk && hexL(sig) === r.sig && falcon512padded.verify(sig, h(r.msg), kp.publicKey)) pass++;
+      else failed.push(i);
+    }
+    console.log(`node C vs noble falcon512padded: ${pass}/${rows.length} key pairs + signatures byte-identical${failed.length ? `; failed ${failed.slice(0, 20).join(",")}` : ""}`);
+    expect(failed).toEqual([]);
   }, 600_000);
 
   for (const name of Object.keys(variants) as (keyof typeof variants)[]) {

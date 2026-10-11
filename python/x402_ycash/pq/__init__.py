@@ -4,7 +4,9 @@
 packages/ycash/src/pq (quantum spec §0, §2; the node's src/crypto/pq/scheme.h).
 
 - Schemes: 0x01 SLH-DSA-SHA2-128s (FIPS 205 pure, empty context, deterministic), 0x02 FN-DSA-512
-  (PQClean falcon-padded-512; verification only in Python: there is no conformant Python signer).
+  (PQClean falcon-padded-512). SLH-DSA and Falcon verification are stdlib-only Python; Falcon key
+  generation and signing run the node's vendored C through ctypes (``x402_ycash.pq.falcon``, built
+  with the system C compiler on first use or ahead of time).
 - A key is named on chain by SHA256(scheme || pk). TX_PQPKH is ``20 <hash> 51|52 c2`` (35 bytes).
 - The chunked spend: ``<sig_1>..<sig_s> <s> <pk_1>..<pk_p> <p>``, the hash type on the signature's
   last byte; every chunk but the last exactly 520 bytes; s and p as OP_1..OP_16.
@@ -93,22 +95,34 @@ def key_id_of(scheme: int, pk: bytes) -> PQKeyId:
 
 
 def keygen(scheme: int, seed: bytes) -> tuple[bytes, bytes]:
-    """pq::KeyGen from the 48-byte seed: ``(pk, sk)``. SLH-DSA only (no Python Falcon key generation)."""
+    """pq::KeyGen from the 48-byte seed: ``(pk, sk)``. Falcon runs the node's C (``x402_ycash.pq.falcon``)."""
     if len(seed) != SEED_SIZE:
         raise ValueError(f"a post-quantum seed is {SEED_SIZE} bytes")
-    if scheme != SCHEME_SLH_DSA_SHA2_128S:
-        raise NotImplementedError("only SLH-DSA keys are generated in Python; FN-DSA has no conformant Python signer")
-    pk, sk = _crypto.slh_keygen(seed)
-    return bytes(pk), bytes(sk)
+    if scheme == SCHEME_SLH_DSA_SHA2_128S:
+        pk, sk = _crypto.slh_keygen(seed)
+        return bytes(pk), bytes(sk)
+    if scheme == SCHEME_FN_DSA_512:
+        from . import falcon
+
+        return falcon.keygen(seed)
+    raise ValueError(f"unknown post-quantum scheme {scheme}")
 
 
-def sign(scheme: int, sk: bytes, msg32: bytes) -> bytes:
-    """pq::Sign, deterministic SLH-DSA (opt_rand = PK.seed); the signature without a hash-type byte."""
+def sign(scheme: int, sk: bytes, msg32: bytes, entropy: bytes | None = None) -> bytes:
+    """pq::Sign; the signature without a hash-type byte. SLH-DSA is deterministic (opt_rand = PK.seed).
+    Falcon draws 88 bytes of entropy (40-byte nonce, 48-byte sampler seed) from ``os.urandom`` unless
+    ``entropy`` is given (reproducible vectors), and runs the node's C (``x402_ycash.pq.falcon``)."""
     if len(msg32) != 32:
         raise ValueError("the signed message is a 32-byte sighash")
-    if scheme != SCHEME_SLH_DSA_SHA2_128S:
-        raise NotImplementedError("only SLH-DSA signs in Python; FN-DSA has no conformant Python signer")
-    return bytes(_crypto.slh_sign(sk, msg32))
+    if scheme == SCHEME_SLH_DSA_SHA2_128S:
+        if entropy is not None:
+            raise ValueError("SLH-DSA signing is deterministic: no entropy")
+        return bytes(_crypto.slh_sign(sk, msg32))
+    if scheme == SCHEME_FN_DSA_512:
+        from . import falcon
+
+        return falcon.sign(sk, msg32, entropy)
+    raise ValueError(f"unknown post-quantum scheme {scheme}")
 
 
 def verify(scheme: int, pk: bytes, sig: bytes, msg32: bytes) -> bool:
