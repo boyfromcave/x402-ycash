@@ -14,9 +14,10 @@ const yedConfig = config.yed;
 const yedProbe = yedConfig ? (f: typeof facilitator) => probeYed(yedConfig, f, config.network, config.wallet, log) : undefined;
 const yed = yedProbe ? await yedProbe(facilitator) : undefined;
 const merchant = createMerchant(config, { facilitator, ...(yed ? { yed } : {}), ...(yedProbe ? { yedProbe } : {}) });
-// A YED channel voucher on the hybrid TX_PQCHANNEL carries an ≈ 8 KB SLH-DSA scriptSig, so its
-// PAYMENT-SIGNATURE header is ≈ 22 KB of base64 (an open with its funding, ≈ 25 KB): above Node's
-// default 16 KB header limit, which answers 431. Every x402 server taking those vouchers raises it.
+// A YED channel voucher on the hybrid TX_PQCHANNEL with an SLH-DSA client (below the Falcon height)
+// carries an ≈ 8 KB scriptSig, so its PAYMENT-SIGNATURE header is ≈ 22 KB of base64 (an open with its
+// funding, ≈ 25 KB): above Node's default 16 KB header limit, which answers 431. A Falcon client's
+// voucher (from the Falcon height; always on mainnet) is ≈ 1.8 KB. A server taking both raises it.
 const MAX_HEADER_BYTES = 64 * 1024;
 const server = createServer({ maxHeaderSize: MAX_HEADER_BYTES }, merchant.app).listen(config.port, config.host, () => {
   const addr = server.address();
