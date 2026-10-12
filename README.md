@@ -1,7 +1,9 @@
 # x402-ycash
 
 x402 (HTTP-402, protocol v2, [x402.org](https://x402.org)) agent payments on the Ycash network, in
-**YEC** and in **Ycash Yellowback (YED)**, a dollar token on Ycash.
+**YEC** and in **Ycash Yellowback (YED)**, a dollar on Ycash backed by YEC locked in post-quantum
+vaults. One component of the [Ycash vaults and Yellowback](https://github.com/boyfromcave/yellowback)
+project.
 
 - **Pay-per-request** (`exact`): the agent signs a complete transparent transaction, the facilitator
   verifies it and relays it (the pattern of x402's Cardano binding).
@@ -12,48 +14,67 @@ x402 (HTTP-402, protocol v2, [x402.org](https://x402.org)) agent payments on the
 ## YEC, YED and the vault upgrade
 
 x402 needs no change to the Ycash node: YEC payments run against the stock `ycashd` RPCs, and node
-and pool operators do nothing for them. YED is different, because YED depends on a proposed Ycash
-network upgrade, **the vault upgrade**, which adds **vaults** to Ycash: YEC locked on chain under
-rules every node enforces. YED is a dollar token built on vaults (`1 YED = 1 US dollar`): lock
-YEC in a vault to mint YED, return the YED to get the YEC back.
+and pool operators do nothing for them. YED is different: it depends on a proposed Ycash network
+upgrade that adds **post-quantum vaults**, YEC locked on chain under rules every node checks. Lock
+YEC in a vault to mint YED (`1 YED = $1`); burn the YED to get the YEC back.
+
+> **Status: in development.** YED runs on regtest and on a one-laptop devnet only. No activation
+> height is set on mainnet or testnet, the upgrade has not been adopted by the Ycash Foundation,
+> and there is no external audit.
 
 - **What x402 does with YED:** pays YED per request and over YED payment channels, reading
   balances through the node's read-only `yed_*` RPCs. Every signature commits to the consensus
   branch ID of the *next* block, so a payment signed on the block before the upgrade activates
-  still verifies after it. x402 does not touch the wYEC bridge.
-- **Node it needs:** any ycashd for YEC (x402 uses only stock RPCs); for YED, a ycashd built
-  from the `upgrade/vault` branch of [ycash-dd](https://github.com/boyfromcave/ycash-dd) or
-  [ycash6](https://github.com/boyfromcave/ycash6).
-- **Status: proposed, not live.** It runs on a local test network (regtest) only. It has not been
-  adopted by the Ycash Foundation, has not been audited, and has no activation height on mainnet
-  or testnet.
+  still verifies after it. x402 does not touch the wYEC or nYEC bridges.
+- **Node it needs:** any `ycashd` for YEC; for YED, a `ycashd` built from the
+  `upgrade/quantum-vaults` branch of [ycash-dd](https://github.com/boyfromcave/ycash-dd) or
+  [ycash6](https://github.com/boyfromcave/ycash6) (this line joins `upgrade/vault` at release),
+  speaking Yellowback `rpcversion` 8.
 - **Try it:** [Quick start on the devnet](#quick-start-on-the-devnet) below.
 
 The binding specs are in [`specs/`](specs/), language-neutral test vectors in
 [`vectors/`](vectors/); the plan behind them is in the
-[Yellowback workspace](https://github.com/boyfromcave/yellowback).
+[parent project](https://github.com/boyfromcave/yellowback).
 
-## The quantum line
+## Post-quantum YED
 
-On the `upgrade/quantum-vaults` node line (`rpcversion` 7; it rides the vault upgrade, branch ID
-`6d5b7a31`) the SDKs speak post-quantum Ycash: YED addresses take a 53-character post-quantum form
-beside the 35-character one (mainnet `yb…`, testnet `yt…`, regtest `yr…`), plain YEC an `sq…`/`tq…`/`rq…`
-form; YED can be paid to a `TX_PQPKH` holder; and **YED payment channels open on the hybrid
-`TX_PQCHANNEL`** (the client's post-quantum key plus the server's secp256k1 key, a CLTV refund to the
-client's post-quantum key). The client key follows the node's Falcon height F
-(`yed_getinfo.params.pq.falconHeight`): **Falcon (FN-DSA-512) from F**, with Falcon `TX_PQPKH` payTo,
-return and change addresses (the module's `TOK-PQ`), SLH-DSA below F. F is 0 on mainnet and testnet
-(owner decision 2026-10-10: Falcon from day one), so there every YED channel is Falcon. A channel opened
-below F (regtest `-pqfalconheight` only) is closed below F, and its refund after F pays a Falcon address.
-The P2SH YED channel (`yedChannelTemplate: "p2sh"`) is valid only below F, so never on mainnet; YEC
-channels stay P2SH. An SLH-DSA voucher is ≈ 8 KB (a server taking them raises its HTTP header limit; the
-example merchant: 64 KB), a Falcon one ≈ 1.8 KB; a YED channel's default `closeFee` is 12,000 zatoshis from
-F and 30,000 below it (the floor: 6,000 Falcon, 27,000 SLH-DSA). `exact` YED follows the same height: from F
-the payTo and every YED change output are Falcon addresses (clients refuse otherwise before signing, the
-facilitator answers `invalid_exact_ycash_yed_holder`). The SDKs trust the node's reported F (0 on
-mainnet once the node's `q/falcon1` lands). The Python mirror signs Falcon with the node's own C (`x402_ycash.pq.falcon`,
-compiled on first use). See `specs/scheme_batch_settlement_ycash.md`, "YED channels on `TX_PQCHANNEL`"
-and "The Falcon height".
+The vault upgrade makes YED post-quantum: from the node's Falcon height F
+(`yed_getinfo.params.pq.falconHeight`) only a Falcon-512 key can hold YED. F is 0 on mainnet and
+testnet, so there every YED payment is post-quantum from the upgrade's first block; regtest can set
+it later (`-pqfalconheight`) to test both regimes. The SDKs follow the node's reported F.
+
+- **Addresses:** YED addresses are 53 characters in their post-quantum form (mainnet `yb…`,
+  testnet `yt…`, regtest `yr…`), beside the 35-character ordinary form used before F. Plain YEC has
+  a post-quantum form too (`sq…` / `tq…` / `rq…`).
+- **A key-held Falcon YED signer.** An agent that holds its own keys keeps a Falcon YED key beside
+  its WIF key: `AGENT_YED_KEY` / `AGENT_YED_KEY_FILE` for the agent, `--yed-key-file` /
+  `X402_YED_KEY_FILE` for the CLI (`x402-ycash yed-key new FILE` writes one, mode 0600). YED is paid
+  from and returned to the Falcon key; YEC network fees still come from the WIF key.
+- **`exact` YED:** from F the payTo and every YED change output must be Falcon addresses; clients
+  refuse otherwise before signing, and the facilitator answers `invalid_exact_ycash_yed_holder`.
+- **YED payment channels** open on the hybrid `TX_PQCHANNEL` (owner decision D-Q-19): the client's
+  post-quantum key plus the server's secp256k1 key, with a CLTV refund to the client's
+  post-quantum key. The client key is Falcon from F (SLH-DSA below it). The older P2SH YED channel is
+  valid only below F, so never on mainnet; YEC channels stay P2SH.
+- **Deterministic Falcon signing.** A Falcon voucher must stay a function of the channel, the
+  cumulative amount and the branch ID, or a restarted client would sign different bytes that the
+  server refuses. So the SDK derives Falcon's randomness from the secret key and the sighash
+  (SHAKE256, domain-separated, like RFC 6979 for ECDSA). As safeguards, the first Falcon signature
+  of a process is made twice and must match, the derived secrets are zeroed after use, and a
+  known-answer test checks the signature against the node's own Falcon code byte for byte.
+- **Sizes:** a Falcon voucher is about 1.8 KB, an SLH-DSA one about 8 KB (a server taking those
+  raises its HTTP header limit; the example merchant allows 64 KB).
+
+### Fees (`rpcversion` 8)
+
+YED payments, YED channel fundings and closes pay the node's **network fee by size**, in dollars per
+KB at the attested price (`yed_getinfo.params.fees.network`, the Yellowback rate). The server's
+channel `closeFee` is the close's fee at that rate, and the client caps it (`AGENT_CHANNEL_MAX_CLOSE_FEE_ZAT`).
+The facilitator caps a post-quantum or YED fee at the node's Yellowback cap, and a correctly priced
+transaction that the node refuses only for exceeding `-maxtxfee` is resubmitted with
+`allowhighfees`. The light-wallet path reads the same rates from lightwalletd. The Python mirror
+(`python/`) follows the TypeScript SDK and signs Falcon with the node's own C code. Details:
+`specs/scheme_batch_settlement_ycash.md`, "YED channels on `TX_PQCHANNEL`" and "The Falcon height".
 
 ## Layout
 
@@ -62,6 +83,8 @@ packages/ycash/   the x402 mechanism (TypeScript, on @x402/core v2): tx, yed, ch
 packages/facilitator/  the standalone facilitator service: /verify, /settle, /supported, /healthz
 packages/cli/     the `x402-ycash` command: pay a route, open, list, close and refund channels
 examples/         merchant-express (an @x402/express server) and agent-client (an @x402/fetch agent)
+light/            x402-light, the Rust Sapling light client for private agents
+python/           x402_ycash, the Python mirror of the SDK
 specs/            the binding specifications (x402 Foundation templates)
 vectors/          JSON test vectors every implementation must reproduce
 ```
@@ -70,12 +93,17 @@ vectors/          JSON test vectors every implementation must reproduce
 
 ```
 nvm use            # Node 22 (see .nvmrc); >= 20 works
-npm install
+npm ci
+npm run lint
 npm run typecheck
 npm test           # unit tests
+npm run test:kat -w x402-ycash-mechanism   # known-answer tests (Falcon among them)
 npm run test:devnet   # against a running devnet (see the quick start below)
 npm run test:devnet:http   # the HTTP path only: facilitator, merchant, agent and CLI as processes
                            # (+ X402_LWD_URL=host:port of a lightwalletd on node 0: the light-agent suite)
+(cd light && cargo test --locked)            # the Rust light client (needs protoc)
+(cd python && uv venv .venv && uv pip install --python .venv/bin/python -e . pytest pytest-asyncio \
+  && .venv/bin/python -m pytest)             # the Python mirror
 ```
 
 ## Quick start on the devnet
@@ -83,9 +111,9 @@ npm run test:devnet:http   # the HTTP path only: facilitator, merchant, agent an
 Four terminals, one command each, from the repository root of a
 [Yellowback workspace](https://github.com/boyfromcave/yellowback) checkout. The devnet is a local
 test network of five regtest nodes, run by the node repository's devnet script: `dd` uses
-ycash-dd, `6` ycash6. Point `YCASH_DD` (or `YCASH6`) at a node tree built from `upgrade/vault`
-(otherwise the workspace's own `ycash-dd` / `ycash6` is used); its devnet activates the vault
-upgrade by itself.
+ycash-dd, `6` ycash6. Point `YCASH_DD` (or `YCASH6`) at a node tree built from
+`upgrade/quantum-vaults` (otherwise the workspace's own `ycash-dd` / `ycash6` is used); its devnet
+activates the vault upgrade by itself, with Falcon active as on mainnet.
 
 ```
 # 1. a five-node regtest devnet (node 0 funded wallet, node 1 stock, nodes 2-4 pools)
@@ -133,13 +161,14 @@ RESOURCE_URL=http://127.0.0.1:4021/yed/stream REQUESTS=150 AGENT_YED_CHANNEL_DEP
 npm start -s -w x402-ycash-cli -- channel close http://127.0.0.1:4021/yed/stream --asset YED --devnet $PWD/scratch/dd-181/devnet.json --channels $PWD/scratch/yed.json
 ```
 
-The agent pays YED from `AGENT_WIF` (the key's Yellowback-address token outputs) or the node's wallet, with
+The agent pays YED from its own keys (`AGENT_WIF` for fees plus the Falcon YED key `AGENT_YED_KEY` /
+`AGENT_YED_KEY_FILE`, see [Post-quantum YED](#post-quantum-yed)) or from the node's wallet, with
 `MAX_PAYMENT_YED_CENTS` (default 100), `AGENT_YED_CHANNEL_DEPOSIT_CENTS` and
 `AGENT_YED_CHANNEL_MAX_DEPOSIT_CENTS` (default $50). The CLI takes `--asset YED` on `pay` and
 `channel open|close` (`--deposit` is then in cents), `--max-payment-yed` and `--max-deposit-yed`;
 `channel refund` of a YED channel carries a TRANSFER of all of D, by default to the channel's
 return address. Every channel's remainder (its vouchers, the close, the refund) returns to the
-`returnAddress` the client names at open: the WIF key's address (its Yellowback form for YED) or a new
+`returnAddress` the client names at open: the WIF key's address (for YED from F, the Falcon key's) or a new
 address of the node's wallet, never the channel key, which no wallet watches.
 
 ## Facilitator
@@ -323,11 +352,13 @@ x402-ycash channel open <url> [--deposit ZAT]    open a channel on the route (pa
 x402-ycash channel status [channelId]            every channel in the store, or one, against the node
 x402-ycash channel close <url> [channelId]       the client's close at the charged total; the server broadcasts it
 x402-ycash channel refund <channelId> [--to A]   the client alone, from the refund height t
+x402-ycash yed-key new <FILE>                    write a new Falcon YED key (mode 0600) and print its address
+x402-ycash yed-key address                       the YED address of --yed-key-file
 ```
 
 It reads its node from `--devnet devnet.json [--node N]` or `--rpc-url` with `--rpc-user` and
 `--rpc-password` (or `--rpc-cookie`), or a lightwalletd server from `--lwd host:port` (with `--wif`;
-see "Light agents" above), and pays with `--wif` or the node's wallet; the same
+see "Light agents" above), and pays with `--wif` (plus `--yed-key-file` for YED) or the node's wallet; the same
 settings come from `X402_DEVNET_JSON`, `X402_RPC_*`, `X402_LWD_URL`, `X402_WIF`, `X402_SHIELDED_FROM`,
 `X402_CHANNEL_STORE` (default `~/.x402-ycash/channels.json`, a wallet file: it holds channel keys),
 `X402_MAX_PAYMENT_ZAT`, `X402_MAX_DEPOSIT_ZAT` (`--max-deposit`, the most one channel may lock;
