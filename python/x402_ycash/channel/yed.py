@@ -17,7 +17,7 @@ from collections.abc import Sequence
 
 from ..constants import TOKEN_VALUE_ZAT
 from ..pq import PQKeyPair, pqpkh_key_id
-from ..tx import Tx, TxOut, p2pkh_hash
+from ..tx import NetworkFees, Tx, TxOut, p2pkh_hash
 from ..yed import Assignment, yed_channel_split
 from ..yed.build import BuiltYedTransfer, TokenCoin, TransferRecipient, YecCoin, build_yed_transfer
 from ..yed.script import transfer_op_return_script
@@ -68,12 +68,12 @@ def yed_voucher_layout(deposit_cents: int) -> VoucherLayout:
 
 def build_yed_funding_tx(redeem_script: bytes, deposit_cents: int, close_fee: int, tokens: Sequence[TokenCoin],
                          yec_coins: Sequence[YecCoin], yed_change_script: bytes, yec_change_script: bytes,
-                         expiry_height: int = 0) -> BuiltYedTransfer:
+                         expiry_height: int = 0, network_fees: NetworkFees | None = None) -> BuiltYedTransfer:
     """The unsigned funding TRANSFER: vout 0 the channel's P2SH output carrying V and assigned D, then
     the YED change, the OP_RETURN and YEC change. The SDK builds it: there is no P2SH ``ye…`` address
     and ``yed_send`` refuses one (plan Y-8). Sign it with channel.sign_funding_tx(tx, inputs, …)."""
     return build_yed_transfer([TransferRecipient(channel_script_pubkey(redeem_script), deposit_cents, yed_channel_value(close_fee))],
-                              tokens, yec_coins, yed_change_script, yec_change_script, expiry_height)
+                              tokens, yec_coins, yed_change_script, yec_change_script, expiry_height, network_fees=network_fees)
 
 
 def build_yed_refund(channel: Channel, deposit_cents: int, client_priv: bytes | PQKeyPair, to_script: bytes, branch_id: int,

@@ -50,6 +50,8 @@ class FakeNode:
         self.unconfirmed_tokens: set[str] = set()  # token outpoints the overlay cannot see yet (X-F14)
         self.z_notes: dict[str, list[dict[str, Any]]] = {}  # address -> z_listreceivedbyaddress entries
         self.issued: list[str] = []
+        self.network_fees: dict[str, Any] | None = None  # yed_getinfo.params.fees.network (rpcversion 8)
+        self.allow_high_fees: list[bool] = []  # allowhighfees of every sendrawtransaction
 
     @staticmethod
     def _key(t: str, n: int) -> str:
@@ -172,8 +174,15 @@ class FakeNode:
                 err("Script evaluated without error but finished with a false/empty top stack element")
         return VerifyScriptsResult(not errors, errors)
 
-    async def send_raw_transaction(self, hex_tx: str) -> str:
+    async def yed_get_info(self) -> dict[str, Any]:
+        """rpcversion 8 with params.fees.network when ``network_fees`` is set; else a node without it."""
+        if self.network_fees is None:
+            raise RpcError(-32601, "Method not found", "yed_getinfo")
+        return {"rpcversion": 8, "params": {"fees": {"network": self.network_fees}}}
+
+    async def send_raw_transaction(self, hex_tx: str, allow_high_fees: bool = False) -> str:
         self.calls.append("sendrawtransaction")
+        self.allow_high_fees.append(allow_high_fees)
         if self.send_error is not None:
             e, self.send_error = self.send_error, None
             raise e

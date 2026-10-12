@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from ..constants import DUST_ZAT, TOKEN_VALUE_ZAT, YED_MAX_OUTPUT_CENTS, YED_MIN_OUTPUT_CENTS
 from ..pq import max_script_sig_size_of
-from ..tx import OutPoint, Tx, TxIn, TxOut, fee_floor
+from ..tx import NetworkFees, OutPoint, Tx, TxIn, TxOut, network_fee
 from .payload import Assignment
 from .rules import validate_transfer_assignments
 from .script import transfer_op_return_script
@@ -101,13 +101,14 @@ class BuiltYedTransfer:
 
 def build_yed_transfer(recipients: Sequence[TransferRecipient], tokens: Sequence[TokenCoin], yec_coins: Sequence[YecCoin],
                        yed_change_script: bytes, yec_change_script: bytes, expiry_height: int = 0,
-                       falcon_active: bool | None = None) -> BuiltYedTransfer:
+                       falcon_active: bool | None = None, network_fees: NetworkFees | None = None) -> BuiltYedTransfer:
     """Recipients at vouts 0..n−1, the YED change (if any) next, then the OP_RETURN, then YEC change
     (if not dust). Every cent of yedIn is assigned; the fee is the floor of the tx with signatures
     at their largest. Raises when the coins cannot pay. With ``falcon_active`` (whether the node's
     Falcon height applies to the next block) every recipient and the YED change must be a valid
     holder then: a Falcon TX_PQPKH from F (TOK-PQ), no scheme-2 output below it; refused before
-    anything is signed."""
+    anything is signed. With ``network_fees`` (``yed_getinfo.params.fees.network``, rpcversion 8) the
+    fee is the Yellowback rate by size, capped (network_fee), instead of the S-6 floor."""
     if not recipients:
         raise ValueError("a transfer needs a recipient")
     yed_in = sum(t.cents for t in tokens)
@@ -144,13 +145,13 @@ def build_yed_transfer(recipients: Sequence[TransferRecipient], tokens: Sequence
     for n in range(len(yec) + 1):
         inputs = [*token_inputs, *yec[:n]]
         total = sum(c.value for c in inputs)
-        fee_with = fee_floor(draft(inputs, [*assigned, op_return, TxOut(1, yec_change_script)]))
+        fee_with = network_fee(draft(inputs, [*assigned, op_return, TxOut(1, yec_change_script)]), "yellowback", network_fees)
         vout: list[TxOut] | None = None
         fee = 0
         if total >= out_value + fee_with + DUST_ZAT:
             fee = fee_with
             vout = [*assigned, op_return, TxOut(total - out_value - fee_with, yec_change_script)]
-        elif total >= out_value + fee_floor(draft(inputs, [*assigned, op_return])):
+        elif total >= out_value + network_fee(draft(inputs, [*assigned, op_return]), "yellowback", network_fees):
             fee = total - out_value  # a sub-dust remainder pays the fee
             vout = [*assigned, op_return]
         if vout is not None:

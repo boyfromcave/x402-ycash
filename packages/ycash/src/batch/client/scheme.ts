@@ -6,7 +6,8 @@ import type { FindDefaultAsset, PaymentPayloadContext, PaymentPayloadResult, Pay
 import { channelIdOf } from "../../channel/channel.js";
 import { DUST_THRESHOLD } from "../../channel/constants.js";
 import { findChannelVout } from "../../channel/funding.js";
-import type { VoucherLayout } from "../../channel/outputs.js";
+import { yedCloseNetworkFee, type VoucherLayout } from "../../channel/outputs.js";
+import { readNetworkFees, type NetworkFees } from "../../tx/networkFee.js";
 import { buildRefund } from "../../channel/refund.js";
 import { buildPQChannelScript } from "../../channel/pqScript.js";
 import { buildChannelScript, channelAddress } from "../../channel/script.js";
@@ -23,6 +24,7 @@ import { pqKeygen } from "../../pq/sign.js";
 import { pubkeyFromPriv, randomPrivKey } from "../../tx/keys.js";
 import { parseTx, serializeTxHex, txid as txidOf } from "../../tx/tx.js";
 import { BatchError, BatchSettlementError } from "../errors.js";
+import { sendChannelTransaction } from "../relay.js";
 import { returnScriptOf } from "../returnAddress.js";
 import { parseTerms, type BatchChannelState, type BatchClientPayload, type BatchTerms } from "../types.js";
 import { closeCumulative, cumulativeFloor, layoutFor, minFundingExpiry } from "../verify.js";
@@ -37,7 +39,7 @@ import type { ChannelFunder } from "./funder.js";
 export interface ClientChain {
   getBlockchainInfo(): Promise<Pick<BlockchainInfo, "blocks" | "consensus">>;
   getTxOut(txid: string, n: number, includeMempool: boolean): Promise<TxOutInfo | null>;
-  sendRawTransaction(hex: string): Promise<string>;
+  sendRawTransaction(hex: string, allowHighFees?: boolean): Promise<string>;
   yedGetInfo?(): Promise<YedInfo>;
 }
 
@@ -304,7 +306,8 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     };
     // A YED refund carries a TRANSFER of all of D to the client: a bare spend would burn it (Y-4).
     const tx = rec.asset === ASSET_YED ? buildYedRefund({ ...params, depositCents: BigInt(rec.deposit) }) : buildRefund(params);
-    const txid = await this.cfg.chain.sendRawTransaction(serializeTxHex(tx));
+    // A YED refund pays the channel's closeFee, capped at open, so it may go past -maxtxfee (relay.ts).
+    const txid = await sendChannelTransaction(this.cfg.chain, serializeTxHex(tx), rec.asset === ASSET_YED);
     rec.status = "refunded";
     rec.refundTxid = txid;
     await this.storage.put(rec);
@@ -385,7 +388,8 @@ export class BatchYcashScheme implements SchemeNetworkClient {
    */
   private async open(terms: BatchTerms, offerKey: string, tip: number, branchId: number) {
     const yed = terms.asset === ASSET_YED;
-    const maxCloseFee = this.cfg.maxCloseFee?.[terms.asset] ?? DEFAULT_CLIENT_MAX_CLOSE_FEE[terms.asset];
+    const networkFees = yed ? await readNetworkFees(this.cfg.chain) : undefined;
+    const maxCloseFee = this.cfg.maxCloseFee?.[terms.asset] ?? (yed && networkFees ? await this.yedMaxCloseFee(terms.network, tip, networkFees) : DEFAULT_CLIENT_MAX_CLOSE_FEE[terms.asset]);
     if (maxCloseFee === undefined || terms.closeFee > maxCloseFee) {
       throw new Error(`closeFee ${terms.closeFee} is above this client's maxCloseFee ${maxCloseFee ?? "(none)"} for ${terms.asset}`);
     }
@@ -451,6 +455,7 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     const value = yed ? yedChannelValue(terms.closeFee) : deposit + terms.closeFee;
     const fundingTx = await this.cfg.funder.fund({
       network: terms.network, redeemScript, value, branchId, asset: terms.asset, deposit, tip, expiryHeight, ...(yed ? { falconActive } : {}),
+      ...(networkFees ? { networkFees } : {}),
     });
     const vout = findChannelVout(parseTx(fundingTx), redeemScript);
     if (vout < 0) throw new Error("the funder's transaction does not pay the channel");
@@ -471,6 +476,25 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     await this.storage.put(rec);
     this.cfg.log?.(`opened ${channelId} ${pq ? `on TX_PQCHANNEL (${falconActive ? "Falcon" : "SLH-DSA"} client)` : `at ${channelAddress(terms.network, redeemScript)}`}: V=${value} D=${deposit} t=${refundHeight}`);
     return open;
+  }
+
+  /**
+   * The default cap on a YED offer's closeFee from an rpcversion-8 node: twice the close's network fee
+   * at the node's Yellowback rate with this channel's client scheme (the price may move between the
+   * server's offer and this check), never above the node's Yellowback fee cap, never below the
+   * pre-rpcversion-8 default.
+   *
+   * @param network - The offer's network.
+   * @param tip - The current tip height.
+   * @param fees - The node's network fee rates.
+   * @returns The cap, zatoshis.
+   */
+  private async yedMaxCloseFee(network: ClientChannelRecord["network"], tip: number, fees: NetworkFees): Promise<bigint> {
+    const falcon = isFalconActiveAt(await this.falconHeightFor(network), tip + 1);
+    const twice = 2n * yedCloseNetworkFee(falcon, fees);
+    const capped = twice < fees.yellowbackMaxTxFeeZat ? twice : fees.yellowbackMaxTxFeeZat;
+    const floor = DEFAULT_CLIENT_MAX_CLOSE_FEE[ASSET_YED] as bigint;
+    return capped > floor ? capped : floor;
   }
 
   /**

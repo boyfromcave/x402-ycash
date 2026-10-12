@@ -22,7 +22,8 @@ import type {
 } from "@x402/core/types";
 import { DEFAULT_CLOSE_FEE, DEFAULT_CLOSE_MARGIN_BLOCKS, DEFAULT_MIN_LOCK_BLOCKS, DEFAULT_YED_CLOSE_FEE, DEFAULT_YED_CLOSE_FEE_FALCON } from "../../channel/constants.js";
 import { isFalconActiveAt, readFalconHeight, type FalconHeightSource } from "../../channel/falcon.js";
-import { closeFeeFloor, pqCloseFeeFloor } from "../../channel/outputs.js";
+import { closeFeeFloor, pqCloseFeeFloor, yedCloseNetworkFee } from "../../channel/outputs.js";
+import { readNetworkFees } from "../../tx/networkFee.js";
 import { SCHEME_FN_DSA_512, SCHEME_SLH_DSA_SHA2_128S } from "../../pq/scheme.js";
 import type { YcashNetwork } from "../../constants.js";
 import { ASSET_YEC, ASSET_YED, YED_MAX_OUTPUT_CENTS } from "../../constants.js";
@@ -91,8 +92,10 @@ export const YED_CLOSE_FLOOR_SLH = pqCloseFeeFloor(SCHEME_SLH_DSA_SHA2_128S, CLO
 export const YED_CLOSE_FLOOR_FALCON = pqCloseFeeFloor(SCHEME_FN_DSA_512, CLOSE_FLOOR_OUTPUTS_YED_FALCON);
 
 /**
- * The YED close fee of an offer made now: the override, else the Falcon-era default once Falcon
- * applies to the next block (every channel opened from now has a Falcon client), else the SLH-DSA one.
+ * The YED close fee of an offer made now: the override; else, from an rpcversion-8 node, the close's
+ * network fee at the node's Yellowback rate (`yed_getinfo.params.fees.network`, capped) with a Falcon
+ * client once Falcon applies to the next block (every channel opened from now has one), an SLH-DSA
+ * client before; else (an older node) the Falcon-era or SLH-DSA default.
  *
  * @param chain - The server's node.
  * @param override - The configured yedCloseFee, if any.
@@ -109,6 +112,8 @@ async function yedCloseFeeFor(chain: BatchYcashServerConfig["chain"], override: 
     }
     return override;
   }
+  const fees = await readNetworkFees(chain as { yedGetInfo?(): Promise<{ [field: string]: unknown }> });
+  if (fees) return yedCloseNetworkFee(falcon, fees);
   return falcon ? DEFAULT_YED_CLOSE_FEE_FALCON : DEFAULT_YED_CLOSE_FEE;
 }
 

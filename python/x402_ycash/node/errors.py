@@ -29,7 +29,7 @@ class RpcError(Exception):
 
 
 SendRawTransactionErrorKind = Literal[
-    "already-in-chain", "mempool-conflict", "missing-inputs", "expiring-soon", "rejected", "failed",
+    "already-in-chain", "mempool-conflict", "missing-inputs", "expiring-soon", "absurd-fee", "rejected", "failed",
 ]
 
 
@@ -50,6 +50,10 @@ def classify_send_error(code: int, reason: str) -> SendRawTransactionErrorKind:
         return "missing-inputs"
     if re.search(r"tx-expiring-soon|tx-overwinter-expired|expired", reason, re.IGNORECASE):
         return "expiring-soon"
+    # The fee is above -maxtxfee (v4.5.0 "absurdly high fees …", 6.20.0 "absurdly-high-fee"): a PQ or
+    # YED transaction at the published rate (rpcversion 8) may be resubmitted with allowhighfees.
+    if re.search(r"absurdly[ -]high[ -]fee", reason):
+        return "absurd-fee"
     if code == RPC_VERIFY_REJECTED:
         return "rejected"
     return "failed"

@@ -5,6 +5,7 @@ import { heldOutpoints, InMemoryCoinReservationStore, type CoinReservation, type
 import { buildFundingTx, signFundingTx, type FundingInput } from "../../channel/funding.js";
 import { buildYedFundingTx, yedChannelValue } from "../../channel/yed.js";
 import { ASSET_YED, type YcashNetwork } from "../../constants.js";
+import type { NetworkFees } from "../../tx/networkFee.js";
 import { RPC_METHOD_NOT_FOUND, RpcError } from "../../node/errors.js";
 import { selectTokenCoins, type TokenCoin } from "../../yed/build.js";
 import type { YcashRpc } from "../../node/rpc.js";
@@ -38,6 +39,8 @@ export interface FundingRequest {
    * TX_PQPKH (TOK-PQ). A funder that cannot hold YED there refuses the request.
    */
   falconActive?: boolean;
+  /** YED: the node's network fee rates (rpcversion 8); the funding TRANSFER pays the Yellowback rate. */
+  networkFees?: NetworkFees;
 }
 
 export interface ChannelFunder {
@@ -211,6 +214,7 @@ async function fundYed(
     yedChangeScript: addressToScript(await rpc.call<string>("yed_getnewaddress"), req.network),
     yecChangeScript: yecChange,
     expiryHeight: req.expiryHeight ?? 0,
+    ...(req.networkFees ? { networkFees: req.networkFees } : {}),
   });
   const signed = await rpc.signRawTransactionWithWallet(serializeTxHex(built.tx));
   if (!signed.complete) throw new Error(`the wallet could not sign the funding inputs: ${JSON.stringify(signed.errors)}`);
@@ -397,6 +401,7 @@ export function localKeyYedFunder(
         yedChangeScript: change.yed,
         yecChangeScript: change.yec,
         expiryHeight: req.expiryHeight ?? 0,
+        ...(req.networkFees ? { networkFees: req.networkFees } : {}),
       });
       return serializeTxHex(signFundingTx(built.tx, built.inputs, built.inputs.map((i) => keyOf(i.outpoint)), req.branchId));
     },

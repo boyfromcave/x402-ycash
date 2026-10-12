@@ -3,9 +3,10 @@
 // TOKEN_VALUE outputs, a TRANSFER at vout 2, the split of yed.yedChannelSplit — and reuses the
 // voucher builder, verifier, completion and close unchanged.
 import { pqSpendItems } from "../pq/script.js";
-import { pubKeySize, sigSize, type PQScheme } from "../pq/scheme.js";
+import { SCHEME_FN_DSA_512, SCHEME_SLH_DSA_SHA2_128S, pubKeySize, sigSize, type PQScheme } from "../pq/scheme.js";
 import { equalBytes } from "../tx/bytes.js";
 import { feeFloor } from "../tx/fee.js";
+import { networkFee, type NetworkFees } from "../tx/networkFee.js";
 import { OP, buildScript } from "../tx/script.js";
 import { SEQUENCE_FINAL, newTx, type TxOut } from "../tx/tx.js";
 import type { Channel } from "./channel.js";
@@ -81,6 +82,38 @@ export function pqCloseFeeFloor(scheme: PQScheme, outputs: readonly TxOut[]): bi
 }
 
 /**
+ * The network fee of a YED channel's TX_PQCHANNEL close (rpcversion 8): the Yellowback rate by the
+ * close's size, capped (`networkFee`); the fee floor when the node gave no rates.
+ *
+ * @param scheme - The client key's scheme.
+ * @param outputs - The close's outputs.
+ * @param fees - The node's network fee rates, if known.
+ * @returns The fee, zatoshis.
+ */
+export function pqCloseNetworkFee(scheme: PQScheme, outputs: readonly TxOut[], fees: NetworkFees | undefined): bigint {
+  const scriptSig = buildScript([MAX_SIG, ...pqSpendItems(new Uint8Array(pubKeySize(scheme)), new Uint8Array(sigSize(scheme) + 1)), OP.OP_1]);
+  return networkFee(draftOf(scriptSig, outputs), "yellowback", fees);
+}
+
+/** A YED close's outputs, by size: two P2PKH (pre-Falcon) or two Falcon TX_PQPKH, and the TRANSFER. */
+const YED_CLOSE_OUTPUTS_SLH: readonly TxOut[] = [25, 25, 17].map((n) => ({ value: 0n, scriptPubKey: new Uint8Array(n) }));
+const YED_CLOSE_OUTPUTS_FALCON: readonly TxOut[] = [35, 35, 17].map((n) => ({ value: 0n, scriptPubKey: new Uint8Array(n) }));
+
+/**
+ * The network fee of a YED channel's close at the node's current rates: a Falcon client from the
+ * Falcon height, an SLH-DSA client before it.
+ *
+ * @param falcon - Whether the channel's client key is Falcon.
+ * @param fees - The node's network fee rates.
+ * @returns The fee, zatoshis.
+ */
+export function yedCloseNetworkFee(falcon: boolean, fees: NetworkFees | undefined): bigint {
+  return falcon
+    ? pqCloseNetworkFee(SCHEME_FN_DSA_512, YED_CLOSE_OUTPUTS_FALCON, fees)
+    : pqCloseNetworkFee(SCHEME_SLH_DSA_SHA2_128S, YED_CLOSE_OUTPUTS_SLH, fees);
+}
+
+/**
  * The fee floor of a one-input transaction with this scriptSig and these outputs.
  *
  * @param scriptSig - The input's scriptSig.
@@ -88,9 +121,19 @@ export function pqCloseFeeFloor(scheme: PQScheme, outputs: readonly TxOut[]): bi
  * @returns The minimum fee, zatoshis.
  */
 function floorOf(scriptSig: Uint8Array, outputs: readonly TxOut[]): bigint {
-  const tx = newTx({
+  return feeFloor(draftOf(scriptSig, outputs));
+}
+
+/**
+ * A one-input draft with this scriptSig and these outputs, for sizing a close.
+ *
+ * @param scriptSig - The input's scriptSig.
+ * @param outputs - The outputs.
+ * @returns The draft.
+ */
+function draftOf(scriptSig: Uint8Array, outputs: readonly TxOut[]) {
+  return newTx({
     vin: [{ prevout: { txid: "00".repeat(32), vout: 0 }, scriptSig, sequence: SEQUENCE_FINAL }],
     vout: [...outputs],
   });
-  return feeFloor(tx);
 }

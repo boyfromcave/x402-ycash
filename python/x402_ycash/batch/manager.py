@@ -22,6 +22,7 @@ from ..store import DEFAULT_CLOSED_RETENTION_MS, ChannelStore, InMemoryChannelSt
 from ..tx import OutPoint, address_to_script, parse_tx, pubkey_from_priv, txid
 from .errors import BatchError, BatchSettlementError
 from .ledger import CHANNEL_OPEN, ChannelLedger, LedgerChannel
+from .relay import send_channel_transaction
 from .types import BatchTerms, is_batch_payload, parse_terms, required_depth, same_offer
 from .verify import (
     ChainContext,
@@ -135,7 +136,7 @@ class ChannelManager:
                 v = await verify_open(p, terms, self.chain, ctx)
                 channel_id = v.channel_id
                 if not v.already_broadcast:
-                    await self._relay_funding(p["fundingTx"], v.funding_txid, int(p["vout"]))
+                    await self._relay_funding(p["fundingTx"], v.funding_txid, int(p["vout"]), terms.asset == ASSET_YED)
                 await self.ledger.open({**_terms_of(v.channel, channel_id, p["fundingTx"], terms, v.deposit),
                                         "returnScript": v.return_script.hex(),
                                         **({"closeBy": v.close_by} if v.close_by < v.channel.refund_height else {})})
@@ -295,7 +296,8 @@ class ChannelManager:
     async def _broadcast_close(self, channel_id: str, hex_tx: str) -> str | None:
         close_txid = txid(bytes.fromhex(hex_tx))
         try:
-            await self.chain.send_raw_transaction(hex_tx)
+            ch = await self.ledger.get(channel_id)
+            await send_channel_transaction(self.chain, hex_tx, ch is not None and ch.terms["asset"] == ASSET_YED)
         except Exception as e:
             if not (isinstance(e, SendRawTransactionError) and e.kind == "already-in-chain"):
                 ch = await self.ledger.get(channel_id)
@@ -367,9 +369,9 @@ class ChannelManager:
 
     # ------------------------------------------------------------------ helpers
 
-    async def _relay_funding(self, hex_tx: str, funding_txid: str, vout: int) -> None:
+    async def _relay_funding(self, hex_tx: str, funding_txid: str, vout: int, yed: bool = False) -> None:
         try:
-            await self.chain.send_raw_transaction(hex_tx)
+            await send_channel_transaction(self.chain, hex_tx, yed)
         except Exception as e:
             if isinstance(e, SendRawTransactionError) and e.kind == "already-in-chain":
                 return

@@ -169,6 +169,7 @@ export class LocalKeySigner implements YcashClientSigner {
       yecChangeScript: this.script,
       expiryHeight: order.expiryHeight,
       ...(order.falconActive !== undefined ? { falconActive: order.falconActive } : {}),
+      ...(order.networkFees ? { networkFees: order.networkFees } : {}),
     });
     const inputs = built.inputs.map((c) => c.outpoint);
     for (const o of inputs) this.reserved.set(`${o.txid}:${o.vout}`, order.expiryHeight);

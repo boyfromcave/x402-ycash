@@ -190,12 +190,14 @@ export class YcashRpc {
    * error, so callers deduplicate by txid themselves.
    *
    * @param hex - The signed transaction.
+   * @param allowHighFees - Skip the node's -maxtxfee check (a PQ or YED transaction priced at the
+   * published rate, whose fee the caller checked against the node's PQ/Yellowback cap; rpcversion 8).
    * @returns The txid, display-order hex.
    * @throws SendRawTransactionError (with a `kind`) when the node refuses it; RpcError on a transport failure.
    */
-  async sendRawTransaction(hex: string): Promise<string> {
+  async sendRawTransaction(hex: string, allowHighFees?: boolean): Promise<string> {
     try {
-      return await this.call<string>("sendrawtransaction", [hex]);
+      return await this.call<string>("sendrawtransaction", allowHighFees ? [hex, true] : [hex]);
     } catch (e) {
       if (e instanceof RpcError && !e.transport) throw new SendRawTransactionError(e);
       throw e;

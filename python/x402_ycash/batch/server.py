@@ -41,6 +41,7 @@ from ..channel import (
     DEFAULT_YED_CLOSE_FEE_FALCON,
     close_fee_floor,
     pq_close_fee_floor,
+    yed_close_network_fee,
 )
 from ..channel.falcon import DEFAULT_FALCON_HEIGHT, is_falcon_active_at
 from ..constants import ASSET_YEC, ASSET_YED, YED_MAX_OUTPUT_CENTS
@@ -155,7 +156,9 @@ class BatchYcashServerScheme:
         return requirements.model_copy(update={"extra": extra})
 
     def _yed_close_fee(self, network: str) -> int:
-        """The override, else 12,000 once Falcon applies to the next block, else 30,000."""
+        """The override; else, from an rpcversion-8 node, the close's network fee at the node's Yellowback
+        rate (a Falcon client once Falcon applies to the next block, SLH-DSA before); else 12,000 once
+        Falcon applies, else 30,000."""
         ctx = self.manager.last_context
         f = ctx.falcon_height if ctx is not None else DEFAULT_FALCON_HEIGHT.get(network, -1)
         falcon = f == 0 or (ctx is not None and is_falcon_active_at(f, ctx.tip + 1))
@@ -163,6 +166,8 @@ class BatchYcashServerScheme:
             if not falcon and self.yed_close_fee < YED_CLOSE_FLOOR_SLH:
                 raise ValueError(f"yed_close_fee {self.yed_close_fee} is below the SLH-DSA close's fee floor {YED_CLOSE_FLOOR_SLH} (before the Falcon height)")
             return self.yed_close_fee
+        if ctx is not None and ctx.network_fees is not None:
+            return yed_close_network_fee(falcon, ctx.network_fees)
         return DEFAULT_YED_CLOSE_FEE_FALCON if falcon else DEFAULT_YED_CLOSE_FEE
 
     async def enrich_payment_required_response(self, ctx: SchemePaymentRequiredContext) -> list[PaymentRequirements] | None:

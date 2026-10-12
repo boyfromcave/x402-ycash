@@ -42,6 +42,7 @@ from ..store import (
 )
 from ..tx import Tx, address_to_script, txid
 from .errors import BatchError, BatchSettlementError, reason_of
+from .relay import send_channel_transaction
 from .return_address import return_script_of
 from .types import BATCH_SETTLEMENT_SCHEME, BatchTerms, is_batch_payload, parse_terms, required_depth, same_offer
 from .verify import (
@@ -145,7 +146,7 @@ class BatchYcashFacilitatorScheme:
             if p["type"] == "open":
                 funding_txid = txid(decode_tx(p["fundingTx"], BatchError.FUNDING))
                 channel_id = channel_id_of_parts(funding_txid, int(p["vout"]))
-                await self._relay(p["fundingTx"])
+                await self._relay(p["fundingTx"], parse_terms(requirements).asset == ASSET_YED)
                 if not await self._wait_for_depth(funding_txid, int(p["vout"]), required_depth(parse_terms(requirements).confirmations)):
                     return SettleResponse(success=False, error_reason=BatchError.SETTLEMENT_PENDING, error_message="funding below the policy depth",
                                           transaction=funding_txid, network=network, payer=channel_id)
@@ -164,7 +165,7 @@ class BatchYcashFacilitatorScheme:
                 close_txid = txid(bytes.fromhex(p["tx"]))
                 if self._settlements is not None and not await self._settlements.claim(txid_key(network, close_txid), RETAIN_FOREVER):
                     raise BatchSettlementError(BatchError.DUPLICATE_SETTLEMENT, close_txid)
-                await self._relay(p["tx"])
+                await self._relay(p["tx"], parse_terms(requirements).asset == ASSET_YED)
                 await self._record_claim(p["channelId"], cumulative)
                 return SettleResponse(success=True, transaction=close_txid, network=network, payer=p["channelId"], amount="",
                                       extra={"commitmentId": commitment_id_of(p["channelId"], cumulative)})
@@ -227,9 +228,9 @@ class BatchYcashFacilitatorScheme:
                 await self.channels.compare_and_set_cumulative(channel_id, r.cumulative, cumulative)
         await self.channels.retire([channel_id], int(time.time() * 1000) + self._retention)
 
-    async def _relay(self, hex_tx: str) -> None:
+    async def _relay(self, hex_tx: str, yed: bool = False) -> None:
         try:
-            await self._chain.send_raw_transaction(hex_tx)
+            await send_channel_transaction(self._chain, hex_tx, yed)
         except SendRawTransactionError as e:
             if e.kind != "already-in-chain":
                 raise

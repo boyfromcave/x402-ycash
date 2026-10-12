@@ -21,12 +21,14 @@ from .builders import (
     parse_close_script_sig,
     parse_pq_close_script_sig,
     pq_close_fee_floor,
+    pq_close_network_fee,
     pq_close_script_sig,
     pq_refund_script_sig,
     sign_funding_tx,
     verify_voucher_signature,
     voucher_sighash,
     yec_voucher_outputs,
+    yed_close_network_fee,
 )
 from .pq_script import (
     PQ_CHANNEL_SCRIPT_MAX,
@@ -110,6 +112,7 @@ __all__ = [
     "parse_pq_channel_script",
     "parse_pq_close_script_sig",
     "pq_close_fee_floor",
+    "pq_close_network_fee",
     "pq_close_script_sig",
     "pq_refund_script_sig",
     "sign_funding_tx",
@@ -117,6 +120,7 @@ __all__ = [
     "voucher_sighash",
     "yec_voucher_outputs",
     "yed_channel_value",
+    "yed_close_network_fee",
     "yed_voucher_assignments",
     "yed_voucher_layout",
 ]

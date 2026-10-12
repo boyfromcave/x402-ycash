@@ -12,6 +12,7 @@ import { TOKEN_VALUE_ZAT } from "../constants.js";
 import { equalBytes } from "../tx/bytes.js";
 import { pqpkhKeyId } from "../pq/script.js";
 import { p2pkhHash } from "../tx/script.js";
+import type { NetworkFees } from "../tx/networkFee.js";
 import type { Tx } from "../tx/tx.js";
 import { buildYedTransfer, type BuiltYedTransfer, type TokenCoin, type YecCoin } from "../yed/build.js";
 import { yedChannelSplit } from "../yed/floor.js";
@@ -92,6 +93,8 @@ export interface BuildYedFundingParams {
   yecChangeScript: Uint8Array;
   /** 0 = never expires. */
   expiryHeight?: number;
+  /** The node's network fee rates (rpcversion 8): the funding pays the Yellowback rate. */
+  networkFees?: NetworkFees;
 }
 
 /**
@@ -110,6 +113,7 @@ export function buildYedFundingTx(p: BuildYedFundingParams): BuiltYedTransfer {
     yedChangeScript: p.yedChangeScript,
     yecChangeScript: p.yecChangeScript,
     ...(p.expiryHeight !== undefined ? { expiryHeight: p.expiryHeight } : {}),
+    ...(p.networkFees ? { networkFees: p.networkFees } : {}),
   });
 }
 

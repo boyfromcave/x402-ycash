@@ -20,6 +20,7 @@ import {
   txid as txidOf,
   verifyInputSig,
   encodeAddress,
+  networkFeesOf,
 } from "../../../src/tx/index.js";
 
 export const BRANCH_ID = 0x19bd2d2f;
@@ -37,9 +38,15 @@ export class FakeNode implements ExactFacilitatorRpc {
   yellowback = false;
   /** The Falcon height `yed_getinfo` reports (unset: the node reports none, so the network default applies). */
   falconHeight: number | undefined;
+  /** `yed_getinfo.params.fees.network` (rpcversion 8); unset: the node reports rpcversion 7, no rates. */
+  networkFees: Record<string, unknown> | undefined;
   async yedGetInfo(): Promise<Record<string, unknown>> {
-    return this.falconHeight === undefined ? { rpcversion: 7, params: {} } : { rpcversion: 7, params: { pq: { falconHeight: this.falconHeight } } };
+    const params: Record<string, unknown> = this.falconHeight === undefined ? {} : { pq: { falconHeight: this.falconHeight } };
+    if (this.networkFees) return { rpcversion: 8, params: { ...params, fees: { network: this.networkFees } } };
+    return { rpcversion: 7, params };
   }
+  /** allowhighfees of every sendrawtransaction, in call order. */
+  allowHighFees: boolean[] = [];
   /** cents of YED each outpoint holds (Yellowback node only) */
   yedCents = new Map<string, number>();
   utxos = new Map<string, Utxo>();
@@ -131,8 +138,9 @@ export class FakeNode implements ExactFacilitatorRpc {
     return { complete: errors.length === 0, errors };
   }
 
-  async sendRawTransaction(hex: string): Promise<string> {
+  async sendRawTransaction(hex: string, allowHighFees?: boolean): Promise<string> {
     this.calls.push("sendrawtransaction");
+    this.allowHighFees.push(allowHighFees === true);
     if (this.sendError) {
       const e = this.sendError;
       this.sendError = undefined;
@@ -237,7 +245,12 @@ function out(u: { value: bigint; script: Uint8Array }, confirmations: number): T
 export class FakeUtxoSource implements UtxoSource {
   constructor(private readonly node: FakeNode) {}
   async chainState(): Promise<ChainState> {
-    return { chain: this.node.chain, height: this.node.tip, branchId: BRANCH_ID, ...(this.node.falconHeight !== undefined ? { falconHeight: this.node.falconHeight } : {}) };
+    const networkFees = networkFeesOf(await this.node.yedGetInfo());
+    return {
+      chain: this.node.chain, height: this.node.tip, branchId: BRANCH_ID,
+      ...(this.node.falconHeight !== undefined ? { falconHeight: this.node.falconHeight } : {}),
+      ...(networkFees ? { networkFees } : {}),
+    };
   }
   async listTokens(address: string): Promise<TokenCoin[]> {
     void address;
