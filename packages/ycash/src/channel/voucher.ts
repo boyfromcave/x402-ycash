@@ -2,7 +2,9 @@
 // (specs/scheme_batch_settlement_ycash.md, "`voucher`", "Spends"). The scriptSig is assembled here
 // because the stock signer cannot sign a non-template script (plan R-8, src/script/sign.cpp:84-86),
 // as atomic swap does (ycash-dd/src/script/atomicswap.cpp:151-185).
-import { pqSign, pqVerify, type PQKeyPair } from "../pq/sign.js";
+import { shake256 } from "@noble/hashes/sha3.js";
+import { SCHEME_FN_DSA_512 } from "../pq/scheme.js";
+import { FALCON_SIGN_ENTROPY_SIZE, pqSign, pqVerify, type PQKeyPair } from "../pq/sign.js";
 import { parsePQSpend, pqSpendItems, spendMatches, type PQSpend } from "../pq/script.js";
 import { equalBytes } from "../tx/bytes.js";
 import { signInput, sigHashType, verifyInputSig } from "../tx/keys.js";
@@ -38,19 +40,48 @@ export interface BuildVoucherParams {
   layout?: VoucherLayout;
 }
 
+/** Domain separator of the derived Falcon signing entropy ({@link pqSignAll}). */
+const FALCON_ENTROPY_DOMAIN = new TextEncoder().encode("x402-ycash/channel-falcon-entropy/v1");
+
 /**
  * The client's post-quantum signature of a TX_PQCHANNEL spend, hash type ALL appended.
+ *
+ * SLH-DSA signs deterministically. Falcon draws a 40-byte salt and a sampler seed per signature, so its
+ * entropy is derived here from the secret key and the sighash (SHAKE256, as RFC 6979 derives an ECDSA
+ * nonce): a voucher stays a function of the channel, the cumulative and the branch id. The server's
+ * ledger refuses a second, different voucher at a cumulative it already stored (stale_voucher), and a
+ * client that re-signs after a restart (the CLI between `channel open` and `pay`) must send the same bytes.
  *
  * @param sighash - The 32-byte sighash.
  * @param key - The client's key pair.
  * @returns The signature ‖ 0x01.
  */
 export function pqSignAll(sighash: Uint8Array, key: PQKeyPair): Uint8Array {
-  const sig = pqSign(key.scheme, key.secretKey, sighash);
+  const sig = key.scheme === SCHEME_FN_DSA_512 ? falconSignDerived(key.secretKey, sighash) : pqSign(key.scheme, key.secretKey, sighash);
   const out = new Uint8Array(sig.length + 1);
   out.set(sig);
   out[sig.length] = SIGHASH.ALL;
   return out;
+}
+
+/**
+ * A Falcon signature with entropy derived from the secret key and the message. The signer takes one salt and
+ * one sampler seed (88 bytes); when it asks for more (a rejected attempt), the next counter's derivation is
+ * used, so the result is still a function of the key and the message.
+ *
+ * @param secretKey - The Falcon secret key.
+ * @param msg - The 32-byte sighash.
+ * @returns The signature, without a hash-type byte.
+ */
+function falconSignDerived(secretKey: Uint8Array, msg: Uint8Array): Uint8Array {
+  for (let i = 0; ; i++) {
+    const entropy = shake256(Uint8Array.from([...FALCON_ENTROPY_DOMAIN, i, ...secretKey, ...msg]), { dkLen: FALCON_SIGN_ENTROPY_SIZE });
+    try {
+      return pqSign(SCHEME_FN_DSA_512, secretKey, msg, entropy);
+    } catch (e) {
+      if (i >= 15 || !/entropy exhausted/.test((e as Error).message)) throw e;
+    }
+  }
 }
 
 /**
