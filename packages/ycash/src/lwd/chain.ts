@@ -3,11 +3,13 @@
 // so a channel's status, funding-expiry check and refund work without a node RPC.
 import type { ClientChain } from "../batch/client/scheme.js";
 import { zatToYecString } from "../node/amount.js";
-import type { BlockchainInfo, TxOutInfo } from "../node/types.js";
+import { falconHeightOf } from "../channel/falcon.js";
+import type { BlockchainInfo, TxOutInfo, YedInfo } from "../node/types.js";
 import { pqpkhKeyId } from "../pq/script.js";
-import { bytesToHex, decodeAddress, encodeAddress, encodePQAddress, p2pkhHash, parseTx } from "../tx/index.js";
+import { bytesToHex, decodeAddress, encodeAddress, encodePQAddress, networkFeesOf, p2pkhHash, parseTx } from "../tx/index.js";
 import type { ChainState } from "../exact/client/signer.js";
 import { LwdError, type LwdClient } from "./client.js";
+import type { YellowbackInfoMsg, YellowbackNetworkRateMsg } from "./types.js";
 
 /** The node's GetTxnOutputType names of the kinds addressOf returns. */
 const TYPE_OF: Record<string, string> = { p2pkh: "pubkeyhash", p2sh: "scripthash", pq: "pqpubkeyhash" };
@@ -29,6 +31,41 @@ function addressOf(script: Uint8Array, chain: string): string | undefined {
   return undefined;
 }
 
+/**
+ * GetYellowbackInfo's answer in `yed_getinfo`'s JSON shape, for the fields the SDK reads: `rpcversion`,
+ * `params.pq` (rpcversion 7) and `params.fees.network` (rpcversion 8). The server's messages carry the
+ * node's JSON names (lightwalletd-dd walletrpc/yellowback.proto), so only the 64-bit integers, decoded
+ * as decimal strings, become numbers again; a message the server left out stays out.
+ *
+ * @param m - The decoded GetYellowbackInfo reply.
+ * @returns The `yed_getinfo` subset that networkFeesOf and falconHeightOf read.
+ */
+function yedInfoOf(m: YellowbackInfoMsg): YedInfo {
+  const rate = (r: YellowbackNetworkRateMsg | null) => (r ? { zatPerKB: Number(r.zatPerKB), maxTxFeeZat: Number(r.maxTxFeeZat) } : undefined);
+  const pq = m.params?.pq;
+  const n = m.params?.fees?.network;
+  return {
+    rpcversion: Number(m.rpcversion),
+    params: {
+      ...(pq ? { pq: { schemes: pq.schemes.map(Number), falconActive: pq.falconActive, falconHeight: Number(pq.falconHeight), feeRateZatPerKB: Number(pq.feeRateZatPerKB) } } : {}),
+      ...(n
+        ? {
+            fees: {
+              network: {
+                priceMicroUsd: Number(n.priceMicroUsd),
+                priceSource: n.priceSource,
+                plain: rate(n.plain),
+                yellowback: rate(n.yellowback),
+                flatZat: Number(n.flatZat),
+                maxTxFeeZat: Number(n.maxTxFeeZat),
+              },
+            },
+          }
+        : {}),
+    },
+  };
+}
+
 /** The tip and both consensus branch ids, lowercase hex. */
 interface Branches {
   chain: string;
@@ -45,6 +82,10 @@ export class LwdChain implements ClientChain {
   private nextByHeight: Branches | undefined;
   /** The server answered GetChainInfo UNIMPLEMENTED (no YellowbackStreamer, or older than 0b3448e). */
   private noChainInfo = false;
+  /** The last GetYellowbackInfo answer, by the tip height it was asked at (the fee rates follow the tip's price). */
+  private infoByHeight: { height: number; info: YedInfo } | undefined;
+  /** The server answered GetYellowbackInfo UNIMPLEMENTED (started without --yellowback). */
+  private noYellowbackInfo = false;
 
   /**
    * Wraps a lightwalletd client.
@@ -54,13 +95,40 @@ export class LwdChain implements ClientChain {
   constructor(readonly lwd: LwdClient) {}
 
   /**
-   * Tip and the branch id to sign under: the next block's (see {@link branches}).
+   * Tip and the branch id to sign under: the next block's (see {@link branches}); and, as the RPC
+   * path's chainStateWithFalcon reads them from `yed_getinfo`, the Falcon height and the network fee
+   * rates (`params.fees.network`, rpcversion 8) from GetYellowbackInfo, so a YED payment through
+   * lightwalletd pays the Yellowback rate by size, not the S-6 floor.
    *
-   * @returns The chain name, tip height and consensus branch id.
+   * @returns The chain name, tip height and consensus branch id, plus `falconHeight` and `networkFees`
+   * when the server reports them.
    */
   async chainState(): Promise<ChainState> {
     const b = await this.branches();
-    return { chain: b.chain, height: b.height, branchId: parseInt(b.nextblock, 16) >>> 0 };
+    const st: ChainState = { chain: b.chain, height: b.height, branchId: parseInt(b.nextblock, 16) >>> 0 };
+    let info: YedInfo;
+    try {
+      info = await this.yedInfoAt(b.height);
+    } catch {
+      return st; // no YellowbackStreamer (or a refused call): the S-6 floor and the network's Falcon default, as before
+    }
+    const falconHeight = falconHeightOf(info);
+    const networkFees = networkFeesOf(info);
+    return { ...st, ...(falconHeight !== undefined ? { falconHeight } : {}), ...(networkFees ? { networkFees } : {}) };
+  }
+
+  /**
+   * `yed_getinfo` through `YellowbackStreamer.GetYellowbackInfo`, as the RPC path reads it
+   * (readNetworkFees, readFalconHeight): `rpcversion`, `params.pq` and `params.fees.network` only.
+   * GetYellowbackInfo is rate-limited with the rest of YellowbackStreamer, so it is asked once per
+   * tip height (GetLightdInfo, not limited, gives the height); the rates change with the price, which
+   * changes only with a block.
+   *
+   * @returns The `yed_getinfo` subset.
+   * @throws LwdError from the server; `unimplemented` (remembered) without YellowbackStreamer.
+   */
+  async yedGetInfo(): Promise<YedInfo> {
+    return this.yedInfoAt(Number((await this.lwd.getLightdInfo()).blockHeight));
   }
 
   /**
@@ -160,5 +228,24 @@ export class LwdChain implements ClientChain {
       }
     }
     return { chain: info.chainName, height, chaintip: branch, nextblock: branch };
+  }
+
+  /**
+   * GetYellowbackInfo at `height`, cached until the tip moves.
+   *
+   * @param height - The tip height the caller just read.
+   * @returns The `yed_getinfo` subset.
+   */
+  private async yedInfoAt(height: number): Promise<YedInfo> {
+    if (this.infoByHeight?.height === height) return this.infoByHeight.info;
+    if (this.noYellowbackInfo) throw new Error("lightwalletd serves no YellowbackStreamer.GetYellowbackInfo");
+    try {
+      const info = yedInfoOf(await this.lwd.getYellowbackInfo());
+      this.infoByHeight = { height, info };
+      return info;
+    } catch (e) {
+      if (e instanceof LwdError && e.unimplemented) this.noYellowbackInfo = true;
+      throw e;
+    }
   }
 }
