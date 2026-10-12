@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { exact, pq, yed } from "../../../src/index.js";
 import { payerOf } from "../../../src/exact/facilitator/verify.js";
 import { InMemorySettlementStore } from "../../../src/store/index.js";
-import { buildScript, encodeAddress, encodePQAddress, hash160, hexToBytes, newTx, parseTx, pubkeyFromPriv, SEQUENCE_FINAL, serializeTxHex, sighashV4, SIGHASH, type TxOut } from "../../../src/tx/index.js";
+import { buildScript, encodeAddress, encodePQAddress, hash160, hexToBytes, newTx, parseScript, parseTx, pubkeyFromPriv, SEQUENCE_FINAL, serializeTxHex, sighashV4, SIGHASH, type TxOut } from "../../../src/tx/index.js";
 import { BRANCH_ID, FakeNode, FakeUtxoSource, NETWORK, paymentPayload, requirements, testKey } from "./fakeNode.js";
 
 const vec = JSON.parse(readFileSync(fileURLToPath(new URL("../../../../../vectors/pq/pq_vectors.json", import.meta.url)), "utf8")) as { keys: { scheme: number; seed: string }[] };
@@ -130,5 +130,57 @@ describe("exact YED across the Falcon height (TOK-PQ)", () => {
     expect(await fac.verify(paymentPayload(req, hex), req)).toMatchObject({ isValid: false, invalidReason: exact.ERR_YED_HOLDER });
     // the same payment before F is fine
     expect(await facilitator.verify(paymentPayload(req, hex), req)).toMatchObject({ isValid: true });
+  });
+});
+
+describe("a key-held Falcon YED signer (LocalKeySigner yedKey)", () => {
+  const seed = Uint8Array.from({ length: 48 }, (_, i) => 0x30 + i);
+  const key = pq.yedFalconKeyFromSeed(seed);
+  const merchant = encodePQAddress(NETWORK, "yedpq", { scheme: 2, hash: new Uint8Array(32).fill(0x5a) });
+
+  it("derives the TX_PQPKH holder 20 <SHA256(02 ‖ pk)> 52 c2 and its 53-character yr… / rq… addresses; the seed text round-trips", () => {
+    expect(key.keyPair.publicKey).toHaveLength(897);
+    expect(key.script).toHaveLength(35);
+    expect(key.script[0]).toBe(0x20);
+    expect([key.script[33], key.script[34]]).toEqual([0x52, 0xc2]);
+    expect(key.id.hash).toEqual(pq.keyHash(2, key.keyPair.publicKey));
+    const yr = pq.yedFalconAddress(NETWORK, key);
+    expect(yr).toHaveLength(53);
+    expect(yr.startsWith("yr")).toBe(true);
+    expect(pq.yedFalconPlainAddress(NETWORK, key).startsWith("rq")).toBe(true);
+    const text = pq.formatYedKeySeed(seed);
+    expect(text).toMatch(/^fn-dsa-512:[0-9a-f]{96}\n$/);
+    expect(pq.parseYedKeySeed(text)).toEqual(seed);
+    expect(pq.parseYedKeySeed(text.slice("fn-dsa-512:".length))).toEqual(seed);
+    expect(() => pq.parseYedKeySeed("fn-dsa-512:00")).toThrow(/96 hex digits/);
+  });
+
+  it("from F pays YED from the Falcon key's token (Falcon spend), YEC fee from the WIF key, YED change to the Falcon key; the facilitator verifies it and names the Falcon payer", async () => {
+    node.falconHeight = 0;
+    const t = node.addToken(5_000, key.script);
+    node.addCoin(1_000_000n, payer.script);
+    const signer = new exact.LocalKeySigner(payer.wif, new FakeUtxoSource(node), { yedKey: key });
+    expect(signer.yedAddress(NETWORK)).toBe(pq.yedFalconAddress(NETWORK, key));
+    const client = new exact.ExactYcashScheme(signer);
+    const req = yedReq(merchant);
+    const hex = ((await client.createPaymentPayload(2, req)).payload as { transaction: string }).transaction;
+    const tx = parseTx(hex);
+    const tokenIn = tx.vin.findIndex((i) => i.prevout.txid === t.txid && i.prevout.vout === t.vout);
+    expect(tokenIn).toBeGreaterThanOrEqual(0);
+    const spend = pq.parsePQSpend(parseScript(tx.vin[tokenIn]!.scriptSig));
+    expect(spend && pq.spendMatches(spend, key.id)).toBe(true);
+    expect(tx.vin[tokenIn]!.scriptSig.length).toBe(pq.pqSpendSize(2));
+    expect(pq.pqpkhKeyId(tx.vout[1]!.scriptPubKey)).toEqual(key.id); // the YED change returns to the Falcon key
+    expect(await facilitator.verify(paymentPayload(req, hex), req)).toEqual({ isValid: true, payer: pq.yedFalconAddress(NETWORK, key) });
+  });
+
+  it("before F (no Falcon outputs yet) its YED change stays at the WIF key's P2PKH", async () => {
+    node.falconHeight = -1;
+    node.addToken(5_000, payer.script);
+    node.addCoin(1_000_000n, payer.script);
+    const client = new exact.ExactYcashScheme(new exact.LocalKeySigner(payer.wif, new FakeUtxoSource(node), { yedKey: key }));
+    const req = yedReq(encodeAddress(NETWORK, "yed", hash160(pubkeyFromPriv(testKey(3).priv))));
+    const hex = ((await client.createPaymentPayload(2, req)).payload as { transaction: string }).transaction;
+    expect(parseTx(hex).vout[1]!.scriptPubKey).toEqual(payer.script);
   });
 });

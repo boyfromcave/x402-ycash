@@ -13,11 +13,13 @@ import { yecToZat } from "../../node/amount.js";
 import { addressToScript, encodeAddress, encodePQAddress } from "../../tx/address.js";
 import { isFalconHolder } from "../../channel/falcon.js";
 import { pqpkhKeyId } from "../../pq/script.js";
+import { signYedFalconInput, yedFalconAddress, type YedFalconKey } from "../../pq/yedKey.js";
+import { SIGHASH, sighashV4 } from "../../tx/sighash.js";
 import { equalBytes, hexToBytes } from "../../tx/bytes.js";
 import { hash160 } from "../../tx/hash.js";
-import { pubkeyFromPriv } from "../../tx/keys.js";
-import { p2pkhHash, p2pkhScript } from "../../tx/script.js";
-import { parseTx, serializeTxHex, txid as txidOf } from "../../tx/tx.js";
+import { pubkeyFromPriv, signInput } from "../../tx/keys.js";
+import { p2pkhHash, p2pkhScript, p2pkhScriptSig } from "../../tx/script.js";
+import { parseTx, serializeTxHex, txid as txidOf, type Tx } from "../../tx/tx.js";
 
 export interface FundingRequest {
   network: YcashNetwork;
@@ -48,9 +50,10 @@ export interface ChannelFunder {
   fund(req: FundingRequest): Promise<string>;
   /**
    * The funder's own address for the channel's remainder (the open's `returnAddress`): a wallet
-   * address, or the WIF key's. For YED, a P2PKH address.
+   * address, or the WIF key's. For YED, a holder the node accepts then: from the Falcon height
+   * (`falconActive`) a Falcon TX_PQPKH (TOK-PQ), before it a P2PKH address.
    */
-  returnAddress?(req: { network: YcashNetwork; asset: string }): Promise<string>;
+  returnAddress?(req: { network: YcashNetwork; asset: string; falconActive?: boolean }): Promise<string>;
 }
 
 /**
@@ -286,9 +289,12 @@ const byValueDesc = <T extends { value: bigint }>(a: T, b: T): number => (a.valu
  * @param privKey - The key's 32-byte secret.
  * @param source - Lists (and optionally reserves) the key's coins and YED outputs.
  * @param compressed - Whether the key's address uses the compressed public key.
+ * @param opts - Funder options.
+ * @param opts.yedKey - The agent's Falcon YED key: from the Falcon height the YED it holds is spent with
+ * it and the funding's YED change and the channel's return go to it (TOK-PQ); YEC still comes from `privKey`.
  * @returns The funder.
  */
-export function utxoSourceFunder(privKey: Uint8Array, source: FundingCoinSource, compressed = true): ChannelFunder {
+export function utxoSourceFunder(privKey: Uint8Array, source: FundingCoinSource, compressed = true, opts: { yedKey?: YedFalconKey } = {}): ChannelFunder {
   const pub = pubkeyFromPriv(privKey, compressed);
   const script = p2pkhScript(hash160(pub));
   /** outpoint → the expiry height of the funding that spent it (0: never expires). */
@@ -340,17 +346,29 @@ export function utxoSourceFunder(privKey: Uint8Array, source: FundingCoinSource,
     throw new Error(`the coins of ${address} cannot fund ${req.value} zatoshis`);
   };
   const fundYedOnce = async (req: FundingRequest, address: string): Promise<string | undefined> => {
-    if (req.falconActive) {
-      throw new Error("utxoSourceFunder holds YED at a P2PKH key, which cannot receive YED from the Falcon height (TOK-PQ): fund YED channels from a node wallet (rpcWalletFunder)");
+    const falconKey = opts.yedKey;
+    if (req.falconActive && !falconKey) {
+      throw new Error("utxoSourceFunder holds YED at a P2PKH key, which cannot receive YED from the Falcon height (TOK-PQ): give it a Falcon YED key (opts.yedKey), or fund YED channels from a node wallet (rpcWalletFunder)");
     }
     if (!source.listTokens) throw new Error("this coin source cannot list YED outputs (listTokens), so it cannot fund a YED channel");
     const tokens = (await source.listTokens(address)).filter((t) => equalBytes(t.scriptPubKey, script) && free(req, t.outpoint));
-    // YED and YEC change both return to the key (its ye… and s… forms share the script).
-    const hex = await localKeyYedFunder(tokens, await yecCoins(req, address), () => privKey, { yed: script, yec: script }).fund(req);
+    if (falconKey) {
+      const pq = await source.listTokens(yedFalconAddress(req.network, falconKey));
+      tokens.push(...pq.filter((t) => equalBytes(t.scriptPubKey, falconKey.script) && free(req, t.outpoint)));
+    }
+    // YEC change returns to the key; YED change too before the Falcon height (its yr… and s… forms share
+    // the script), to the Falcon key from it.
+    const yedChange = req.falconActive && falconKey ? falconKey.script : script;
+    const keyOf = (o: { txid: string; vout: number }): Uint8Array | YedFalconKey => {
+      const t = tokens.find((x) => x.outpoint.txid === o.txid && x.outpoint.vout === o.vout);
+      return falconKey && t && equalBytes(t.scriptPubKey, falconKey.script) ? falconKey : privKey;
+    };
+    const hex = await localKeyYedFunder(tokens, await yecCoins(req, address), keyOf, { yed: yedChange, yec: script }).fund(req);
     return (await hold(req, hex)) ? hex : undefined;
   };
   return {
     async returnAddress(req) {
+      if (req.asset === ASSET_YED && opts.yedKey && req.falconActive !== false) return yedFalconAddress(req.network, opts.yedKey);
       return encodeAddress(req.network, req.asset === ASSET_YED ? "yed" : "p2pkh", hash160(pub));
     },
     async fund(req) {
@@ -370,7 +388,7 @@ export function utxoSourceFunder(privKey: Uint8Array, source: FundingCoinSource,
  *
  * @param tokens - The YED outputs to select from.
  * @param yecCoins - Plain YEC coins for V and the fee.
- * @param keyOf - The private key owning an outpoint.
+ * @param keyOf - The key owning an outpoint: a P2PKH private key, or a Falcon YED key for a TX_PQPKH token.
  * @param change - The change scripts.
  * @param change.yed - Where the YED change goes; also the return address (P2PKH).
  * @param change.yec - Where the YEC change goes.
@@ -379,7 +397,7 @@ export function utxoSourceFunder(privKey: Uint8Array, source: FundingCoinSource,
 export function localKeyYedFunder(
   tokens: readonly TokenCoin[],
   yecCoins: readonly FundingInput[],
-  keyOf: (outpoint: { txid: string; vout: number }) => Uint8Array,
+  keyOf: (outpoint: { txid: string; vout: number }) => Uint8Array | YedFalconKey,
   change: { yed: Uint8Array; yec: Uint8Array },
 ): ChannelFunder {
   return {
@@ -403,7 +421,33 @@ export function localKeyYedFunder(
         expiryHeight: req.expiryHeight ?? 0,
         ...(req.networkFees ? { networkFees: req.networkFees } : {}),
       });
-      return serializeTxHex(signFundingTx(built.tx, built.inputs, built.inputs.map((i) => keyOf(i.outpoint)), req.branchId));
+      return serializeTxHex(signLocalInputs(built.tx, built.inputs, built.inputs.map((i) => keyOf(i.outpoint)), req.branchId));
     },
   };
+}
+
+/**
+ * Signs every input SIGHASH_ALL under ZIP-243 with its key: a P2PKH private key (signFundingTx's rule),
+ * or a Falcon YED key for a coin of its TX_PQPKH.
+ *
+ * @param tx - The unsigned transaction.
+ * @param inputs - The coins spent, in vin order.
+ * @param keys - One key per input.
+ * @param branchId - The consensus branch id.
+ * @returns A signed copy; `tx` is not modified.
+ * @throws Error when a coin is not of its key.
+ */
+function signLocalInputs(tx: Tx, inputs: readonly FundingInput[], keys: readonly (Uint8Array | YedFalconKey)[], branchId: number): Tx {
+  if (keys.every((k) => k instanceof Uint8Array)) return signFundingTx(tx, inputs, keys as Uint8Array[], branchId);
+  if (inputs.length !== tx.vin.length || keys.length !== tx.vin.length) throw new Error("one input and key per vin");
+  const signed: Tx = { ...tx, vin: tx.vin.map((i) => ({ ...i })) };
+  inputs.forEach((inp, n) => {
+    const k = keys[n]!;
+    if (!(k instanceof Uint8Array)) return signYedFalconInput(signed, n, k, inp, branchId);
+    const pub = pubkeyFromPriv(k);
+    const pkh = p2pkhHash(inp.scriptPubKey);
+    if (!pkh || !equalBytes(pkh, hash160(pub))) throw new Error(`input ${n} is not a P2PKH coin of its key`);
+    signed.vin[n]!.scriptSig = p2pkhScriptSig(signInput(sighashV4(signed, n, inp.scriptPubKey, inp.value, SIGHASH.ALL, branchId), k, SIGHASH.ALL), pub);
+  });
+  return signed;
 }

@@ -18,18 +18,26 @@ import {
   type Tx,
   type TxOut,
 } from "../../tx/index.js";
-import { buildYedTransfer, selectTokenCoins, type YecCoin } from "../../yed/index.js";
+import { buildYedTransfer, selectTokenCoins, type TokenCoin, type YecCoin } from "../../yed/index.js";
+import { signYedFalconInput, yedFalconAddress, type YedFalconKey } from "../../pq/yedKey.js";
 import { selectCoins } from "./coinSelection.js";
 import type { ChainState, PaymentOrder, SignedPayment, YcashClientSigner, YedPaymentOrder } from "./signer.js";
 import type { UtxoSource } from "./utxoSource.js";
 
 export interface LocalKeySignerOptions {
   /**
-   * Where YED change goes (default: this key's own P2PKH). From the node's Falcon height only a Falcon
-   * (scheme-2) post-quantum address may receive YED (TOK-PQ), so a payment leaving YED change after
-   * it needs one here; without it such a payment is refused before signing.
+   * Where YED change goes. Default: the Falcon YED key's TX_PQPKH from the node's Falcon height (when
+   * `yedKey` is set), else this key's own P2PKH. From the Falcon height only a Falcon (scheme-2)
+   * post-quantum address may receive YED (TOK-PQ), so a payment leaving YED change after it needs
+   * `yedKey` or a Falcon address here; without either such a payment is refused before signing.
    */
   yedChangeAddress?: string;
+  /**
+   * The agent's Falcon YED key (yedFalconKeyFromSeed): the key-held YED holder from the Falcon height,
+   * when a WIF's P2PKH can no longer receive YED (TOK-PQ). Its token outputs (at its `yb…`/`yt…`/`yr…`
+   * post-quantum address) are spent with Falcon signatures; YEC fee coins still come from the WIF key.
+   */
+  yedKey?: YedFalconKey;
 }
 
 /**
@@ -70,6 +78,16 @@ export class LocalKeySigner implements YcashClientSigner {
    */
   address(network: PaymentOrder["network"]): string {
     return encodeAddress(network, "p2pkh", hash160(this.pubkey));
+  }
+
+  /**
+   * The Falcon YED key's address (`yb…`/`yt…`/`yr…`), when the signer has one.
+   *
+   * @param network - The network to encode for.
+   * @returns The 53-character post-quantum YED address, or undefined.
+   */
+  yedAddress(network: PaymentOrder["network"]): string | undefined {
+    return this.options.yedKey ? yedFalconAddress(network, this.options.yedKey) : undefined;
   }
 
   /**
@@ -142,9 +160,11 @@ export class LocalKeySigner implements YcashClientSigner {
     return { hex: serializeTxHex(tx), txid: txid(tx), inputs: sel.coins.map((c) => ({ txid: c.txid, vout: c.vout })) };
   }
 
+
   /**
-   * One YED build attempt: selects token outputs at the key's `ye…` address and YEC fee coins,
-   * holds them in memory until the order's expiry, and signs the TRANSFER.
+   * One YED build attempt: selects token outputs at the key's YED addresses (its P2PKH `yr…`, and its
+   * Falcon key's post-quantum one) and YEC fee coins, holds them in memory until the order's expiry, and
+   * signs the TRANSFER (Falcon token inputs with the Falcon key, the rest with the WIF key).
    *
    * @param order - The YED payment to build.
    * @returns The signed transaction and its inputs.
@@ -154,8 +174,15 @@ export class LocalKeySigner implements YcashClientSigner {
     if (!this.source.listTokens) throw new Error("this UtxoSource cannot list YED outputs");
     for (const [k, expiry] of this.reserved) if (expiry < order.tip) this.reserved.delete(k);
     const free = (o: { txid: string; vout: number }) => !this.reserved.has(`${o.txid}:${o.vout}`);
+    const falconKey = this.options.yedKey;
     const yr = encodeAddress(order.network, "yed", hash160(this.pubkey));
-    const tokens = (await this.source.listTokens(yr)).filter((t) => equalBytes(t.scriptPubKey, this.script) && free(t.outpoint));
+    const tokens: TokenCoin[] = (await this.source.listTokens(yr)).filter((t) => equalBytes(t.scriptPubKey, this.script) && free(t.outpoint));
+    if (falconKey) {
+      const pqTokens = await this.source.listTokens(yedFalconAddress(order.network, falconKey));
+      tokens.push(...pqTokens.filter((t) => equalBytes(t.scriptPubKey, falconKey.script) && free(t.outpoint)));
+    }
+    // Change to the Falcon key from the Falcon height (TOK-PQ); before it a scheme-2 output is non-standard (A-1).
+    const falconChange = falconKey && (order.falconActive ?? true) ? falconKey.script : undefined;
     const yec: YecCoin[] = (await this.source.listCoins(this.address(order.network)))
       .filter((c) => c.confirmations >= 1 && equalBytes(c.scriptPubKey, this.script) && free(c))
       .map((c) => ({ outpoint: { txid: c.txid, vout: c.vout }, value: c.value, scriptPubKey: c.scriptPubKey }));
@@ -165,7 +192,7 @@ export class LocalKeySigner implements YcashClientSigner {
       tokens: sel.coins,
       yecCoins: yec,
       // From the Falcon height the YED change must go to a Falcon TX_PQPKH (TOK-PQ), never this P2PKH key.
-      yedChangeScript: this.options.yedChangeAddress ? addressToScript(this.options.yedChangeAddress, order.network) : this.script,
+      yedChangeScript: this.options.yedChangeAddress ? addressToScript(this.options.yedChangeAddress, order.network) : (falconChange ?? this.script),
       yecChangeScript: this.script,
       expiryHeight: order.expiryHeight,
       ...(order.falconActive !== undefined ? { falconActive: order.falconActive } : {}),
@@ -178,7 +205,8 @@ export class LocalKeySigner implements YcashClientSigner {
   }
 
   /**
-   * Signs every input SIGHASH_ALL with this key, in place.
+   * Signs every input SIGHASH_ALL in place: a coin of the Falcon YED key's TX_PQPKH with that key, every
+   * other (a P2PKH coin of the WIF key) with the WIF key.
    *
    * @param tx - The unsigned transaction.
    * @param coins - The spent coins; `coins[i]` is the one vin[i] spends.
@@ -186,6 +214,11 @@ export class LocalKeySigner implements YcashClientSigner {
    */
   private signAll(tx: Tx, coins: readonly { value: bigint; scriptPubKey: Uint8Array }[], branchId: number): void {
     coins.forEach((c, i) => {
+      const falconKey = this.options.yedKey;
+      if (falconKey && equalBytes(c.scriptPubKey, falconKey.script)) {
+        signYedFalconInput(tx, i, falconKey, c, branchId);
+        return;
+      }
       const digest = sighashV4(tx, i, c.scriptPubKey, c.value, SIGHASH.ALL, branchId);
       (tx.vin[i] as (typeof tx.vin)[number]).scriptSig = p2pkhScriptSig(signInput(digest, this.privKey, SIGHASH.ALL), this.pubkey);
     });
