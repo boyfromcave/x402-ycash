@@ -4,18 +4,19 @@
 // SendTransaction. The same flows on the node-RPC path give the latency to compare against. The
 // facilitator and the merchant run on node 0 as usual; lightwalletd serves node 0 too.
 // From the Falcon height (the default devnet mirrors mainnet: Falcon from the vault activation, D-Q-2) YED
-// is held by Falcon TX_PQPKH holders only (TOK-PQ), and the agent's WIF key is P2PKH: its LocalKeySigner holds
-// YED at that key only, so the YED case is skipped there (an SDK gap: a key-held Falcon YED signer). The YEC
-// cases run in either regime; `X402_NODE_ARGS=-pqfalconheight=<h>` runs the YED case before the Falcon height.
+// is held by Falcon TX_PQPKH holders only (TOK-PQ): each agent then holds its YED at its own Falcon YED key
+// (AGENT_YED_KEY, read through GetAddressTokens at its 53-character yr… address) and pays YEC fees from its
+// WIF key. `X402_NODE_ARGS=-pqfalconheight=<h>` runs the YED case before the Falcon height (P2PKH holders).
 //
 //   scripts/devnet.sh up dd 271
 //   yellowback-devnet lightwalletd start --port 34271 --bin <lightwalletd> --extra=--yellowback   (YELLOWBACK_DEVNET_DIR=…/dd-271)
 //   X402_DEVNET_JSON=…/dd-271/devnet.json X402_LWD_URL=127.0.0.1:34271 npm run test:devnet -w x402-ycash-example-merchant-express -- lwd
+import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
-import { exact, LwdClient, LwdUtxoSource, SendRawTransactionError, tx } from "x402-ycash-mechanism";
+import { exact, LwdClient, LwdUtxoSource, pq, SendRawTransactionError, tx } from "x402-ycash-mechanism";
 import { DEVNET_JSON, describeDevnet as describeWithDevnet, devnet, falconNext, newYedHolder, record, waitFor, yedSendFrom, type Devnet } from "../../../../packages/ycash/test/devnet/harness.js";
 import { runAgent, runCli, startCli, startService, type Proc } from "./procs.js";
 
@@ -42,13 +43,22 @@ interface PaidLine {
 interface Payer {
   wif: string;
   address: string;
+  /** The payer's YED address: its P2PKH yr… before the Falcon height, its Falcon key's yr… from it (beforeAll). */
   yed: string;
+  /** The P2PKH yr… of the WIF key. */
+  p2pkhYed: string;
+  /** The Falcon YED key's seed text (AGENT_YED_KEY) and its yr… address. */
+  falconSeed: string;
+  falconYed: string;
 }
 
 function newPayer(): Payer {
   const priv = tx.randomPrivKey();
   const hash = tx.hash160(tx.pubkeyFromPriv(priv));
-  return { wif: tx.encodeWif(priv, NETWORK), address: tx.encodeAddress(NETWORK, "p2pkh", hash), yed: tx.encodeAddress(NETWORK, "yed", hash) };
+  const falconSeed = pq.formatYedKeySeed(randomBytes(48)).trim();
+  const falconYed = pq.yedFalconAddress(NETWORK, pq.yedFalconKeyFromSeed(pq.parseYedKeySeed(falconSeed)));
+  const p2pkhYed = tx.encodeAddress(NETWORK, "yed", hash);
+  return { wif: tx.encodeWif(priv, NETWORK), address: tx.encodeAddress(NETWORK, "p2pkh", hash), yed: p2pkhYed, p2pkhYed, falconSeed, falconYed };
 }
 
 const mean = (xs: number[]): number => Math.round(xs.reduce((s, x) => s + x, 0) / Math.max(1, xs.length));
@@ -63,7 +73,7 @@ describeDevnet("the light agent: a WIF key and lightwalletd, no node RPC", () =>
   const procs: Proc[] = [];
   let payTo: string;
   let merchantYed: string;
-  /** Falcon applies to the next block (TOK-PQ): a WIF key cannot hold YED, the YED case is skipped. */
+  /** Falcon applies to the next block (TOK-PQ): each agent holds its YED at its Falcon YED key. */
   let falcon = false;
   const light = newPayer(); // lightwalletd only
   const heavy = newPayer(); // the node-RPC path, for the latency comparison
@@ -77,6 +87,7 @@ describeDevnet("the light agent: a WIF key and lightwalletd, no node RPC", () =>
     MAX_PAYMENT_ZAT: "5000000",
     AGENT_RESERVATIONS: join(dir, `${who}-reservations.json`),
     ...(who === "light" ? { AGENT_WIF: light.wif, AGENT_LWD_URL: lwdUrl } : { AGENT_WIF: heavy.wif, AGENT_DEVNET_JSON: devnetJson, AGENT_DEVNET_NODE: "0" }),
+    ...(falcon ? { AGENT_YED_KEY: (who === "light" ? light : heavy).falconSeed } : {}),
     ...extra,
   });
 
@@ -139,14 +150,15 @@ describeDevnet("the light agent: a WIF key and lightwalletd, no node RPC", () =>
     payTo = await d.stock.getNewAddress();
     falcon = await falconNext(d);
     merchantYed = newYedHolder(NETWORK, falcon).yr; // a Falcon post-quantum address from the Falcon height (TOK-PQ)
-    if (!falcon) await ensureYed(20_000); // a MINT is $100 to $10,000 (X-F61)
+    await ensureYed(20_000); // a MINT is $100 to $10,000 (X-F61)
 
     // The heavy payer's address is watched by node 0 before it is funded (importaddress, no rescan);
     // the light payer's is not: nothing but lightwalletd ever looks at it.
     await d.wallet.call("importaddress", [heavy.address, "", false]);
     for (const p of [light, heavy]) {
       for (let i = 0; i < 6; i++) await d.fund(p.address, 5_000_000n);
-      if (!falcon) await yedSend(p.yed, 500); // a P2PKH YED holder: before the Falcon height only
+      p.yed = falcon ? p.falconYed : p.p2pkhYed; // a Falcon YED key from the Falcon height (TOK-PQ)
+      await yedSend(p.yed, 500);
     }
     await d.mine(1);
 
@@ -223,9 +235,7 @@ describeDevnet("the light agent: a WIF key and lightwalletd, no node RPC", () =>
     record(d.line, "LWD latency YEC exact", { lightMs: lightLines.map((l) => l.ms), heavyMs: heavyLines.map((l) => l.ms), lightMean: mean(lightLines.map((l) => l.ms)), heavyMean: mean(heavyLines.map((l) => l.ms)), ...reads });
   });
 
-  it("YED exact $2: the light agent pays from its key's YED (GetAddressTokens), mined by the strict pool; the node path for comparison", async ({ skip }) => {
-    // From the Falcon height a WIF (P2PKH) key cannot hold YED (TOK-PQ) and the agent has no Falcon YED key.
-    if (falcon) skip();
+  it("YED exact $2: the light agent pays from its key's YED (GetAddressTokens; its Falcon YED key from F), mined by the strict pool; the node path for comparison", async () => {
     const results: Record<string, unknown> = {};
     for (const who of ["light", "heavy"] as const) {
       const lines = await agent(who, `${shop.url}/yed/report`, { MAX_PAYMENT_YED_CENTS: "200" }, async (p) => mineWhenSeen(p, d.pool));
