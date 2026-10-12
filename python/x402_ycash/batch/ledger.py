@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from ..store import DEFAULT_CLOSED_RETENTION_MS, ChannelRecord, ChannelStore
+from ..tx.transaction import parse_tx
 
 CHANNEL_OPEN = 0
 CHANNEL_CLOSING = 1
@@ -103,7 +104,8 @@ class ChannelLedger:
 
     async def store_voucher(self, channel_id: str, cumulative: int, tx_hex: str) -> Literal["stored", "stale"]:
         """Voucher rule 8: stores the voucher only if its cumulative is at least the stored one's (the
-        same cumulative must be the same voucher)."""
+        same cumulative must be the same voucher). A voucher whose unsigned transaction (scriptSigs
+        blanked) equals the stored one's is that voucher signed again: stored, the first bytes kept."""
         while True:
             main = await self.store.get(channel_id)
             if main is None:
@@ -114,7 +116,10 @@ class ChannelLedger:
             key = f"{channel_id}@{cumulative}"
             if not await self.store.open(ChannelRecord(key, cumulative, {"tx": tx_hex})):
                 existing = await self.store.get(key)
-                if existing is None or (existing.data or {}).get("tx") != tx_hex:
+                prior = None if existing is None else (existing.data or {}).get("tx")
+                # The same unsigned transaction signed again (a restarted client whose signer is not
+                # deterministic) is the same voucher: the stored bytes are kept and the answer is stored.
+                if prior != tx_hex and not (isinstance(prior, str) and same_unsigned_tx(prior, tx_hex)):
                     return "stale"
             if cumulative == stored:
                 return "stored"
@@ -153,3 +158,15 @@ class ChannelLedger:
     async def reopen(self, channel_id: str) -> bool:
         """Back to open after a close that could not be broadcast (so a later trigger retries)."""
         return await self.store.compare_and_set_cumulative(f"{channel_id}#state", CHANNEL_CLOSING, CHANNEL_OPEN)
+
+
+def same_unsigned_tx(a: str, b: str) -> bool:
+    """Whether two transactions are byte-identical once every scriptSig is blanked (False if either does not parse)."""
+    try:
+        txs = [parse_tx(a), parse_tx(b)]
+    except ValueError:
+        return False
+    for t in txs:
+        for i in t.vin:
+            i.script_sig = b""
+    return txs[0].serialize() == txs[1].serialize()
