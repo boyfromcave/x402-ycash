@@ -154,7 +154,7 @@ describe("vouchers under the dollar floor", () => {
     for (let i = 0; i < 101; i++) cum.push((await s.request()).cumulative);
     expect(cum.slice(0, 99).every((c) => c === "100")).toBe(true);
     expect(cum.slice(99)).toEqual(["101", "102"]);
-  });
+  }, 60_000); // three SLH-DSA vouchers and 101 verifications: ≈ 4 s idle, past the 20 s default under a loaded machine
   it("refuses a voucher below $1.00", async () => {
     const s = await setup({ price: "$0.25" });
     const { channelId } = await s.open();

@@ -3,6 +3,10 @@
 // channel of 20 requests closed by the CLI, and a CLI refund after t broadcast through
 // SendTransaction. The same flows on the node-RPC path give the latency to compare against. The
 // facilitator and the merchant run on node 0 as usual; lightwalletd serves node 0 too.
+// From the Falcon height (the default devnet mirrors mainnet: Falcon from the vault activation, D-Q-2) YED
+// is held by Falcon TX_PQPKH holders only (TOK-PQ), and the agent's WIF key is P2PKH: its LocalKeySigner holds
+// YED at that key only, so the YED case is skipped there (an SDK gap: a key-held Falcon YED signer). The YEC
+// cases run in either regime; `X402_NODE_ARGS=-pqfalconheight=<h>` runs the YED case before the Falcon height.
 //
 //   scripts/devnet.sh up dd 271
 //   yellowback-devnet lightwalletd start --port 34271 --bin <lightwalletd> --extra=--yellowback   (YELLOWBACK_DEVNET_DIR=…/dd-271)
@@ -10,9 +14,9 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
 import { exact, LwdClient, LwdUtxoSource, SendRawTransactionError, tx } from "x402-ycash-mechanism";
-import { DEVNET_JSON, describeDevnet as describeWithDevnet, devnet, record, waitFor, type Devnet } from "../../../../packages/ycash/test/devnet/harness.js";
+import { DEVNET_JSON, describeDevnet as describeWithDevnet, devnet, falconNext, newYedHolder, record, waitFor, yedSendFrom, type Devnet } from "../../../../packages/ycash/test/devnet/harness.js";
 import { runAgent, runCli, startCli, startService, type Proc } from "./procs.js";
 
 const NETWORK = "ycash:regtest";
@@ -20,6 +24,12 @@ const LWD_URL = process.env.X402_LWD_URL;
 const describeDevnet = (LWD_URL ? describeWithDevnet : describeWithDevnet.skip) as typeof describeWithDevnet;
 const PRICE = { ticker: 10_000n, channel: 1_000n };
 const MIN_LOCK = 30;
+/**
+ * lightwalletd-dd rate-limits every YellowbackStreamer method per peer (20 whole-token calls a burst, one
+ * more per second; frontend/yellowback_ratelimit.go), and every client here is the one peer 127.0.0.1:
+ * the bucket's full refill time, waited before each case so one case's reads do not starve the next.
+ */
+const LWD_BUCKET_REFILL_MS = 20_000;
 
 interface PaidLine {
   i: number;
@@ -53,6 +63,8 @@ describeDevnet("the light agent: a WIF key and lightwalletd, no node RPC", () =>
   const procs: Proc[] = [];
   let payTo: string;
   let merchantYed: string;
+  /** Falcon applies to the next block (TOK-PQ): a WIF key cannot hold YED, the YED case is skipped. */
+  let falcon = false;
   const light = newPayer(); // lightwalletd only
   const heavy = newPayer(); // the node-RPC path, for the latency comparison
   const devnetJson = DEVNET_JSON as string;
@@ -114,15 +126,7 @@ describeDevnet("the light agent: a WIF key and lightwalletd, no node RPC", () =>
   }
 
   async function yedSend(to: string, cents: number): Promise<void> {
-    await waitFor(async () => {
-      try {
-        await d.wallet.call<string>("yed_send", [to, cents]);
-        return true;
-      } catch {
-        await d.mine(1);
-        return false;
-      }
-    }, { timeoutMs: 60_000, what: "yed_send" });
+    await yedSendFrom(d, d.wallet, to, cents);
   }
 
   beforeAll(async () => {
@@ -133,15 +137,16 @@ describeDevnet("the light agent: a WIF key and lightwalletd, no node RPC", () =>
     const info = await lwd.getLightdInfo();
     expect(info.chainName).toBe("regtest");
     payTo = await d.stock.getNewAddress();
-    merchantYed = tx.encodeAddress(NETWORK, "yed", tx.hash160(tx.pubkeyFromPriv(tx.randomPrivKey())));
-    await ensureYed(20_000); // a MINT is $100 to $10,000 (X-F61)
+    falcon = await falconNext(d);
+    merchantYed = newYedHolder(NETWORK, falcon).yr; // a Falcon post-quantum address from the Falcon height (TOK-PQ)
+    if (!falcon) await ensureYed(20_000); // a MINT is $100 to $10,000 (X-F61)
 
     // The heavy payer's address is watched by node 0 before it is funded (importaddress, no rescan);
     // the light payer's is not: nothing but lightwalletd ever looks at it.
     await d.wallet.call("importaddress", [heavy.address, "", false]);
     for (const p of [light, heavy]) {
       for (let i = 0; i < 6; i++) await d.fund(p.address, 5_000_000n);
-      await yedSend(p.yed, 500);
+      if (!falcon) await yedSend(p.yed, 500); // a P2PKH YED holder: before the Falcon height only
     }
     await d.mine(1);
 
@@ -179,6 +184,10 @@ describeDevnet("the light agent: a WIF key and lightwalletd, no node RPC", () =>
     lwd?.close();
   });
 
+  beforeEach(async () => {
+    await new Promise((r) => setTimeout(r, LWD_BUCKET_REFILL_MS));
+  });
+
   it("YEC exact (mempool policy): five payments from the light agent, then five from the node-RPC agent; latency compared", async () => {
     const before = await receivedBy(payTo);
     const lightLines = await agent("light", `${shop.url}/exact/ticker`, { REQUESTS: "5" });
@@ -214,7 +223,9 @@ describeDevnet("the light agent: a WIF key and lightwalletd, no node RPC", () =>
     record(d.line, "LWD latency YEC exact", { lightMs: lightLines.map((l) => l.ms), heavyMs: heavyLines.map((l) => l.ms), lightMean: mean(lightLines.map((l) => l.ms)), heavyMean: mean(heavyLines.map((l) => l.ms)), ...reads });
   });
 
-  it("YED exact $2: the light agent pays from its key's YED (GetAddressTokens), mined by the strict pool; the node path for comparison", async () => {
+  it("YED exact $2: the light agent pays from its key's YED (GetAddressTokens), mined by the strict pool; the node path for comparison", async ({ skip }) => {
+    // From the Falcon height a WIF (P2PKH) key cannot hold YED (TOK-PQ) and the agent has no Falcon YED key.
+    if (falcon) skip();
     const results: Record<string, unknown> = {};
     for (const who of ["light", "heavy"] as const) {
       const lines = await agent(who, `${shop.url}/yed/report`, { MAX_PAYMENT_YED_CENTS: "200" }, async (p) => mineWhenSeen(p, d.pool));

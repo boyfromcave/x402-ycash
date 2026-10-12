@@ -1,6 +1,7 @@
 // The TypeScript side of the Python interop suites (tests/devnet/test_interop.py, test_parity.py), run
 // with tsx from the repo's npm workspace. Commands (JSON on stdout):
 //   pay <devnet.json> <node> <wif> <requirements.json>        -> {transaction}, built by ExactYcashScheme + LocalKeySigner (YEC or YED)
+//   wallet-pay <devnet.json> <node> <requirements.json>       -> {transaction}, built by ExactYcashScheme + RpcWalletSigner (node's wallet)
 //   facilitate <devnet.json> <node> <requirements.json> <hex> -> {verify, settle}, by ExactYcashFacilitatorScheme
 //   shielded-pay <devnet.json> <node> <from> <requirements.json> -> {txid}, by ShieldedExactClient (z_sendmany)
 //   verify-receipt <receipt.json> <pubkey hex>                -> {payload}, by verifyReceipt (or exit 1 with the error)
@@ -21,6 +22,12 @@ if (cmd === "pay") {
   const rpc = YcashRpc.fromDevnetJson(devnetJson, Number(node));
   const signer = new exact.LocalKeySigner(wif, new exact.RpcUtxoSource(rpc));
   const r = await new exact.ExactYcashScheme(signer).createPaymentPayload(2, readJson<PaymentRequirements>(reqPath));
+  out(r.payload);
+} else if (cmd === "wallet-pay") {
+  // node <node>'s wallet pays (RpcWalletSigner): from the Falcon height a key-held P2PKH payer holds no YED (TOK-PQ)
+  const [devnetJson, node, reqPath] = args as [string, string, string];
+  const rpc = YcashRpc.fromDevnetJson(devnetJson, Number(node));
+  const r = await new exact.ExactYcashScheme(new exact.RpcWalletSigner(rpc)).createPaymentPayload(2, readJson<PaymentRequirements>(reqPath));
   out(r.payload);
 } else if (cmd === "facilitate") {
   const [devnetJson, node, reqPath, hex] = args as [string, string, string, string];

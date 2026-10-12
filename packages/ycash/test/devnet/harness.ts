@@ -4,7 +4,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe } from "vitest";
+import { randomBytes } from "node:crypto";
 import { RPC_INVALID_ADDRESS_OR_KEY, RpcError, YcashRpc, type NodeCapabilities, type TxOutInfo } from "../../src/node/index.js";
+import * as pq from "../../src/pq/index.js";
+import * as T from "../../src/tx/index.js";
 
 export const DEVNET_JSON = process.env.X402_DEVNET_JSON;
 
@@ -187,4 +190,96 @@ export function depth(out: TxOutInfo | null): number | null {
 /** Findings are logged in one greppable form so a run can be quoted exactly. */
 export function record(line: string, item: string, value: unknown): void {
   console.log(`FINDING ${line} ${item}: ${JSON.stringify(value)}`);
+}
+
+/**
+ * Whether Falcon applies to the next block on node 0 (quantum spec TOK-PQ): from the node's Falcon height
+ * YED is held by Falcon (scheme-2) TX_PQPKH holders only. The default devnet mirrors mainnet, Falcon from
+ * the vault activation (owner D-Q-2); `X402_NODE_ARGS=-pqfalconheight=<h>` rehearses the regime before it.
+ */
+export async function falconNext(d: Devnet): Promise<boolean> {
+  const info = await d.wallet.call<{ params: { pq?: { falconHeight?: number } } }>("yed_getinfo");
+  const f = info.params.pq?.falconHeight ?? -1;
+  return f >= 0 && (await d.tip()) + 1 >= f;
+}
+
+/**
+ * A YED holder whose key the test holds: P2PKH (`priv`) before the Falcon height, a Falcon TX_PQPKH from it.
+ * `address` is always the P2PKH `s…` form of `priv`, for the holder's plain YEC (fee coins).
+ */
+export interface YedHolder {
+  priv: Uint8Array;
+  /** the YED holding script: P2PKH(priv), or the Falcon TX_PQPKH of `pq` */
+  script: Uint8Array;
+  /** the holding script's Yellowback address (20-byte yr… or 53-character post-quantum yr…) */
+  yr: string;
+  /** the P2PKH address of `priv` (YEC) */
+  address: string;
+  /** the P2PKH script of `priv` (YEC) */
+  p2pkh: Uint8Array;
+  pq?: pq.PQKeyPair;
+}
+
+export function newYedHolder(network: "ycash:regtest", falcon: boolean): YedHolder {
+  const priv = T.randomPrivKey();
+  const h = T.hash160(T.pubkeyFromPriv(priv));
+  const p2pkh = T.p2pkhScript(h);
+  const address = T.encodeAddress(network, "p2pkh", h);
+  if (!falcon) return { priv, script: p2pkh, yr: T.encodeAddress(network, "yed", h), address, p2pkh };
+  const kp = pq.pqKeygen(pq.SCHEME_FN_DSA_512, randomBytes(pq.SEED_SIZE));
+  const id = pq.keyIdOf(pq.SCHEME_FN_DSA_512, kp.publicKey);
+  return { priv, script: pq.pqpkhScript(id), yr: T.encodePQAddress(network, "yedpq", id), address, p2pkh, pq: kp };
+}
+
+/**
+ * Signs vin[i] SIGHASH_ALL in place: a coin of the holder's post-quantum script with its Falcon key, any other
+ * (its P2PKH) with `priv`.
+ */
+export function signHolderInput(tx: T.Tx, i: number, h: YedHolder, spk: Uint8Array, value: bigint, branchId: number): void {
+  const digest = T.sighashV4(tx, i, spk, value, T.SIGHASH.ALL, branchId);
+  const vin = tx.vin[i] as (typeof tx.vin)[number];
+  if (h.pq && T.equalBytes(spk, h.script)) {
+    const sig = T.concatBytes(pq.pqSign(h.pq.scheme, h.pq.secretKey, digest), Uint8Array.of(T.SIGHASH.ALL));
+    vin.scriptSig = T.buildScript(pq.pqSpendItems(h.pq.publicKey, sig));
+  } else {
+    vin.scriptSig = T.p2pkhScriptSig(T.signInput(digest, h.priv, T.SIGHASH.ALL), T.pubkeyFromPriv(h.priv));
+  }
+}
+
+/** The Yellowback address of a YED-holding script (P2PKH or TX_PQPKH). */
+export function yedAddressOfScript(network: "ycash:regtest", spk: Uint8Array): string {
+  const id = pq.pqpkhKeyId(spk);
+  if (id) return T.encodePQAddress(network, "yedpq", id);
+  const h = T.p2pkhHash(spk);
+  if (!h) throw new Error(`not a YED holder script: ${T.bytesToHex(spk)}`);
+  return T.encodeAddress(network, "yed", h);
+}
+
+/**
+ * Mines on the pool (its blocks carry quote tags) until node 0's yed_getprice holds a pMid and a pSlow price:
+ * a run of stock-mined blocks empties the windows, and USD pricing (YedGetPriceSource) reads them.
+ */
+export async function ensurePrice(d: Devnet): Promise<void> {
+  await waitFor(async () => {
+    const p = await d.wallet.call<{ pMid?: number; pSlow?: number }>("yed_getprice");
+    if ((p.pMid ?? 0) > 0 && (p.pSlow ?? 0) > 0) return true;
+    await d.mine(4, d.pool);
+    return false;
+  }, { timeoutMs: 300_000, pollMs: 100, what: "a pMid and pSlow price" });
+}
+
+/** yed_send from `node`'s wallet, retried (mining) while its YED settles into the index; a TOK-PQ refusal is final. */
+export async function yedSendFrom(d: Devnet, node: YcashRpc, to: string, cents: number): Promise<string> {
+  let txid = "";
+  await waitFor(async () => {
+    try {
+      txid = await node.call<string>("yed_send", [to, cents]);
+      return true;
+    } catch (e) {
+      if (/bad-yed-holder|not-a-yellowback-address/.test((e as Error).message)) throw e;
+      await d.mine(1);
+      return false;
+    }
+  }, { timeoutMs: 60_000, what: "yed_send" });
+  return txid;
 }

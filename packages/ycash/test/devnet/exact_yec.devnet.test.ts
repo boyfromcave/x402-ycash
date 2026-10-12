@@ -34,7 +34,8 @@ import {
   addressToScript,
   type TxOut,
 } from "../../src/tx/index.js";
-import { DEVNET_JSON, describeDevnet, devnet, record, waitFor, type Devnet } from "./harness.js";
+import { DEVNET_JSON, describeDevnet, devnet, ensurePrice, falconNext, newYedHolder, record, signHolderInput, waitFor, yedSendFrom, type Devnet } from "./harness.js";
+import { networkFee, networkFeesOf } from "../../src/tx/index.js";
 
 /** The next block's branch id (Canopy 19bd2d2f, or Vault 6d5b7a31 past that upgrade), read once the devnet is up. */
 let nextBranch = 0x19bd2d2f;
@@ -212,6 +213,8 @@ describeDevnet("exact YEC through @x402/core on a live devnet", () => {
 
     it(`[${which}] USD price through yed_getprice`, async () => {
       const s = S();
+      // the stock-mined blocks of the suites before empty the pMid/pSlow windows: refill them on the pool
+      await ensurePrice(d);
       const priced = await s.server.buildPaymentRequirements({ scheme: "exact", network: NETWORK, payTo: merchant, price: "$0.10", maxTimeoutSeconds: 300 });
       const rate = await new exact.YedGetPriceSource(d.wallet).microUsdPerYec(NETWORK);
       const expected = (100_000n * 100_000_000n + rate - 1n) / rate;
@@ -302,6 +305,10 @@ describeDevnet("exact YEC through @x402/core on a live devnet", () => {
   it("a YED-bearing input: refused on the Yellowback facilitator, unseen by the stock one; coin selection skips it", async () => {
     const yp = newPayer();
     await fundPayer(yp, 2);
+    // TOK-PQ: from the Falcon height the YED goes to a Falcon key of the payer's (TX_PQPKH), before it to its own P2PKH
+    const falcon = await falconNext(d);
+    const holder = falcon ? newYedHolder(NETWORK, true) : undefined;
+    const yedTo = holder?.yr ?? yp.yr;
     // node 0 mints YED (two transactions: the carrier, then the MINT) and sends $1.00 to the payer's yr… address
     if ((await d.wallet.call<unknown[]>("yed_listunspent")).length === 0) {
       // after a run of stock-mined blocks the price window is empty (mintpol-no-price) or minting is
@@ -318,17 +325,9 @@ describeDevnet("exact YEC through @x402/core on a live devnet", () => {
       }, { timeoutMs: 180_000, pollMs: 100, what: "a mint price" });
       await waitFor(async () => (await d.mine(1), (await d.wallet.call<unknown[]>("yed_listunspent")).length > 0), { timeoutMs: 120_000, what: "the MINT" });
     }
-    await waitFor(async () => {
-      try {
-        await d.wallet.call("yed_send", [yp.yr, 100]);
-        return true;
-      } catch {
-        await d.mine(1); // the wallet's YED may still be settling into the index
-        return false;
-      }
-    }, { timeoutMs: 60_000, what: "yed_send" });
+    await yedSendFrom(d, d.wallet, yedTo, 100); // retried while the wallet's YED settles into the index
     await d.mine(1);
-    const tokens = await d.wallet.call<{ txid: string; vout: number; cents: number; valueZat: number }[]>("yed_listtokens", [[yp.yr]]);
+    const tokens = await d.wallet.call<{ txid: string; vout: number; cents: number; valueZat: number }[]>("yed_listtokens", [[yedTo]]);
     expect(tokens).toHaveLength(1);
     const t = tokens[0]!;
     const listed = await new exact.RpcUtxoSource(d.wallet).listCoins(yp.address);
@@ -339,12 +338,25 @@ describeDevnet("exact YEC through @x402/core on a live devnet", () => {
     for (const s of stacks) {
       const req = await requirementsFor(s, -1);
       const c = listed[0]!;
-      const hex = signLocal(
-        yp,
-        [{ txid: t.txid, vout: t.vout, value: BigInt(t.valueZat) }, { txid: c.txid, vout: c.vout, value: c.value }],
-        [{ value: AMOUNT, scriptPubKey: addressToScript(merchant, NETWORK) }, { value: BigInt(t.valueZat) + c.value - AMOUNT - 1_000n, scriptPubKey: yp.script }],
-        (await d.tip()) + 7,
-      );
+      const coins = [{ txid: t.txid, vout: t.vout, value: BigInt(t.valueZat) }, { txid: c.txid, vout: c.vout, value: c.value }];
+      const expiry = (await d.tip()) + 7;
+      const outputs = (fee: bigint): TxOut[] => [{ value: AMOUNT, scriptPubKey: addressToScript(merchant, NETWORK) }, { value: BigInt(t.valueZat) + c.value - AMOUNT - fee, scriptPubKey: yp.script }];
+      let hex: string;
+      if (holder) {
+        // the Falcon token input signed with the holder's key, the YEC coin with the payer's; the fee covers the
+        // ~1.6 KB Falcon spend at the node's post-quantum rate (rpcversion 8)
+        const fees = networkFeesOf(await d.wallet.yedGetInfo());
+        const build = (fee: bigint) => {
+          const tx = newTx({ vin: coins.map((x) => ({ prevout: { txid: x.txid, vout: x.vout }, scriptSig: new Uint8Array(), sequence: SEQUENCE_FINAL })), vout: outputs(fee), expiryHeight: expiry });
+          signHolderInput(tx, 0, holder, holder.script, coins[0]!.value, nextBranch);
+          tx.vin[1]!.scriptSig = p2pkhScriptSig(signInput(sighashV4(tx, 1, yp.script, coins[1]!.value, SIGHASH.ALL, nextBranch), yp.priv), pubkeyFromPriv(yp.priv));
+          return tx;
+        };
+        const need = networkFee(build(1_000n), "pq", fees);
+        hex = serializeTxHex(build(need > 1_000n ? need : 1_000n));
+      } else {
+        hex = signLocal(yp, coins, outputs(1_000n), expiry);
+      }
       const v = await s.server.verifyPayment({ x402Version: 2, accepted: req, payload: { transaction: hex } }, req);
       results[s.name] = v.isValid ? "valid (no token records on a stock node)" : v.invalidReason;
       if (s.yellowback) expect(v.invalidReason).toBe(exact.ERR_YED_INPUT);
