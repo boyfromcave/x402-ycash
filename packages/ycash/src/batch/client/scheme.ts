@@ -393,7 +393,10 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     if (maxCloseFee === undefined || terms.closeFee > maxCloseFee) {
       throw new Error(`closeFee ${terms.closeFee} is above this client's maxCloseFee ${maxCloseFee ?? "(none)"} for ${terms.asset}`);
     }
-    const returnAddress = this.cfg.returnAddress ?? (await this.cfg.funder.returnAddress?.({ network: terms.network, asset: terms.asset }));
+    // A key-held funder's YED return follows the Falcon height (its Falcon key from F, its P2PKH before).
+    const returnFalcon = yed ? isFalconActiveAt(await this.falconHeightFor(terms.network), tip + 1) : undefined;
+    const returnAddress =
+      this.cfg.returnAddress ?? (await this.cfg.funder.returnAddress?.({ network: terms.network, asset: terms.asset, ...(returnFalcon !== undefined ? { falconActive: returnFalcon } : {}) }));
     if (!returnAddress) throw new Error("no return address: set returnAddress, or use a funder that has one (the channel key's remainder would be stranded)");
     const payToScript = addressToScript(terms.payTo, terms.network);
     const returnScript = returnScriptOf(returnAddress, terms.network, terms.asset, payToScript);
@@ -537,7 +540,7 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     const problem = yedHolderProblem(want, active);
     if (!problem) return want;
     if (!toScript && active) {
-      const alt = await this.cfg.funder.returnAddress?.({ network: rec.network, asset: rec.asset });
+      const alt = await this.cfg.funder.returnAddress?.({ network: rec.network, asset: rec.asset, falconActive: true });
       const altScript = alt ? addressToScript(alt, rec.network) : undefined;
       if (altScript && isFalconHolder(altScript)) {
         this.cfg.log?.(`refund of ${rec.channelId}: after the Falcon height ${falconHeight} it pays the funder's Falcon address ${alt}, not the open's ${rec.returnAddress ?? "return script"}`);

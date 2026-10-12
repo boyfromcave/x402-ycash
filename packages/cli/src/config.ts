@@ -1,10 +1,11 @@
 // The CLI's configuration: flags first, then the environment, then defaults. The chain is read from
 // a node (a yellowback-devnet devnet.json entry or an RPC URL with credentials) or from a
 // lightwalletd server (--lwd); the payer is a WIF key or the node's own wallet.
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
-import { ASSET_YEC, ASSET_YED, LightClient, LwdClient, tx, YCASH_NETWORKS, YcashRpc, type YcashAsset, type YcashNetwork } from "x402-ycash-mechanism";
+import { ASSET_YEC, ASSET_YED, LightClient, LwdClient, pq, tx, YCASH_NETWORKS, YcashRpc, type YcashAsset, type YcashNetwork } from "x402-ycash-mechanism";
 
 export interface CliConfig {
   network: YcashNetwork;
@@ -17,6 +18,12 @@ export interface CliConfig {
   lwd?: LwdClient;
   /** A WIF key pays transparent payments and channel funding; absent, the node's wallet does. */
   wif?: string;
+  /**
+   * `--yed-key-file` / X402_YED_KEY_FILE (or X402_YED_KEY, the seed text): the payer's Falcon YED key
+   * (`fn-dsa-512:<96 hex>`), with --wif. From the node's Falcon height only a Falcon TX_PQPKH holds YED
+   * (TOK-PQ): YED payments and YED channels are paid from this key, YEC fees from the WIF key.
+   */
+  yedKey?: pq.YedFalconKey;
   /** sapling-proof: the z_sendmany source (a Sapling address for tier P1). */
   shieldedFrom?: string;
   /** sapling: the Sapling transaction builder, an http(s) JSON-RPC URL or a shell command (shielded/builder.ts). */
@@ -65,6 +72,8 @@ export const USAGE = `usage:
   x402-ycash channel status [channelId]
   x402-ycash channel close <url> [channelId] [--asset YEC|YED]
   x402-ycash channel refund <channelId> [--to ADDRESS]
+  x402-ycash yed-key new <FILE>        (writes a new Falcon YED key, mode 0600; prints its address)
+  x402-ycash yed-key address           (the address of --yed-key-file)
 
 node (flag / env):   --devnet FILE / X402_DEVNET_JSON, --node N / X402_DEVNET_NODE (default 0)
                      --rpc-url / X402_RPC_URL with --rpc-user + --rpc-password (X402_RPC_USER, X402_RPC_PASSWORD)
@@ -72,6 +81,9 @@ node (flag / env):   --devnet FILE / X402_DEVNET_JSON, --node N / X402_DEVNET_NO
                      or --lwd HOST:PORT / X402_LWD_URL: a lightwalletd server instead of a node (needs --wif;
                      grpc://… plaintext, grpcs://… TLS, a bare host:port is TLS unless loopback)
 payer:               --wif / X402_WIF (a local key; default: the node's wallet signs)
+                     --yed-key-file FILE / X402_YED_KEY_FILE (or X402_YED_KEY): with --wif, a Falcon YED key
+                     (fn-dsa-512:<96 hex>) that holds and pays YED; from the Falcon height (mainnet: the vault
+                     activation) a WIF key alone holds no YED (TOK-PQ)
                      --shielded-from / X402_SHIELDED_FROM (pays sapling-proof routes from this address)
                      --sapling-builder / X402_SAPLING_BUILDER (pays sapling routes with transactions from this
                      builder: an http(s) URL of x402-light serve, or a shell command; build {to, amountZat,
@@ -104,6 +116,7 @@ const OPTIONS = {
   "rpc-cookie": { type: "string" },
   lwd: { type: "string" },
   wif: { type: "string" },
+  "yed-key-file": { type: "string" },
   "shielded-from": { type: "string" },
   "sapling-builder": { type: "string" },
   channels: { type: "string" },
@@ -186,6 +199,26 @@ function lwdOf(f: Record<string, string | undefined>, env: Env): LwdClient | und
   }
 }
 
+/**
+ * The Falcon YED key of --yed-key-file / X402_YED_KEY_FILE, or the seed text in X402_YED_KEY.
+ *
+ * @param f - The flags.
+ * @param env - The environment.
+ * @returns The key, or undefined.
+ * @throws UsageError when both are given or the key cannot be read (the secret is never echoed).
+ */
+function yedKeyOf(f: Record<string, string | undefined>, env: Env): pq.YedFalconKey | undefined {
+  const file = f["yed-key-file"] ?? env.X402_YED_KEY_FILE;
+  const text = env.X402_YED_KEY;
+  if (file && text) throw new UsageError("set --yed-key-file (X402_YED_KEY_FILE) or X402_YED_KEY, not both");
+  if (!file && !text) return undefined;
+  try {
+    return pq.yedFalconKeyFromSeed(pq.parseYedKeySeed(text ?? readFileSync(file as string, "utf8")));
+  } catch (e) {
+    throw new UsageError(`${file ? "--yed-key-file" : "X402_YED_KEY"}: ${(e as Error).message}`);
+  }
+}
+
 export function loadCliConfig(args: ParsedArgs, env: Env = process.env, node?: YcashRpc): CliConfig {
   const f = args.values;
   const network = (f.network ?? env.X402_NETWORK ?? "ycash:regtest") as YcashNetwork;
@@ -199,6 +232,8 @@ export function loadCliConfig(args: ParsedArgs, env: Env = process.env, node?: Y
       throw new UsageError(`--wif: ${(e as Error).message}`);
     }
   }
+  const yedKey = yedKeyOf(f, env);
+  if (yedKey && !wif) throw new UsageError("--yed-key-file needs --wif: the WIF key pays the YEC fees of a YED payment");
   const count = f.count ?? "1";
   if (!/^\d+$/.test(count) || Number(count) < 1 || Number(count) > 100_000) throw new UsageError("--count must be 1..100000");
   const refundTo = f.to;
@@ -238,6 +273,7 @@ export function loadCliConfig(args: ParsedArgs, env: Env = process.env, node?: Y
     ...(depositCents !== undefined ? { depositCents } : {}),
     ...(maxDepositCents !== undefined ? { maxDepositCents } : {}),
     ...(wif ? { wif } : {}),
+    ...(yedKey ? { yedKey } : {}),
     ...(shieldedFrom ? { shieldedFrom } : {}),
     ...(saplingBuilder ? { saplingBuilder } : {}),
     ...(light ? { light } : {}),

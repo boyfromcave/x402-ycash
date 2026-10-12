@@ -125,4 +125,19 @@ describe("TX_PQCHANNEL spends", () => {
     expect(layout({ channel: ch, cumulative: 100n, clientScript: returnScript })).toHaveLength(3);
     expect(layout({ channel: ch, cumulative: 100n, clientScript: T.p2pkhScript(new Uint8Array(20).fill(1)) })).toHaveLength(3);
   });
+
+  it("a Falcon client's voucher is a function of the channel, the cumulative and the branch id (derived entropy): re-signing yields the same bytes", () => {
+    const fk = pq.pqKeygen(2, T.hexToBytes("5a".repeat(48)));
+    const frs = channel.buildPQChannelScript({ client: pq.keyIdOf(2, fk.publicKey), serverPubKey: serverPub, refundHeight: 1200 });
+    const fch = channel.channelFromScript({ outpoint: { txid: "cd".repeat(32), vout: 0 }, redeemScript: frs, value: 26_000n, closeFee: 6_000n, payToScript: payTo });
+    const falconReturn = pq.pqpkhScript({ scheme: 2, hash: new Uint8Array(32).fill(0xcc) });
+    const sign = (cumulative: bigint) => T.serializeTxHex(channel.buildVoucher({ channel: fch, cumulative, clientScript: falconReturn, clientPQKey: fk, branchId: BRANCH, layout }));
+    const a = sign(100n);
+    expect(sign(100n)).toBe(a); // a restarted client (the CLI between `channel open` and `pay`) re-signs the stored voucher's bytes
+    expect(sign(125n)).not.toBe(a);
+    const v = T.parseTx(a);
+    const spend = channel.parsePQCloseScriptSig(v.vin[0]!.scriptSig)!;
+    expect(spend.spend.scheme).toBe(2);
+    expect(channel.verifyVoucherSignature(v, fch, BRANCH)).toBe(true);
+  });
 });

@@ -7,7 +7,7 @@ import { loadAgentConfig } from "./config.js";
 
 const config = loadAgentConfig();
 const agent = createAgent(config);
-const who = config.signer.kind === "wif" ? `wif ${config.signer.address}` : config.signer.kind === "none" ? `light client ${config.light?.url} (shielded only)` : `node wallet ${config.node?.url}`;
+const who = config.signer.kind === "wif" ? `wif ${config.signer.address}${config.signer.yedAddress ? ` + Falcon YED ${config.signer.yedAddress}` : ""}` : config.signer.kind === "none" ? `light client ${config.light?.url} (shielded only)` : `node wallet ${config.node?.url}`;
 const chain = config.lwd ? `lightwalletd ${config.lwd.url}` : config.node ? `node ${config.node.url}` : `light client ${config.light?.url}`;
 console.log(JSON.stringify({ msg: "agent", url: config.url, requests: config.requests, network: config.network, signer: who, chain, nodeRpc: config.node?.url ?? null, schemes: agent.schemes, maxPaymentZat: config.maxPaymentZat, maxPaymentYedCents: config.maxPaymentYedCents }));
 

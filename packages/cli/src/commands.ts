@@ -119,6 +119,7 @@ export async function channelClose(c: PayingClient, url: string, channelId: stri
  */
 async function legacyRefundScript(config: CliConfig, isYed: boolean): Promise<Uint8Array> {
   if (config.wif) {
+    if (isYed && config.yedKey) return config.yedKey.script; // the Falcon key (TOK-PQ from the Falcon height)
     const { privKey, compressed } = tx.decodeWif(config.wif, config.network);
     return tx.p2pkhScript(tx.hash160(tx.pubkeyFromPriv(privKey, compressed)));
   }

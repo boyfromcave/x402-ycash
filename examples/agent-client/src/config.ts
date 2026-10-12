@@ -1,14 +1,29 @@
 // Agent configuration from the environment: where to call, how many times, which node it reads,
 // and which wallet pays each method.
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LightClient, LwdClient, tx, YCASH_NETWORKS, YcashRpc, type YcashNetwork } from "x402-ycash-mechanism";
+import { LightClient, LwdClient, pq, tx, YCASH_NETWORKS, YcashRpc, type YcashNetwork } from "x402-ycash-mechanism";
 
 /** How the agent signs transparent payments and channel funding (plan §5.6 "two signer backends"). */
 export type AgentSigner =
   /** Keys in the agent: a WIF private key, signed with the SDK's ZIP-243 code (the local signer). */
-  | { kind: "wif"; wif: string; privKey: Uint8Array; address: string }
+  | {
+      kind: "wif";
+      wif: string;
+      privKey: Uint8Array;
+      address: string;
+      /**
+       * AGENT_YED_KEY / AGENT_YED_KEY_FILE: the agent's Falcon YED key (`fn-dsa-512:<96 hex>`, a 48-byte
+       * seed). From the node's Falcon height (mainnet: the vault activation) only a Falcon TX_PQPKH holds YED
+       * (TOK-PQ), so a key-held agent pays YED and funds YED channels from this key; YEC fees still come
+       * from the WIF key.
+       */
+      yedKey?: pq.YedFalconKey;
+      /** The Falcon key's YED address (`yb…`/`yt…`/`yr…`). */
+      yedAddress?: string;
+    }
   /** The agent's own node wallet: listunspent + createrawtransaction + signrawtransaction (the RPC signer). */
   | { kind: "node" }
   /**
@@ -87,13 +102,35 @@ export function loadNode(env: Env, prefix = "AGENT"): YcashRpc | undefined {
   return undefined;
 }
 
+/**
+ * The Falcon YED key from `<prefix>_YED_KEY` (the seed text) or `<prefix>_YED_KEY_FILE` (a file holding it).
+ *
+ * @param env - The environment.
+ * @param prefix - The variable prefix.
+ * @returns The key, or undefined when neither is set.
+ * @throws Error when both are set, the file cannot be read, or the text is not a seed (never echoed).
+ */
+export function loadYedKey(env: Env, prefix: string): pq.YedFalconKey | undefined {
+  const text = env[`${prefix}_YED_KEY`];
+  const file = env[`${prefix}_YED_KEY_FILE`];
+  if (text && file) throw new Error(`set ${prefix}_YED_KEY or ${prefix}_YED_KEY_FILE, not both`);
+  if (!text && !file) return undefined;
+  const name = text ? `${prefix}_YED_KEY` : `${prefix}_YED_KEY_FILE`;
+  try {
+    return pq.yedFalconKeyFromSeed(pq.parseYedKeySeed(text ?? readFileSync(file as string, "utf8")));
+  } catch (e) {
+    throw new Error(`${name}: ${(e as Error).message}`);
+  }
+}
+
 export function loadSigner(env: Env, network: YcashNetwork, fallback: "node" | "none" = "node"): AgentSigner {
   const kind = env.AGENT_SIGNER ?? (env.AGENT_WIF ? "wif" : fallback);
   if (kind === "wif") {
     if (!env.AGENT_WIF) throw new Error("AGENT_SIGNER=wif needs AGENT_WIF");
     const { privKey, compressed } = tx.decodeWif(env.AGENT_WIF, network);
     const address = tx.encodeAddress(network, "p2pkh", tx.hash160(tx.pubkeyFromPriv(privKey, compressed)));
-    return { kind: "wif", wif: env.AGENT_WIF, privKey, address };
+    const yedKey = loadYedKey(env, "AGENT");
+    return { kind: "wif", wif: env.AGENT_WIF, privKey, address, ...(yedKey ? { yedKey, yedAddress: pq.yedFalconAddress(network, yedKey) } : {}) };
   }
   if (kind === "node") return { kind: "node" };
   if (kind === "none") return { kind: "none" };

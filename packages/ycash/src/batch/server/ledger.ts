@@ -12,6 +12,7 @@
 // A closed channel's records are retired for `closedRetentionMs` and then pruned by the store
 // (plan X-F51), so list() and resume() stay as fast as the open channels; an open or closing
 // channel is never retired.
+import { parseTx, serializeTxHex } from "../../tx/tx.js";
 import { DEFAULT_CLOSED_RETENTION_MS, type ChannelStore } from "../../store/channelStore.js";
 
 export const CHANNEL_OPEN = 0n;
@@ -168,6 +169,10 @@ export class ChannelLedger {
    * @param channelId - The channel id.
    * @param cumulative - The voucher's cumulative, in the asset's base units.
    * @param txHex - The voucher transaction.
+   * A voucher at the stored cumulative whose unsigned transaction (every scriptSig blanked) equals the
+   * stored one's is the same voucher signed again: the stored bytes are kept and the answer is `stored`.
+   * The caller has already verified its signature, so either signing completes the same spend.
+   *
    * @returns `stored`, or `stale` when it is below the stored cumulative or differs at the same one.
    * @throws Error when the channel is unknown.
    */
@@ -179,7 +184,10 @@ export class ChannelLedger {
       if (cumulative < stored) return "stale";
       const key = `${channelId}@${cumulative}`;
       if (!(await this.store.open({ channelId: key, cumulative, data: { tx: txHex } }))) {
-        if ((await this.store.get(key))?.data?.tx !== txHex) return "stale";
+        const prior = (await this.store.get(key))?.data?.tx;
+        // The same unsigned transaction re-signed (a restarted client whose signer is not deterministic)
+        // is the same voucher: keep the stored bytes and answer stored. Anything else at this cumulative is stale.
+        if (prior !== txHex && !(typeof prior === "string" && sameUnsignedTx(prior, txHex))) return "stale";
       }
       if (cumulative === stored) return "stored";
       if (await this.store.compareAndSetCumulative(channelId, stored, cumulative)) {
@@ -242,5 +250,25 @@ export class ChannelLedger {
    */
   reopen(channelId: string): Promise<boolean> {
     return this.store.compareAndSetCumulative(`${channelId}#state`, CHANNEL_CLOSING, CHANNEL_OPEN);
+  }
+}
+
+/**
+ * Whether two transactions are the same once every scriptSig is blanked (the same spend, maybe signed twice).
+ *
+ * @param a - A transaction, hex.
+ * @param b - Another, hex.
+ * @returns True when the unsigned transactions are byte-identical; false when either does not parse.
+ */
+export function sameUnsignedTx(a: string, b: string): boolean {
+  try {
+    const unsigned = (hex: string): string => {
+      const tx = parseTx(hex);
+      for (const i of tx.vin) i.scriptSig = new Uint8Array();
+      return serializeTxHex(tx);
+    };
+    return unsigned(a) === unsigned(b);
+  } catch {
+    return false;
   }
 }

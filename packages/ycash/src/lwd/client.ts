@@ -1,5 +1,5 @@
 // A gRPC client for the lightwalletd methods a light agent needs: CompactTxStreamer
-// (proto/service.proto:142-181) and the YED lookups of YellowbackStreamer (proto/yellowback.proto:175-195).
+// (proto/service.proto:142-181) and the YED lookups of YellowbackStreamer (proto/yellowback.proto:291-316).
 // @grpc/grpc-js is the reference gRPC implementation for Node (pure JS, TLS, deadlines, HTTP/2);
 // @grpc/proto-loader reads the vendored protos at run time, so there is no generated code to keep
 // in step with lightwalletd-dd. One grpc.Client carries both services over one channel.
@@ -9,7 +9,7 @@ import { Client, credentials, Metadata, status, type ServiceError } from "@grpc/
 import { loadSync, type MethodDefinition, type PackageDefinition, type ServiceDefinition } from "@grpc/proto-loader";
 import { RpcError, SendRawTransactionError } from "../node/errors.js";
 import { bytesToHex, hexToBytes } from "../tx/index.js";
-import type { AddressUtxoMsg, CompactTxMsg, LightdInfo, RawTransactionMsg, SendResponseMsg, YedChainInfoMsg, YedTokenMsg, YedValidationMsg } from "./types.js";
+import type { AddressUtxoMsg, CompactTxMsg, LightdInfo, RawTransactionMsg, SendResponseMsg, YedChainInfoMsg, YedTokenMsg, YedValidationMsg, YellowbackInfoMsg } from "./types.js";
 import { parseLwdUrl } from "./url.js";
 
 const PACKAGE = "cash.z.wallet.sdk.rpc";
@@ -180,6 +180,17 @@ export class LwdClient {
    */
   getChainInfo(): Promise<YedChainInfoMsg> {
     return this.unary("YellowbackStreamer", "GetChainInfo", {});
+  }
+
+  /**
+   * `YellowbackStreamer.GetYellowbackInfo`: the node's `yed_getinfo` (rpcversion 8: `params.fees.network`,
+   * the network fee rates a YED or post-quantum transaction pays; rpcversion 7: `params.pq`).
+   *
+   * @returns The info, 64-bit integers as decimal strings (see {@link LwdChain.yedGetInfo} for the JSON shape).
+   * @throws LwdError, `unimplemented` on a server without YellowbackStreamer.
+   */
+  getYellowbackInfo(): Promise<YellowbackInfoMsg> {
+    return this.unary("YellowbackStreamer", "GetYellowbackInfo", {});
   }
 
   /**

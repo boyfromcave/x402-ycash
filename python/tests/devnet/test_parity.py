@@ -11,6 +11,11 @@
 Both channels check the open's ``returnAddress`` (a node 0 wallet address): the close pays the
 client's remainder there, node 0's wallet sees it, and nothing pays the channel key C.
 
+Either regime: the default devnet mirrors mainnet (Falcon from the vault activation, D-Q-2), where YED is
+held by Falcon TX_PQPKH holders only (TOK-PQ): the YED exact payer is node 4's wallet (a WIF key holds YED
+at its P2PKH key only) and the payees are wallet Falcon addresses. ``X402_NODE_ARGS=-pqfalconheight=<h>``
+runs the regime before it (the WIF payer, P2PKH payees). A YED channel is a TX_PQCHANNEL in both.
+
     scripts/devnet.sh up dd 241      (or: up 6 243), with X402_SCRATCH set
     X402_DEVNET_JSON=$X402_SCRATCH/dd-241/devnet.json python/.venv/bin/python -m pytest python/tests/devnet/test_parity.py
 """
@@ -33,11 +38,12 @@ from x402_ycash.node import RpcError, YcashRpc
 from x402_ycash.shielded import SaplingProofHandler, SqliteIssuedAddressRegistry, es256k_signer
 from x402_ycash.shielded import constants as SC
 from x402_ycash.store import SqliteChannelStore, SqliteSettlementStore
-from x402_ycash.tx import encode_address, hash160, pubkey_from_priv, random_priv_key, txid
+from x402_ycash.tx import decode_address, encode_address, hash160, pubkey_from_priv, random_priv_key, txid
 
 pytestmark = pytest.mark.skipif(not DEVNET_JSON, reason="X402_DEVNET_JSON is not set")
 
 STOCK, POOL = 1, 2
+PAYER_NODE, PAYEE_NODE = 4, 3  # from the Falcon height: node 4's wallet pays YED, node 3's wallet receives it
 RESOURCE = "https://merchant.test/x402/report"
 
 
@@ -60,6 +66,25 @@ async def devnet():
 
 async def line_of(d: Devnet) -> str:
     return (await d.wallet.capabilities()).line
+
+
+async def falcon_next(d: Devnet) -> bool:
+    """Whether Falcon applies to the next block (TOK-PQ: YED only at Falcon TX_PQPKH holders)."""
+    f = int(((await d.wallet.call("yed_getinfo")).get("params", {}).get("pq") or {}).get("falconHeight", -1))
+    return f >= 0 and await d.wallet.get_block_count() + 1 >= f
+
+
+def node(d: Devnet, i: int) -> YcashRpc:
+    return YcashRpc.from_devnet_json(d.json, i)
+
+
+async def yed_payee(d: Devnet, falcon: bool) -> str:
+    """A YED payee: a Falcon address of node 3's wallet from the Falcon height, else a fresh key's P2PKH yr…."""
+    if not falcon:
+        return yr_of(Key())
+    a: str = await node(d, PAYEE_NODE).call("yed_getnewaddress")
+    assert decode_address(a, NETWORK).kind == "yedpq" and decode_address(a, NETWORK).scheme == 2, a
+    return a
 
 
 # --- YED helpers ------------------------------------------------------------------------------------
@@ -102,8 +127,8 @@ async def yed_send(d: Devnet, to: str, cents: int) -> str:
     while True:
         try:
             return await d.wallet.call("yed_send", [to, cents])
-        except RpcError:
-            if time.monotonic() > deadline:
+        except RpcError as e:
+            if "bad-yed-holder" in e.message or time.monotonic() > deadline:  # TOK-PQ refuses for good
                 raise
             await d.mine()
 
@@ -120,6 +145,10 @@ async def _in_mempool(node: YcashRpc, t: str) -> bool:
     return t in await node.get_raw_mempool()
 
 
+async def _is(f: Any, want: int) -> bool:
+    return bool(await f() == want)
+
+
 # --- 1. YED exact -----------------------------------------------------------------------------------
 
 async def test_ts_agent_pays_yed_exact_settled_by_python(devnet: Devnet, tmp_path: Path):
@@ -127,10 +156,21 @@ async def test_ts_agent_pays_yed_exact_settled_by_python(devnet: Devnet, tmp_pat
     line = await line_of(d)
     assert (await d.wallet.capabilities()).yellowback
     await ensure_yed(d, 20_000)
+    falcon = await falcon_next(d)
     payer = await d.funded_key()
-    merchant = Key()
-    await yed_send(d, yr_of(payer), 600)
+    payer_node = node(d, PAYER_NODE)
+
+    async def payer_balance() -> int:
+        return int((await payer_node.call("yed_getbalance"))["confirmedCents"])
+    if falcon:
+        payer_yr = await payer_node.call("yed_getnewaddress")
+        await d.wallet.send_to_address(await payer_node.get_new_address(), 100_000_000)  # YEC for its fees
+    else:
+        payer_yr = yr_of(payer)
+    merchant_yr = await yed_payee(d, falcon)
+    await yed_send(d, payer_yr, 600)
     await d.mine()
+    payer_before = await payer_balance() if falcon else 0
     before = await supply(d)
 
     facilitator = ExactYcashFacilitatorScheme(d.wallet, yellowback=True, confirmation_timeout=60, confirmation_poll=0.5)
@@ -139,7 +179,7 @@ async def test_ts_agent_pays_yed_exact_settled_by_python(devnet: Devnet, tmp_pat
     server = ExactYcashServerScheme(usd_asset="YED")
     priced = server.parse_price("$1", NETWORK)
     assert (priced.amount, priced.asset) == ("100", "YED")
-    base = PaymentRequirements(scheme="exact", network=NETWORK, asset=priced.asset, amount=priced.amount, pay_to=yr_of(merchant),
+    base = PaymentRequirements(scheme="exact", network=NETWORK, asset=priced.asset, amount=priced.amount, pay_to=merchant_yr,
                                max_timeout_seconds=600, extra={})
     req = server.enhance_payment_requirements(base, SupportedKind(x402_version=2, scheme="exact", network=NETWORK,
                                                                   extra=facilitator.get_extra(NETWORK)), [])
@@ -149,21 +189,30 @@ async def test_ts_agent_pays_yed_exact_settled_by_python(devnet: Devnet, tmp_pat
                                                                 extra=stock.get_extra(NETWORK)), [])
     p = tmp_path / "yed-req.json"
     p.write_text(req.model_dump_json(by_alias=True, exclude_none=True))
-    hex_tx = ts("pay", d.json, str(WALLET), payer.wif, str(p))["transaction"]
+    if falcon:
+        hex_tx = ts("wallet-pay", d.json, str(PAYER_NODE), str(p))["transaction"]
+    else:
+        hex_tx = ts("pay", d.json, str(WALLET), payer.wif, str(p))["transaction"]
     payload = PaymentPayload(x402_version=2, accepted=req.model_copy(deep=True), payload={"transaction": hex_tx})
     decoded = await d.wallet.yed_decode_payload(hex_tx)
 
     v = await facilitator.averify(payload, req)
     assert v.is_valid, v
-    assert v.payer == yr_of(payer)
+    if falcon:  # node 4's wallet pays from whichever of its Falcon outputs it selects
+        assert v.payer and decode_address(v.payer, NETWORK).scheme == 2, v.payer
+    else:
+        assert v.payer == yr_of(payer)
     assert (await stock.averify(payload, req)).invalid_reason == "invalid_exact_ycash_yed_node_required"
     settling = asyncio.create_task(facilitator.asettle(payload, req))
     await mine_with(d, txid(hex_tx))
     s = await settling
     assert s.success, s
-    assert s.transaction == txid(hex_tx) and s.payer == yr_of(payer) and s.extra == {"status": "confirmed", "confirmations": 1}
-    assert [t["cents"] for t in await tokens_of(d, yr_of(merchant))] == [100]
-    assert sum(t["cents"] for t in await tokens_of(d, yr_of(payer))) == 500
+    assert s.transaction == txid(hex_tx) and s.payer == v.payer and s.extra == {"status": "confirmed", "confirmations": 1}
+    assert [t["cents"] for t in await tokens_of(d, merchant_yr)] == [100]
+    if falcon:
+        await wait_for(lambda: _is(payer_balance, payer_before - 100), timeout=30, what="node 4's YED less $1.00")
+    else:
+        assert sum(t["cents"] for t in await tokens_of(d, yr_of(payer))) == 500
     assert await supply(d) == before
     record(line, "pyparity YED exact", {"txid": s.transaction, "assignments": decoded.get("assignments"), "payer": s.payer})
 
@@ -330,6 +379,17 @@ def c_hash_of(open_payload: dict[str, Any]) -> bytes:
     return hash160(script.client_pubkey)
 
 
+def c_yed_address_of(open_payload: dict[str, Any]) -> str:
+    """C's Yellowback address: a TX_PQCHANNEL's client key (the YED channel on the quantum line, D-Q-19), or
+    a P2SH channel's secp256k1 key."""
+    from x402_ycash.channel import parse_pq_channel_script
+
+    pq = parse_pq_channel_script(bytes.fromhex(open_payload["redeemScript"]))
+    if pq is not None:
+        return encode_address(NETWORK, "yedpq", bytes([pq.client.scheme]) + pq.client.hash)
+    return encode_address(NETWORK, "yed", c_hash_of(open_payload))
+
+
 async def remainder_home(d: Devnet, open_payload: dict[str, Any], close_txid: str, want: int) -> dict[str, Any]:
     """YEC: the close pays ``want`` zatoshis to the open's returnAddress, node 0's wallet received
     them there, and no output pays C."""
@@ -348,7 +408,7 @@ async def yed_home(d: Devnet, open_payload: dict[str, Any], close_txid: str, cen
     the client's cents, node 0's YED wallet lists it, and nothing sits at C's Yellowback address."""
     home = open_payload["returnAddress"]
     assert home.startswith("yr")
-    assert await tokens_of(d, encode_address(NETWORK, "yed", c_hash_of(open_payload))) == []
+    assert await tokens_of(d, c_yed_address_of(open_payload)) == []
     held = await tokens_of(d, home)
     assert [(t["txid"], t["vout"], t["cents"]) for t in held] == [(close_txid, 1, cents)]
 
@@ -402,7 +462,7 @@ async def test_ts_batch_client_yed_channel_20_one_cent_requests(devnet: Devnet, 
     before = await supply(d)
     server, scheme, closes = await python_batch_server(d.wallet, tmp_path, max_deposit=100_000_000, max_deposit_cents=10_000,
                                                        usd_asset="YED")
-    pay_to = yr_of(Key())
+    pay_to = await yed_payee(d, await falcon_next(d))
     priced = scheme.parse_price("$0.01", NETWORK)
     assert (priced.amount, priced.asset) == ("1", "YED")
     req = scheme.enhance_payment_requirements(

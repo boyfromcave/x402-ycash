@@ -5,3 +5,4 @@
 export * from "./scheme.js";
 export * from "./sign.js";
 export * from "./script.js";
+export * from "./yedKey.js";

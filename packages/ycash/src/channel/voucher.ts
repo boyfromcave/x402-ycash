@@ -2,7 +2,7 @@
 // (specs/scheme_batch_settlement_ycash.md, "`voucher`", "Spends"). The scriptSig is assembled here
 // because the stock signer cannot sign a non-template script (plan R-8, src/script/sign.cpp:84-86),
 // as atomic swap does (ycash-dd/src/script/atomicswap.cpp:151-185).
-import { pqSign, pqVerify, type PQKeyPair } from "../pq/sign.js";
+import { pqSignDeterministic, pqVerify, type PQKeyPair } from "../pq/sign.js";
 import { parsePQSpend, pqSpendItems, spendMatches, type PQSpend } from "../pq/script.js";
 import { equalBytes } from "../tx/bytes.js";
 import { signInput, sigHashType, verifyInputSig } from "../tx/keys.js";
@@ -39,14 +39,17 @@ export interface BuildVoucherParams {
 }
 
 /**
- * The client's post-quantum signature of a TX_PQCHANNEL spend, hash type ALL appended.
+ * The client's post-quantum signature of a TX_PQCHANNEL spend, hash type ALL appended. Deterministic
+ * ({@link pqSignDeterministic}): a voucher stays a function of the channel, the cumulative and the branch
+ * id, so a client that re-signs after a restart (the CLI between `channel open` and `pay`) sends the same
+ * bytes. The server does not depend on it: it keeps the first of two signings of the same unsigned voucher.
  *
  * @param sighash - The 32-byte sighash.
  * @param key - The client's key pair.
  * @returns The signature ‖ 0x01.
  */
 export function pqSignAll(sighash: Uint8Array, key: PQKeyPair): Uint8Array {
-  const sig = pqSign(key.scheme, key.secretKey, sighash);
+  const sig = pqSignDeterministic(key.scheme, key.secretKey, sighash);
   const out = new Uint8Array(sig.length + 1);
   out.set(sig);
   out[sig.length] = SIGHASH.ALL;

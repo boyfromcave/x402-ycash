@@ -3,6 +3,11 @@
 // (`batch-settlement`), on either node line. Node 0 runs -yellowback: it mints the YED, hosts the
 // facilitator and the channel server. Payments and closes are mined by node 2, a Yellowback pool
 // under the default `strict` template policy. The burning voucher goes through node 1 (stock).
+// Either regime: the default devnet mirrors mainnet (Falcon from the vault activation, D-Q-2), where YED is
+// held by Falcon TX_PQPKH holders only (TOK-PQ): the key-held payer, merchant and channel payees are Falcon
+// keys, @x402/core's payer is node 4's wallet (a key-held LocalKeySigner holds YED at its P2PKH key only),
+// and YED channels are TX_PQCHANNELs with a Falcon client. `X402_NODE_ARGS=-pqfalconheight=<h>` runs the
+// regime before it (P2PKH holders, the LocalKeySigner payer).
 import { x402Client } from "@x402/core/client";
 import { x402Facilitator } from "@x402/core/facilitator";
 import { x402ResourceServer } from "@x402/core/server";
@@ -12,7 +17,7 @@ import { batch, channel, exact, yed, BatchYcashClientScheme, BatchYcashServerSch
 import type { YcashRpc, YedValidation } from "../../src/node/index.js";
 import { InMemorySettlementStore } from "../../src/store/index.js";
 import * as T from "../../src/tx/index.js";
-import { describeDevnet, devnet, record, waitFor, type Devnet } from "./harness.js";
+import { describeDevnet, devnet, falconNext, newYedHolder, record, signHolderInput, waitFor, yedAddressOfScript, yedSendFrom, type Devnet, type YedHolder } from "./harness.js";
 
 /** The next block's branch id (Canopy 19bd2d2f, or Vault 6d5b7a31 past that upgrade), read once the devnet is up. */
 let nextBranch = 0x19bd2d2f;
@@ -25,19 +30,13 @@ const SLACK = 3;
 const URL = { url: "https://merchant.test/yed" };
 
 let d: Devnet;
+/** Falcon applies to the next block (TOK-PQ): YED only at Falcon holders. */
+let falcon = false;
 
-interface Key {
-  priv: Uint8Array;
-  script: Uint8Array;
-  address: string;
-  yr: string;
-}
+type Key = YedHolder;
 
-function newKey(): Key {
-  const priv = T.randomPrivKey();
-  const h = T.hash160(T.pubkeyFromPriv(priv));
-  return { priv, script: T.p2pkhScript(h), address: T.encodeAddress(NET, "p2pkh", h), yr: T.encodeAddress(NET, "yed", h) };
-}
+/** A key-held YED holder: P2PKH before the Falcon height, a Falcon TX_PQPKH from it. */
+const newKey = (): Key => newYedHolder(NET, falcon);
 
 /** Yellowback's circulating supply, cents (yed_getstats, ycash-dd/src/rpc/yellowback.cpp:796). */
 async function supply(): Promise<number> {
@@ -71,19 +70,7 @@ async function ensureYed(cents: number): Promise<void> {
 }
 
 /** yed_send from node 0's wallet, retried while its YED settles into the index; returns the txid. */
-async function yedSend(to: string, cents: number): Promise<string> {
-  let txid = "";
-  await waitFor(async () => {
-    try {
-      txid = await d.wallet.call<string>("yed_send", [to, cents]);
-      return true;
-    } catch {
-      await d.mine(1);
-      return false;
-    }
-  }, { timeoutMs: 60_000, what: "yed_send" });
-  return txid;
-}
+const yedSend = (to: string, cents: number): Promise<string> => yedSendFrom(d, d.wallet, to, cents);
 
 /** Mines one block on the Yellowback pool (node 2, `strict`) and checks it carries `txid`. */
 async function mineOnPool(txid: string): Promise<void> {
@@ -100,6 +87,8 @@ async function mineMany(n: number): Promise<void> {
 describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () => {
   let payer: Key;
   let merchant: Key;
+  /** From the Falcon height: node 4's wallet, @x402/core's payer (its Falcon YED); its first YED address. */
+  let walletPayer: { node: YcashRpc; yr: string } | undefined;
   let facilitatorScheme: exact.ExactYcashFacilitatorScheme;
   let server: x402ResourceServer;
   let stockServer: x402ResourceServer;
@@ -121,7 +110,8 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
 
   const payerClient = () => {
     const source = new exact.RpcUtxoSource(d.wallet, { importAddress: true });
-    const c = new x402Client().register(NET, new exact.ExactYcashScheme(new exact.LocalKeySigner(T.encodeWif(payer.priv, NET), source)));
+    const signer = walletPayer ? new exact.RpcWalletSigner(walletPayer.node) : new exact.LocalKeySigner(T.encodeWif(payer.priv, NET), source);
+    const c = new x402Client().register(NET, new exact.ExactYcashScheme(signer));
     c.setSpendControls({ maxAmountPerPayment: "$50" }); // YED is a default asset: core's USD cap applies
     return c;
   };
@@ -133,22 +123,31 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
 
   /**
    * A payment the SDK would never build: input 0 the payer's token output, input 1 a YEC coin;
-   * outputs payTo, the payer's change output, the TRANSFER of `assignments`, YEC change.
+   * outputs payTo, the payer's change output, the TRANSFER of `assignments`, YEC change. The fee is the
+   * signed transaction's network fee at the node's Yellowback rate (rpcversion 8; a Falcon spend is ~1.6 KB).
    */
   async function handBuilt(token: { txid: string; vout: number; valueZat: number }, assignments: yed.Assignment[]): Promise<string> {
     const fee = (await new exact.RpcUtxoSource(d.wallet).listCoins(payer.address))[0]!;
     const tokenValue = BigInt(token.valueZat);
-    const tx = T.newTx({
-      vin: [token, fee].map((c) => ({ prevout: { txid: c.txid, vout: c.vout }, scriptSig: new Uint8Array(), sequence: T.SEQUENCE_FINAL })),
-      vout: [
-        { value: 10_000n, scriptPubKey: merchant.script },
-        { value: 10_000n, scriptPubKey: payer.script },
-        { value: 0n, scriptPubKey: yed.transferOpReturnScript(assignments) },
-        { value: tokenValue + fee.value - 20_000n - 2_000n, scriptPubKey: payer.script },
-      ],
-      expiryHeight: (await d.tip()) + 10,
-    });
-    return signP2pkh(tx, payer, [tokenValue, fee.value]);
+    const fees = T.networkFeesOf(await d.wallet.yedGetInfo());
+    const expiryHeight = (await d.tip()) + 10;
+    const build = (feeZat: bigint): T.Tx => {
+      const tx = T.newTx({
+        vin: [token, fee].map((c) => ({ prevout: { txid: c.txid, vout: c.vout }, scriptSig: new Uint8Array(), sequence: T.SEQUENCE_FINAL })),
+        vout: [
+          { value: 10_000n, scriptPubKey: merchant.script },
+          { value: 10_000n, scriptPubKey: payer.script },
+          { value: 0n, scriptPubKey: yed.transferOpReturnScript(assignments) },
+          { value: tokenValue + fee.value - 20_000n - feeZat, scriptPubKey: payer.p2pkh },
+        ],
+        expiryHeight,
+      });
+      signHolder(tx, payer, [{ value: tokenValue, spk: payer.script }, { value: fee.value, spk: payer.p2pkh }]);
+      return tx;
+    };
+    const draft = build(2_000n);
+    const need = T.networkFee(draft, "yellowback", fees);
+    return T.serializeTxHex(need > 2_000n ? build(need) : draft);
   }
 
   /** verify → (the resource) → settle, the payment mined by the pool once it reaches its mempool. */
@@ -164,15 +163,31 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
     d = await devnet();
     nextBranch = parseInt((await d.wallet.getBlockchainInfo()).consensus.nextblock, 16) >>> 0;
     expect(d.caps.yellowback).toBe(true);
+    falcon = await falconNext(d);
     await ensureYed(20_000);
     payer = newKey();
     merchant = newKey();
     await d.wallet.call("importaddress", [payer.address, "", false]);
     for (let i = 0; i < 3; i++) await d.fund(payer.address, 1);
-    await yedSend(payer.yr, 5_000);
-    await d.mine(1);
-    await yedSend(payer.yr, 300);
-    await d.mine(1);
+    if (falcon) {
+      // @x402/core's payer is node 4's wallet (Falcon YED); the key-held payer keeps 2,700 for the hand-built cases
+      const node = d.nodes[4] as YcashRpc;
+      walletPayer = { node, yr: await node.call<string>("yed_getnewaddress") };
+      expect(T.decodeAddress(walletPayer.yr, NET)).toMatchObject({ kind: "yedpq", scheme: 2 });
+      await d.fund(await node.getNewAddress(), 1);
+      await d.fund(await node.getNewAddress(), 1);
+      await yedSend(walletPayer.yr, 5_000);
+      await d.mine(1);
+      await yedSend(walletPayer.yr, 300);
+      await d.mine(1);
+      await yedSend(payer.yr, 2_700);
+      await d.mine(1);
+    } else {
+      await yedSend(payer.yr, 5_000);
+      await d.mine(1);
+      await yedSend(payer.yr, 300);
+      await d.mine(1);
+    }
     ({ server } = await stack(d.wallet));
     facilitatorScheme = (await stack(d.wallet)).scheme;
     ({ server: stockServer } = await stack(d.stock));
@@ -183,6 +198,9 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
     const before = await supply();
     const client = payerClient();
     const results: Record<string, unknown> = {};
+    const payerYr = walletPayer?.yr ?? payer.yr;
+    const walletBalance = async () => (await walletPayer!.node.call<{ confirmedCents: number }>("yed_getbalance")).confirmedCents;
+    const walletBefore = walletPayer ? await walletBalance() : 0; // node 4's YED (the suites may run again on one devnet)
     for (const price of ["$1", "$25"]) {
       const req = await requirements(server, price);
       expect(req).toMatchObject({ asset: "YED", amount: price === "$1" ? "100" : "2500", extra: { assetTransferMethod: "transparent", confirmationPolicy: { confirmations: 1 } } });
@@ -190,14 +208,20 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
       const hex = (pl.payload as { transaction: string }).transaction;
       const dec = await d.wallet.yedDecodePayload(hex);
       const r = await settleFlow(pl, req);
-      expect(r.v).toMatchObject({ isValid: true, payer: payer.yr });
-      expect(r.settled).toMatchObject({ success: true, transaction: T.txid(hex), payer: payer.yr, extra: { status: "confirmed", confirmations: 1 } });
+      // node 4's wallet pays from whichever of its outputs it selects (the $25 from the $1's YED change)
+      const expectedPayer = walletPayer ? (price === "$1" ? payerYr : expect.stringMatching(/^yr/)) : payer.yr;
+      expect(r.v).toMatchObject({ isValid: true, payer: expectedPayer });
+      expect(r.settled).toMatchObject({ success: true, transaction: T.txid(hex), payer: expectedPayer, extra: { status: "confirmed", confirmations: 1 } });
+      for (const a of dec.assignments as { vout: number }[]) if (falcon) expect(T.decodeAddress(yedAddressOfScript(NET, T.parseTx(hex).vout[a.vout]!.scriptPubKey), NET)).toMatchObject({ scheme: 2 });
       results[price] = { txid: T.txid(hex), assignments: dec.assignments, opReturnIndex: dec.opReturnIndex };
     }
     await d.syncBlocks();
     expect((await tokensOf(merchant.yr)).map((t) => t.cents).sort((a, b) => a - b)).toEqual([100, 2500]);
     // 5,000 + 300 in; 100 and 2,500 out: the payer keeps 2,700 as YED change
-    expect((await tokensOf(payer.yr)).reduce((s, t) => s + t.cents, 0)).toBe(2_700);
+    if (walletPayer) {
+      // 100 and 2,500 out of node 4's YED; the change stays in its wallet at fresh Falcon addresses
+      await waitFor(async () => (await walletBalance()) === walletBefore - 2_600, { timeoutMs: 30_000, what: "node 4's YED less $26.00" });
+    } else expect((await tokensOf(payer.yr)).reduce((s, t) => s + t.cents, 0)).toBe(2_700);
     expect(await supply()).toBe(before);
     record(d.line, "exact YED", results);
   });
@@ -367,7 +391,7 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
     expect(p.closes).toMatchObject([{ reason: "exhausted", cumulative: 200n }]);
     await mineOnPool(p.closes[0]!.txid!);
     const rec = (await p.client.storage.get(channelId))!;
-    const clientYr = T.encodeAddress(NET, "yed", T.p2pkhHash(T.hexToBytes(rec.clientScript))!);
+    const clientYr = yedAddressOfScript(NET, T.hexToBytes(rec.clientScript));
     expect((await tokensOf(p.payTo.yr)).map((t) => t.cents)).toEqual([200]);
     expect((await tokensOf(clientYr)).map((t) => t.cents)).toEqual([100]);
     await yedHome(p, channelId, p.closes[0]!.txid!, 1, 100);
@@ -385,7 +409,7 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
     const r = await p.server.manager.settle(v, 0n);
     await mineOnPool(r.transaction);
     const rec = (await p.client.storage.get(channelId))!;
-    const clientYr = T.encodeAddress(NET, "yed", T.p2pkhHash(T.hexToBytes(rec.clientScript))!);
+    const clientYr = yedAddressOfScript(NET, T.hexToBytes(rec.clientScript));
     expect((await tokensOf(p.payTo.yr)).map((t) => t.cents)).toEqual([100]);
     expect((await tokensOf(clientYr)).map((t) => t.cents)).toEqual([400]);
     await yedHome(p, channelId, r.transaction, 1, 400);
@@ -404,7 +428,7 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
     const overlay = await d.wallet.yedValidateRawTransaction(hex);
     expect(overlay).toMatchObject({ verdict: "ok", type: "transfer", yedIn: 500, yedOut: 500, burned: 0 });
     await mineOnPool(txid);
-    const clientYr = T.encodeAddress(NET, "yed", T.p2pkhHash(T.hexToBytes(rec.clientScript))!);
+    const clientYr = yedAddressOfScript(NET, T.hexToBytes(rec.clientScript));
     expect(await tokensOf(clientYr)).toMatchObject([{ txid, vout: 1, cents: 500 }]);
     await yedHome(p, channelId, txid, 1, 500);
     expect(await tokensOf(p.payTo.yr)).toEqual([]);
@@ -459,11 +483,8 @@ describeDevnet("YED on a live devnet: exact at ≥ $1 and payment channels", () 
   });
 });
 
-/** Signs every input of `tx` with `k` (P2PKH coins of `values`). */
-function signP2pkh(tx: T.Tx, k: Key, values: bigint[]): string {
-  const pub = T.pubkeyFromPriv(k.priv);
-  values.forEach((v, i) => {
-    tx.vin[i]!.scriptSig = T.p2pkhScriptSig(T.signInput(T.sighashV4(tx, i, k.script, v, T.SIGHASH.ALL, nextBranch), k.priv), pub);
-  });
+/** Signs every input of `tx` with `k`: `coins[i]` is the coin vin[i] spends (its Falcon YED or its P2PKH YEC). */
+function signHolder(tx: T.Tx, k: Key, coins: { value: bigint; spk: Uint8Array }[]): string {
+  coins.forEach((c, i) => signHolderInput(tx, i, k, c.spk, c.value, nextBranch));
   return T.serializeTxHex(tx);
 }

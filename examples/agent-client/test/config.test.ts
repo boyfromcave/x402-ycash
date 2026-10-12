@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { tx } from "x402-ycash-mechanism";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pq, tx } from "x402-ycash-mechanism";
 import { createAgent } from "../src/agent.js";
 import { loadAgentConfig } from "../src/config.js";
 
@@ -18,6 +21,20 @@ describe("loadAgentConfig", () => {
       expect(c.signer.address.startsWith("sm")).toBe(true);
       expect(tx.decodeAddress(c.signer.address, "ycash:regtest").kind).toBe("p2pkh");
     }
+  });
+
+  it("AGENT_YED_KEY / AGENT_YED_KEY_FILE: the WIF signer's Falcon YED key and its 53-character yr… address; a bad seed is refused without echoing it", () => {
+    const seedText = "fn-dsa-512:" + "ab".repeat(48);
+    const c = loadAgentConfig({ ...node, AGENT_WIF: wifRegtest, AGENT_YED_KEY: seedText });
+    if (c.signer.kind !== "wif") throw new Error("wif");
+    expect(c.signer.yedAddress).toBe(pq.yedFalconAddress("ycash:regtest", pq.yedFalconKeyFromSeed(pq.parseYedKeySeed(seedText))));
+    expect(c.signer.yedAddress).toHaveLength(53);
+    const file = join(mkdtempSync(join(tmpdir(), "agent-yedkey-")), "yed.key");
+    writeFileSync(file, seedText + "\n");
+    const f = loadAgentConfig({ ...node, AGENT_WIF: wifRegtest, AGENT_YED_KEY_FILE: file });
+    expect(f.signer.kind === "wif" && f.signer.yedAddress).toBe(c.signer.yedAddress);
+    expect(() => loadAgentConfig({ ...node, AGENT_WIF: wifRegtest, AGENT_YED_KEY: "fn-dsa-512:abcd" })).toThrow(/^AGENT_YED_KEY: .*96 hex/);
+    expect(() => loadAgentConfig({ ...node, AGENT_WIF: wifRegtest, AGENT_YED_KEY: seedText, AGENT_YED_KEY_FILE: file })).toThrow(/not both/);
   });
 
   it("refuses a mainnet WIF on regtest", () => {
