@@ -8,6 +8,8 @@ One channel is several records (packages/ycash/src/batch/server/ledger.ts):
     <id>#inflight   cumulative = 0 when free, else the lock's expiry (ms): one voucher in flight
     <id>#state      cumulative = 0 open, 1 closing, 2 closed
     <id>#close      data.txid = the close transaction
+    <id>#closeBy    cumulative = the next network upgrade's activation height, when it bounds the channel
+                    below t (audit 06/X-1); written at open or by a sweep, only ever lowered
 
 A closed channel's records are retired for ``closed_retention_ms`` and then pruned by the store (plan
 X-F51), so list() and resume() stay as fast as the open channels; an open or closing channel is never
@@ -43,6 +45,9 @@ class LedgerChannel:
     state: int
     voucher_tx: str | None
     close_txid: str | None
+    upgrade_close_by: int | None = None
+    """The next network upgrade's activation height recorded for this channel (``<id>#closeBy``); ``terms``
+    then carries ``closeBy`` = min(the Falcon bound, this)."""
 
 
 class ChannelLedger:
@@ -68,11 +73,16 @@ class ChannelLedger:
         state = await self.store.get(f"{channel_id}#state")
         voucher = await self.store.get(f"{channel_id}@{main.cumulative}") if main.cumulative > 0 else None
         close = await self.store.get(f"{channel_id}#close")
+        upgrade = await self.store.get(f"{channel_id}#closeBy")
         vtx = (voucher.data or {}).get("tx") if voucher else None
         ctx = (close.data or {}).get("txid") if close else None
-        return LedgerChannel(main.data, main.cumulative, charged.cumulative if charged else 0,
+        terms = main.data
+        upgrade_close_by = upgrade.cumulative if upgrade else None
+        if upgrade_close_by is not None and upgrade_close_by < int(terms.get("closeBy", upgrade_close_by + 1)):
+            terms = {**terms, "closeBy": upgrade_close_by}
+        return LedgerChannel(terms, main.cumulative, charged.cumulative if charged else 0,
                              state.cumulative if state else CHANNEL_OPEN,
-                             vtx if isinstance(vtx, str) else None, ctx if isinstance(ctx, str) else None)
+                             vtx if isinstance(vtx, str) else None, ctx if isinstance(ctx, str) else None, upgrade_close_by)
 
     async def open_channel_ids(self) -> list[str]:
         """The ids of every channel still open (main records only: ids carry no ``#`` or ``@``)."""
@@ -128,6 +138,21 @@ class ChannelLedger:
                     await self.store.delete(f"{channel_id}@{stored}")
                 return "stored"
 
+    async def lower_close_by(self, channel_id: str, height: int) -> bool:
+        """Records the next network upgrade's activation height as a bound the channel must be closed below
+        (audit 06/X-1). Only ever lowers it, so a restart keeps the lowest bound seen; True when it changed."""
+        key = f"{channel_id}#closeBy"
+        while True:
+            r = await self.store.get(key)
+            if r is None:
+                if await self.store.open(ChannelRecord(key, height)):
+                    return True
+                continue
+            if r.cumulative <= height:
+                return False
+            if await self.store.compare_and_set_cumulative(key, r.cumulative, height):
+                return True
+
     async def add_charge(self, channel_id: str, charge: int) -> int:
         """Adds a charge to the charged total; returns the new total."""
         key = f"{channel_id}#charged"
@@ -150,7 +175,8 @@ class ChannelLedger:
         if state is not None and state.cumulative != CHANNEL_CLOSED:
             await self.store.compare_and_set_cumulative(f"{channel_id}#state", state.cumulative, CHANNEL_CLOSED)
         main = await self.store.get(channel_id)
-        ids = [channel_id, f"{channel_id}#charged", f"{channel_id}#inflight", f"{channel_id}#state", f"{channel_id}#close"]
+        ids = [channel_id, f"{channel_id}#charged", f"{channel_id}#inflight", f"{channel_id}#state", f"{channel_id}#close",
+               f"{channel_id}#closeBy"]
         if main is not None and main.cumulative > 0:
             ids.append(f"{channel_id}@{main.cumulative}")
         await self.store.retire(ids, (now_ms() if now is None else now) + self._retention)

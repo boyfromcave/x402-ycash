@@ -46,6 +46,7 @@ from ..yed import (
 from .errors import BatchError, BatchSettlementError
 from .return_address import return_script_of
 from .types import BatchTerms, required_depth
+from .upgrade import next_activation_height_of
 
 T = TypeVar("T")
 
@@ -145,6 +146,9 @@ class ChainContext:
     default when the node does not answer ``yed_getinfo``)."""
     network_fees: NetworkFees | None = None
     """The node's network fee rates (``yed_getinfo.params.fees.network``, rpcversion 8), when it reports them."""
+    next_activation_height: int | None = None
+    """The next network-upgrade activation height (the least ``pending`` ``getblockchaininfo.upgrades``
+    height above the tip; audit 06/X-1): every channel must be closed below it. None: none pending."""
 
 
 async def chain_context(chain: ChainView, network: str) -> ChainContext:
@@ -153,7 +157,7 @@ async def chain_context(chain: ChainView, network: str) -> ChainContext:
     if info["chain"] != chain_of_network(network):
         raise BatchSettlementError(BatchError.NETWORK, f"node is on {info['chain']}, not {network}")
     return ChainContext(int(info["blocks"]), int(info["consensus"]["nextblock"], 16), await read_falcon_height(chain, network),
-                        await read_network_fees(chain))
+                        await read_network_fees(chain), next_activation_height_of(info.get("upgrades"), int(info["blocks"])))
 
 
 def decode_tx(hex_tx: str, reason: str) -> Tx:
@@ -184,7 +188,12 @@ class VerifiedOpen:
     already_broadcast: bool
     """The funding output already exists (in the mempool or a block)."""
     close_by: int = 0
-    """The height the channel must be closed below: t, or min(t, F) for a YED channel opened before F."""
+    """The height the channel must be closed below: t, or min(t, F) for a YED channel opened before F,
+    and never past the next network-upgrade activation height (audit 06/X-1)."""
+    falcon_close_by: int = 0
+    """The Falcon part of ``close_by`` alone: t, or min(t, F) (what the ledger's terms record)."""
+    close_bound: str | None = None
+    """Which bound ``close_by`` is when it is below t: ``falcon`` or ``upgrade``."""
 
 
 def min_funding_expiry(tip: int, confirmations: int) -> int:
@@ -248,6 +257,18 @@ async def verify_open(p: dict[str, Any], terms: BatchTerms, chain: ChainView, ct
         if close_by < script.refund_height and ctx.tip >= close_by - terms.close_margin_blocks:
             raise BatchSettlementError(BatchError.REDEEM_SCRIPT, f"opened before the Falcon height {ctx.falcon_height}, the channel would have to "
                                                                  f"close by {close_by - terms.close_margin_blocks}; tip is {ctx.tip}")
+    # The next network upgrade (spec "Network upgrades", audit 06/X-1): every voucher commits to the
+    # branch id current at signing, so the channel is closed below the activation height like below t.
+    falcon_close_by = close_by
+    close_bound = "falcon" if close_by < script.refund_height else None
+    activation = ctx.next_activation_height
+    if activation is not None and activation < close_by:
+        close_by = activation
+        close_bound = "upgrade"
+        if ctx.tip >= close_by - terms.close_margin_blocks:
+            raise BatchSettlementError(BatchError.REDEEM_SCRIPT, f"the next network upgrade activates at {activation}: the channel would have to "
+                                                                 f"close by {close_by - terms.close_margin_blocks}; tip is {ctx.tip}; "
+                                                                 f"open one from height {activation}")
     channel = Channel.from_script(OutPoint(funding_txid, vout), rs, funding.vout[vout].value, terms.close_fee, pay_to_script)
     # 4. the deposit: V − closeFee for YEC; for YED the cents the funding TRANSFER assigns the channel
     deposit = _yed_funding_deposit(funding, vout, channel.value, terms.close_fee) if yed else channel.yec_deposit
@@ -263,7 +284,7 @@ async def verify_open(p: dict[str, Any], terms: BatchTerms, chain: ChainView, ct
     if (not existing or int(existing["confirmations"]) == 0) and funding.expiry_height != 0 and funding.expiry_height < least:
         raise BatchSettlementError(BatchError.FUNDING, f"the funding expires at {funding.expiry_height}, before {least}")
     # A pre-Falcon YED funding must not be able to land at F, where TOK-PQ refuses its channel output.
-    if close_by < script.refund_height and not existing and (funding.expiry_height == 0 or funding.expiry_height >= ctx.falcon_height):
+    if falcon_close_by < script.refund_height and not existing and (funding.expiry_height == 0 or funding.expiry_height >= ctx.falcon_height):
         raise BatchSettlementError(BatchError.FUNDING, f"opened before the Falcon height {ctx.falcon_height}, the funding must expire below it "
                                                        f"(nExpiryHeight {funding.expiry_height})")
     if not existing:
@@ -293,7 +314,8 @@ async def verify_open(p: dict[str, Any], terms: BatchTerms, chain: ChainView, ct
     check_voucher(decode_tx(p["voucher"]["tx"], BatchError.VOUCHER_SHAPE), channel, cumulative, charged=0, amount=terms.amount,
                   deposit=deposit, branch_id=ctx.branch_id, layout=layout_for(terms.asset, deposit), floor=cumulative_floor(terms.asset),
                   return_script=return_script)
-    return VerifiedOpen(channel, channel_id_of(channel.outpoint), funding, funding_txid, deposit, return_script, existing is not None, close_by)
+    return VerifiedOpen(channel, channel_id_of(channel.outpoint), funding, funding_txid, deposit, return_script, existing is not None, close_by,
+                        falcon_close_by, close_bound)
 
 
 def _yed_funding_deposit(funding: Tx, vout: int, value: int, close_fee: int) -> int:

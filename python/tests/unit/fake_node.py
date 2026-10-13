@@ -48,6 +48,7 @@ class FakeNode:
         self.calls: list[str] = []
         self.send_error: RpcError | None = None
         self.unconfirmed_tokens: set[str] = set()  # token outpoints the overlay cannot see yet (X-F14)
+        self.upgrades: dict[str, dict[str, Any]] = {}  # getblockchaininfo.upgrades (a test schedules one)
         self.z_notes: dict[str, list[dict[str, Any]]] = {}  # address -> z_listreceivedbyaddress entries
         self.issued: list[str] = []
         self.network_fees: dict[str, Any] | None = None  # yed_getinfo.params.fees.network (rpcversion 8)
@@ -70,7 +71,8 @@ class FakeNode:
 
     async def get_blockchain_info(self) -> dict[str, Any]:
         self.calls.append("getblockchaininfo")
-        return {"chain": self.chain, "blocks": self.tip, "consensus": {"chaintip": "19bd2d2f", "nextblock": "19bd2d2f"}}
+        return {"chain": self.chain, "blocks": self.tip, "consensus": {"chaintip": "19bd2d2f", "nextblock": "19bd2d2f"},
+                "upgrades": self.upgrades}
 
     async def get_block_count(self) -> int:
         self.calls.append("getblockcount")
