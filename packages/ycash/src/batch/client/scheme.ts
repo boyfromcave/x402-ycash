@@ -26,6 +26,7 @@ import { parseTx, serializeTxHex, txid as txidOf } from "../../tx/tx.js";
 import { BatchError, BatchSettlementError } from "../errors.js";
 import { sendChannelTransaction } from "../relay.js";
 import { returnScriptOf } from "../returnAddress.js";
+import { nextActivationHeightOf } from "../upgrade.js";
 import { parseTerms, type BatchChannelState, type BatchClientPayload, type BatchTerms } from "../types.js";
 import { closeCumulative, cumulativeFloor, layoutFor, minFundingExpiry } from "../verify.js";
 import { channelOfRecord, clientKeysOfRecord, InMemoryClientChannelStorage, offerKeyOf, type ClientChannelRecord, type ClientChannelStorage } from "./channel.js";
@@ -37,7 +38,8 @@ import type { ChannelFunder } from "./funder.js";
  * without it the network's default applies (see `channel/falcon.ts`).
  */
 export interface ClientChain {
-  getBlockchainInfo(): Promise<Pick<BlockchainInfo, "blocks" | "consensus">>;
+  /** `upgrades`, when present, bounds a channel by the next network-upgrade activation height (audit 06/X-1). */
+  getBlockchainInfo(): Promise<Pick<BlockchainInfo, "blocks" | "consensus"> & Partial<Pick<BlockchainInfo, "upgrades">>>;
   getTxOut(txid: string, n: number, includeMempool: boolean): Promise<TxOutInfo | null>;
   sendRawTransaction(hex: string, allowHighFees?: boolean): Promise<string>;
   yedGetInfo?(): Promise<YedInfo>;
@@ -192,11 +194,13 @@ export class BatchYcashScheme implements SchemeNetworkClient {
       rec = undefined;
     }
     const branchId = parseInt(info.consensus.nextblock, 16) >>> 0;
+    // The next network upgrade: a voucher signed now cannot be mined from its activation height on.
+    const activation = nextActivationHeightOf(info.upgrades, info.blocks);
     if (rec) {
       const next = BigInt(rec.charged) + terms.amount;
-      const closeBy = await this.closeByOf(rec);
+      const closeBy = Math.min(await this.closeByOf(rec), activation ?? Infinity);
       if (next > BigInt(rec.deposit) || info.blocks >= closeBy - rec.closeMarginBlocks) {
-        rec.status = "retired"; // the server closes it (exhausted, margin, or the Falcon height); continue on a new channel
+        rec.status = "retired"; // the server closes it (exhausted, margin, the Falcon height or the next upgrade); continue on a new channel
         await this.storage.put(rec);
         rec = undefined;
       } else {
@@ -209,7 +213,7 @@ export class BatchYcashScheme implements SchemeNetworkClient {
         return { x402Version, payload: { ...payload } };
       }
     }
-    return { x402Version, payload: { ...(await this.open(terms, key, info.blocks, branchId)) } };
+    return { x402Version, payload: { ...(await this.open(terms, key, info.blocks, branchId, activation)) } };
   }
 
   /**
@@ -383,10 +387,11 @@ export class BatchYcashScheme implements SchemeNetworkClient {
    * @param offerKey - The offer key the channel is stored under.
    * @param tip - The current tip height.
    * @param branchId - The branch id to sign under.
+   * @param activation - The next network-upgrade activation height, when one is pending: t is chosen below it when it can be.
    * @returns The `open` payload with its first voucher.
    * @throws Error when a cap refuses the offer or there is no return address.
    */
-  private async open(terms: BatchTerms, offerKey: string, tip: number, branchId: number) {
+  private async open(terms: BatchTerms, offerKey: string, tip: number, branchId: number, activation?: number) {
     const yed = terms.asset === ASSET_YED;
     const networkFees = yed ? await readNetworkFees(this.cfg.chain) : undefined;
     const maxCloseFee = this.cfg.maxCloseFee?.[terms.asset] ?? (yed && networkFees ? await this.yedMaxCloseFee(terms.network, tip, networkFees) : DEFAULT_CLIENT_MAX_CLOSE_FEE[terms.asset]);
@@ -400,7 +405,20 @@ export class BatchYcashScheme implements SchemeNetworkClient {
     if (!returnAddress) throw new Error("no return address: set returnAddress, or use a funder that has one (the channel key's remainder would be stranded)");
     const payToScript = addressToScript(terms.payTo, terms.network);
     const returnScript = returnScriptOf(returnAddress, terms.network, terms.asset, payToScript);
-    const refundHeight = tip + terms.minLockBlocks + (this.cfg.lockSlackBlocks ?? 10);
+    let refundHeight = tip + terms.minLockBlocks + (this.cfg.lockSlackBlocks ?? 10);
+    // The next network upgrade (spec "Network upgrades", audit 06/X-1): a client chooses t below the
+    // activation height when the server's minLockBlocks leaves room (one block kept for the server's
+    // tip moving), else the server closes the channel by activation − margin; refused when that is now.
+    if (activation !== undefined && refundHeight >= activation) {
+      if (activation - terms.closeMarginBlocks <= tip + 1) {
+        throw new Error(`the next network upgrade activates at ${activation} (tip ${tip}): a channel opened now would have to close by ${activation - terms.closeMarginBlocks}; open one from height ${activation}`);
+      }
+      if (activation - 1 >= tip + terms.minLockBlocks + 1) {
+        refundHeight = activation - 1;
+      } else {
+        this.cfg.log?.(`warning: t = ${refundHeight} is past the next network upgrade at ${activation}; the server closes this channel by ${activation - terms.closeMarginBlocks}`);
+      }
+    }
     let expiryHeight = tip + TX_EXPIRING_SOON_THRESHOLD + (this.cfg.fundingExpiryBlocks ?? DEFAULT_FUNDING_EXPIRY_BLOCKS);
     // A YED channel opens on the hybrid TX_PQCHANNEL unless configured otherwise (D-Q-19). Its client
     // key follows the node's Falcon height F: Falcon when the funding lands at or after F, SLH-DSA

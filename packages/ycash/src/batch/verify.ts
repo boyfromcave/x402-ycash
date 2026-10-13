@@ -34,6 +34,7 @@ import { hasShielded, parseTx, serializeTxHex, txid as txidOf, type Tx } from ".
 import { BatchError, BatchSettlementError } from "./errors.js";
 import { returnScriptOf } from "./returnAddress.js";
 import { requiredDepth, type BatchOpenPayload, type BatchTerms } from "./types.js";
+import { nextActivationHeightOf } from "./upgrade.js";
 
 /** The node calls verification needs; YcashRpc satisfies it. */
 export interface ChainView {
@@ -205,6 +206,12 @@ export interface ChainContext {
    * default when the node does not answer `yed_getinfo`). Absent: no Falcon rules (YEC callers, old tests).
    */
   falconHeight?: number;
+  /**
+   * The next network-upgrade activation height: the least `getblockchaininfo.upgrades[*].activationheight`
+   * whose status is `pending`, above the tip (audit 06/X-1). Every channel must be closed below it,
+   * since a voucher's signature commits to the branch id current when it was signed. Absent: none pending.
+   */
+  nextActivationHeight?: number;
 }
 
 /**
@@ -220,7 +227,8 @@ export async function chainContext(chain: ChainView, network: YcashNetwork): Pro
   const info = await chain.getBlockchainInfo();
   if (info.chain !== CHAIN_OF[network]) throw new BatchSettlementError(BatchError.NETWORK, `node is on ${info.chain}, not ${network}`);
   const falconHeight = await readFalconHeight(chain as ChainView & FalconHeightSource, network);
-  return { tip: info.blocks, branchId: parseInt(info.consensus.nextblock, 16) >>> 0, falconHeight };
+  const nextActivationHeight = nextActivationHeightOf(info.upgrades, info.blocks);
+  return { tip: info.blocks, branchId: parseInt(info.consensus.nextblock, 16) >>> 0, falconHeight, ...(nextActivationHeight !== undefined ? { nextActivationHeight } : {}) };
 }
 
 /**
@@ -263,8 +271,15 @@ export interface VerifiedOpen {
   returnScript: Uint8Array;
   /** The funding output already exists (in the mempool or a block). */
   alreadyBroadcast: boolean;
-  /** The height the channel must be closed below: t, or min(t, F) for a YED channel opened before the Falcon height. */
+  /**
+   * The height the channel must be closed below: t, or min(t, F) for a YED channel opened before the
+   * Falcon height, and never past the next network-upgrade activation height (audit 06/X-1).
+   */
   closeBy: number;
+  /** The Falcon part of `closeBy` alone: t, or min(t, F) (what the ledger's terms record). */
+  falconCloseBy: number;
+  /** Which bound `closeBy` is when it is below t. */
+  closeBound?: "falcon" | "upgrade";
 }
 
 /**
@@ -346,6 +361,18 @@ export async function verifyOpen(
       throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, `opened before the Falcon height ${falconHeight}, the channel would have to close by ${closeBy - terms.closeMarginBlocks}; tip is ${ctx.tip}`);
     }
   }
+  // The next network upgrade (spec "Network upgrades", audit 06/X-1): every voucher commits to the
+  // branch id current at signing, so the channel is closed below the activation height like below t.
+  const falconCloseBy = closeBy;
+  let closeBound: VerifiedOpen["closeBound"] = closeBy < script.refundHeight ? "falcon" : undefined;
+  const activation = ctx.nextActivationHeight;
+  if (activation !== undefined && activation < closeBy) {
+    closeBy = activation;
+    closeBound = "upgrade";
+    if (ctx.tip >= closeBy - terms.closeMarginBlocks) {
+      throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, `the next network upgrade activates at ${activation}: the channel would have to close by ${closeBy - terms.closeMarginBlocks}; tip is ${ctx.tip}; open one from height ${activation}`);
+    }
+  }
   const channel = channelFromScript({
     outpoint: { txid: fundingTxid, vout: p.vout },
     redeemScript: rs,
@@ -365,7 +392,7 @@ export async function verifyOpen(
     throw new BatchSettlementError(BatchError.FUNDING, `the funding expires at ${fundingTx.expiryHeight}, before ${minFundingExpiry(ctx.tip, terms.confirmations)}`);
   }
   // A pre-Falcon YED funding must not be able to land at F, where TOK-PQ refuses its channel output.
-  if (closeBy < script.refundHeight && !existing && (fundingTx.expiryHeight === 0 || fundingTx.expiryHeight >= falconHeight)) {
+  if (falconCloseBy < script.refundHeight && !existing && (fundingTx.expiryHeight === 0 || fundingTx.expiryHeight >= falconHeight)) {
     throw new BatchSettlementError(BatchError.FUNDING, `opened before the Falcon height ${falconHeight}, the funding must expire below it (nExpiryHeight ${fundingTx.expiryHeight})`);
   }
   if (!existing) {
@@ -396,7 +423,10 @@ export async function verifyOpen(
   checkVoucher(decodeTx(p.voucher.tx, BatchError.VOUCHER_SHAPE), channel, cumulative, {
     charged: 0n, amount: terms.amount, deposit, branchId: ctx.branchId, layout: layoutFor(terms.asset, deposit), floor: cumulativeFloor(terms.asset), returnScript,
   });
-  return { channel, channelId: channelIdOf(channel.outpoint), fundingTx, fundingTxid, deposit, returnScript, alreadyBroadcast: existing !== null, closeBy };
+  return {
+    channel, channelId: channelIdOf(channel.outpoint), fundingTx, fundingTxid, deposit, returnScript, alreadyBroadcast: existing !== null, closeBy, falconCloseBy,
+    ...(closeBound ? { closeBound } : {}),
+  };
 }
 
 /**

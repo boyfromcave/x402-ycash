@@ -1,7 +1,7 @@
 // The lightwalletd adapter over a real gRPC wire (fakeLwd.ts): URL parsing, the client's decoding
 // and error mapping, LwdChain's gettxout and broadcast, and LwdUtxoSource's listings and holds.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { exact, InMemoryCoinReservationStore, SendRawTransactionError, tx as T } from "../../../src/index.js";
+import { batch, exact, InMemoryCoinReservationStore, SendRawTransactionError, tx as T } from "../../../src/index.js";
 import { LwdChain, LwdClient, LwdError, LwdUtxoSource, parseLwdUrl } from "../../../src/lwd/index.js";
 import { startFakeLwd, type FakeLwdState } from "./fakeLwd.js";
 
@@ -162,6 +162,25 @@ describe("LwdChain", () => {
       expect(fake.state.calls.filter((c) => c === "GetChainInfo")).toHaveLength(2);
     } finally {
       delete fake.state.nextBranchId;
+      fake.state.height = 300;
+    }
+  });
+
+  it("GetChainInfo's upgrades reach getBlockchainInfo keyed by branch id (the batch client's next-activation bound, 06/X-1)", async () => {
+    fake.state.height = 302;
+    fake.state.upgrades = [
+      { branchId: "19BD2D2F", name: "Canopy", activationHeight: "1", status: "active" },
+      { branchId: "6d5b7a31", name: "Vault", activationHeight: "400", status: "pending" },
+    ];
+    try {
+      const info = await chain.getBlockchainInfo();
+      expect(info.upgrades).toEqual({
+        "19bd2d2f": { name: "Canopy", activationheight: 1, status: "active" },
+        "6d5b7a31": { name: "Vault", activationheight: 400, status: "pending" },
+      });
+      expect(batch.nextActivationHeightOf(info.upgrades, info.blocks)).toBe(400);
+    } finally {
+      delete fake.state.upgrades;
       fake.state.height = 300;
     }
   });

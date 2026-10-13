@@ -5,6 +5,7 @@ export * from "./types.js";
 export * from "./errors.js";
 export * from "./verify.js";
 export * from "./watcher.js";
+export * from "./upgrade.js";
 export * as client from "./client/index.js";
 export * as server from "./server/index.js";
 export * as facilitator from "./facilitator/index.js";

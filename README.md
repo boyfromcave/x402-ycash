@@ -352,7 +352,7 @@ x402-ycash channel open <url> [--deposit ZAT]    open a channel on the route (pa
 x402-ycash channel status [channelId]            every channel in the store, or one, against the node
 x402-ycash channel close <url> [channelId]       the client's close at the charged total; the server broadcasts it
 x402-ycash channel refund <channelId> [--to A]   the client alone, from the refund height t
-x402-ycash yed-key new <FILE>                    write a new Falcon YED key (mode 0600) and print its address
+x402-ycash yed-key new <FILE>                    write a new Falcon YED key (plaintext, mode 0600) and print its address
 x402-ycash yed-key address                       the YED address of --yed-key-file
 ```
 
@@ -364,6 +364,8 @@ settings come from `X402_DEVNET_JSON`, `X402_RPC_*`, `X402_LWD_URL`, `X402_WIF`,
 `X402_MAX_PAYMENT_ZAT`, `X402_MAX_DEPOSIT_ZAT` (`--max-deposit`, the most one channel may lock;
 default 1 YEC), `X402_MAX_CLOSE_FEE_ZAT` (`--max-close-fee`, the largest server `closeFee` a channel
 may lock; default 5000) and `X402_RESERVATIONS` (`--reservations`, the coin reservation file; default
-`reservations.json` next to the channel store).
+`reservations.json` next to the channel store). The YED key file is a plaintext seed protected only by its
+mode and its host: keep it readable by the agent's service user alone, on an encrypted volume or tmpfs
+([runbook, Keys](docs/mainnet-runbook.md#4-keys)).
 
 MIT licensed.
