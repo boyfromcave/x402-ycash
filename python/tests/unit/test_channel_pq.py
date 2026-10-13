@@ -1,7 +1,7 @@
 # Copyright (c) 2026 The Ycash developers
 # Distributed under the MIT software license.
 """The hybrid TX_PQCHANNEL (quantum spec D-Q-19) in the Python mirror: the template against the node's
-matcher vectors (vectors/pq/yellowback_pq_vectors.json "scripts", ycash-dd @ aa0fd3812), the spends
+matcher vectors (vectors/pq/yellowback_pq_vectors.json "scripts", ycash-dd @ 8af82551b), the spends
 (cooperative close: client PQ chunks + server ECDSA + OP_1; refund: client PQ chunks + OP_0 after t),
 and a YED channel on it through the server's manager and a stateless facilitator."""
 

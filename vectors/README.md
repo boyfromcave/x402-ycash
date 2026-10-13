@@ -6,7 +6,10 @@ TRANSFER payloads and facilitator verdicts, generated against real nodes of both
 
 ## `pq/` (the quantum line)
 
-Copied byte for byte from ycash-dd `upgrade/quantum-vaults` at `aa0fd3812`, never regenerated here:
+Copied byte for byte from the node, never regenerated here: `pq_vectors.json` from ycash-dd
+`upgrade/quantum-vaults` at `aa0fd3812` (unchanged through ycash-dd `upgrade/vault` `8af82551b`),
+`yellowback_pq_vectors.json` from ycash-dd `upgrade/vault` at `8af82551b` (byte-identical to ycash6
+`047b561ac`; sha256 `b4926617…4fb023`):
 
 - `pq_vectors.json` = `src/test/data/pq_vectors.json`: SLH-DSA-SHA2-128s and FN-DSA-512 (PQClean
   padded) keys from 48-byte seeds, signatures over 32-byte sighashes (Falcon with its 88-byte
@@ -21,10 +24,13 @@ Copied byte for byte from ycash-dd `upgrade/quantum-vaults` at `aa0fd3812`, neve
   N key pairs and signatures from the node's C (1,000/1,000 on 2026-10-10).
 - `yellowback_pq_vectors.json` = `src/test/data/yellowback_pq_vectors.json`: its `scripts` are the node's
   `TX_PQCHANNEL` / `TX_PQPKH` matcher differential (type and YED holder per script), which both SDKs'
-  parsers reproduce; its `chain` section is the module's and is not used here.
+  parsers reproduce; its `chain` section is the module's and is not used here (re-pinned at
+  `8af82551b`: only `chain` moved, with the module's golden at `SCHEMA_VERSION` 13 — the CAN-1 cancel
+  refund; `scripts` is unchanged).
 
-`yed/transfer_v3.json` was regenerated from the same tree's test framework: the MINT is payload
-version 4 there (its owner scheme ‖ keyHash), every other type stays version 3 (C-1).
+`yed/transfer_v3.json` is generated from the node tree's test framework (`gen_transfer_v3.py`), last
+at ycash-dd `upgrade/vault` `8af82551b` (identical to the `aa0fd3812` output but for its `source`): the
+MINT is payload version 4 there (its owner scheme ‖ keyHash), every other type stays version 3 (C-1).
 
 ## `sapling/`
 
