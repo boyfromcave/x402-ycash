@@ -7,7 +7,10 @@ export interface WatchedChannel {
   channelId: string;
   refundHeight: number;
   closeMarginBlocks: number;
-  /** The height it must be closed below when earlier than t: the Falcon height for a YED channel opened before it. */
+  /**
+   * The height it must be closed below when earlier than t: the Falcon height for a YED channel opened
+   * before it, or the next network-upgrade activation height (audit 06/X-1).
+   */
   closeBy?: number;
 }
 
@@ -17,7 +20,7 @@ export interface WatchedChannel {
  * @param ch - The channel's heights.
  * @param ch.refundHeight - t.
  * @param ch.closeMarginBlocks - The close margin.
- * @param ch.closeBy - The Falcon height for a YED channel opened before it.
+ * @param ch.closeBy - The Falcon height for a YED channel opened before it, or the next activation height.
  * @returns The margin height.
  */
 export function marginHeightOf(ch: { refundHeight: number; closeMarginBlocks: number; closeBy?: number }): number {

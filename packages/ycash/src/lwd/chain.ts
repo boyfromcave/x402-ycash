@@ -9,7 +9,7 @@ import { pqpkhKeyId } from "../pq/script.js";
 import { bytesToHex, decodeAddress, encodeAddress, encodePQAddress, networkFeesOf, p2pkhHash, parseTx } from "../tx/index.js";
 import type { ChainState } from "../exact/client/signer.js";
 import { LwdError, type LwdClient } from "./client.js";
-import type { YellowbackInfoMsg, YellowbackNetworkRateMsg } from "./types.js";
+import type { YedUpgradeMsg, YellowbackInfoMsg, YellowbackNetworkRateMsg } from "./types.js";
 
 /** The node's GetTxnOutputType names of the kinds addressOf returns. */
 const TYPE_OF: Record<string, string> = { p2pkh: "pubkeyhash", p2sh: "scripthash", pq: "pqpubkeyhash" };
@@ -66,12 +66,26 @@ function yedInfoOf(m: YellowbackInfoMsg): YedInfo {
   };
 }
 
-/** The tip and both consensus branch ids, lowercase hex. */
+/**
+ * GetChainInfo's upgrade list in `getblockchaininfo.upgrades` shape (keyed by lowercase branch id).
+ *
+ * @param list - `YedChainInfo.upgrades`.
+ * @returns The map, or undefined when the server sent none (an older lightwalletd).
+ */
+function upgradesOf(list: YedUpgradeMsg[] | undefined): BlockchainInfo["upgrades"] | undefined {
+  if (!list || list.length === 0) return undefined;
+  const out: BlockchainInfo["upgrades"] = {};
+  for (const u of list) out[u.branchId.toLowerCase()] = { name: u.name, activationheight: Number(u.activationHeight), status: u.status };
+  return out;
+}
+
+/** The tip and both consensus branch ids, lowercase hex; and the node's upgrade list when GetChainInfo carries it. */
 interface Branches {
   chain: string;
   height: number;
   chaintip: string;
   nextblock: string;
+  upgrades?: BlockchainInfo["upgrades"];
 }
 
 /**
@@ -132,13 +146,16 @@ export class LwdChain implements ClientChain {
   }
 
   /**
-   * The fields of `getblockchaininfo` the clients read (chain, blocks, consensus).
+   * The fields of `getblockchaininfo` the clients read (chain, blocks, consensus, and `upgrades` when
+   * the server's GetChainInfo carries them: the batch client bounds a channel by the next activation
+   * height, audit 06/X-1).
    *
-   * @returns Chain name, tip height, and the chaintip and next-block branch ids (both the tip's on a server without GetChainInfo).
+   * @returns Chain name, tip height, and the chaintip and next-block branch ids (both the tip's on a
+   * server without GetChainInfo), with `upgrades` keyed by branch id when known.
    */
-  async getBlockchainInfo(): Promise<Pick<BlockchainInfo, "chain" | "blocks" | "consensus">> {
+  async getBlockchainInfo(): Promise<Pick<BlockchainInfo, "chain" | "blocks" | "consensus"> & Partial<Pick<BlockchainInfo, "upgrades">>> {
     const b = await this.branches();
-    return { chain: b.chain, blocks: b.height, consensus: { chaintip: b.chaintip, nextblock: b.nextblock } };
+    return { chain: b.chain, blocks: b.height, consensus: { chaintip: b.chaintip, nextblock: b.nextblock }, ...(b.upgrades ? { upgrades: b.upgrades } : {}) };
   }
 
   /**
@@ -219,7 +236,11 @@ export class LwdChain implements ClientChain {
     if (!this.noChainInfo) {
       try {
         const c = await this.lwd.getChainInfo();
-        const b = { chain: c.chainName, height: Number(c.blockHeight), chaintip: c.consensusBranchId.toLowerCase(), nextblock: c.nextBlockBranchId.toLowerCase() };
+        const upgrades = upgradesOf(c.upgrades);
+        const b: Branches = {
+          chain: c.chainName, height: Number(c.blockHeight), chaintip: c.consensusBranchId.toLowerCase(), nextblock: c.nextBlockBranchId.toLowerCase(),
+          ...(upgrades ? { upgrades } : {}),
+        };
         this.nextByHeight = b;
         return b;
       } catch (e) {

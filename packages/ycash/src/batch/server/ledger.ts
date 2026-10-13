@@ -8,6 +8,8 @@
 //   <id>#inflight   cumulative = 0 when free, else the lock's expiry (ms): one voucher in flight
 //   <id>#state      cumulative = 0 open, 1 closing, 2 closed
 //   <id>#close      data.txid = the close transaction
+//   <id>#closeBy    cumulative = the next network upgrade's activation height, when it bounds the
+//                   channel below t (audit 06/X-1); written at open or by a sweep, only ever lowered
 //
 // A closed channel's records are retired for `closedRetentionMs` and then pruned by the store
 // (plan X-F51), so list() and resume() stay as fast as the open channels; an open or closing
@@ -42,12 +44,18 @@ export interface ChannelTerms {
   amount: string;
   /** the client's output script in every voucher (hex), from the open's `returnAddress` */
   returnScript?: string;
-  /** the height it must be closed below when earlier than t: the Falcon height for a YED channel opened before it */
+  /**
+   * the height it must be closed below when earlier than t: the Falcon height for a YED channel opened
+   * before it. In a {@link LedgerChannel} read back, also the network-upgrade bound when that is lower.
+   */
   closeBy?: number;
 }
 
 export interface LedgerChannel {
+  /** The terms, with `closeBy` = min(the Falcon bound, the network-upgrade bound) when either is set. */
   terms: ChannelTerms;
+  /** The next network upgrade's activation height recorded for this channel (`<id>#closeBy`), if any. */
+  upgradeCloseBy: number | undefined;
   /** the stored voucher's cumulative (0 before the first) */
   signedCumulative: bigint;
   chargedCumulative: bigint;
@@ -103,14 +111,19 @@ export class ChannelLedger {
   async get(channelId: string): Promise<LedgerChannel | undefined> {
     const main = await this.store.get(channelId);
     if (!main?.data) return undefined;
-    const [charged, state, voucher, close] = await Promise.all([
+    const [charged, state, voucher, close, upgrade] = await Promise.all([
       this.store.get(`${channelId}#charged`),
       this.store.get(`${channelId}#state`),
       main.cumulative > 0n ? this.store.get(`${channelId}@${main.cumulative}`) : undefined,
       this.store.get(`${channelId}#close`),
+      this.store.get(`${channelId}#closeBy`),
     ]);
+    const terms = main.data as unknown as ChannelTerms; // written by open() above
+    const upgradeCloseBy = upgrade ? Number(upgrade.cumulative) : undefined;
+    const closeBy = Math.min(terms.closeBy ?? Infinity, upgradeCloseBy ?? Infinity);
     return {
-      terms: main.data as unknown as ChannelTerms, // written by open() above
+      terms: Number.isFinite(closeBy) ? { ...terms, closeBy } : terms,
+      upgradeCloseBy,
       signedCumulative: main.cumulative,
       chargedCumulative: charged?.cumulative ?? 0n,
       state: state?.cumulative ?? CHANNEL_OPEN,
@@ -198,6 +211,28 @@ export class ChannelLedger {
   }
 
   /**
+   * Records the next network upgrade's activation height as a bound the channel must be closed below
+   * (audit 06/X-1). Only ever lowers it, so a later restart (resume) keeps the lowest bound seen.
+   *
+   * @param channelId - The channel id.
+   * @param height - The activation height.
+   * @returns True when the recorded bound changed.
+   */
+  async lowerCloseBy(channelId: string, height: number): Promise<boolean> {
+    const key = `${channelId}#closeBy`;
+    const h = BigInt(height);
+    for (;;) {
+      const r = await this.store.get(key);
+      if (!r) {
+        if (await this.store.open({ channelId: key, cumulative: h })) return true;
+        continue;
+      }
+      if (r.cumulative <= h) return false;
+      if (await this.store.compareAndSetCumulative(key, r.cumulative, h)) return true;
+    }
+  }
+
+  /**
    * Adds a charge to the charged total, retrying the compare-and-set until it lands.
    *
    * @param channelId - The channel id.
@@ -237,7 +272,7 @@ export class ChannelLedger {
     const state = await this.store.get(`${channelId}#state`);
     if (state && state.cumulative !== CHANNEL_CLOSED) await this.store.compareAndSetCumulative(`${channelId}#state`, state.cumulative, CHANNEL_CLOSED);
     const main = await this.store.get(channelId);
-    const ids = [channelId, `${channelId}#charged`, `${channelId}#inflight`, `${channelId}#state`, `${channelId}#close`];
+    const ids = [channelId, `${channelId}#charged`, `${channelId}#inflight`, `${channelId}#state`, `${channelId}#close`, `${channelId}#closeBy`];
     if (main && main.cumulative > 0n) ids.push(`${channelId}@${main.cumulative}`);
     await this.store.retire(ids, now + this.closedRetentionMs);
   }

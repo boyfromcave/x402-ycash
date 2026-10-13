@@ -23,6 +23,8 @@ export class FakeChain {
   readonly sent: string[] = [];
   /** Make verifyScripts fail every input (a node refusing the scripts). */
   failScripts = false;
+  /** getblockchaininfo.upgrades (settable: a test schedules a network upgrade). */
+  upgrades: BlockchainInfo["upgrades"] = {};
 
   addCoin(txid: string, vout: number, value: bigint, spk: Uint8Array, mempool = false): void {
     this.coins.set(`${txid}:${vout}`, { value, spk, height: mempool ? null : this.tip, spentInMempool: false });
@@ -44,7 +46,7 @@ export class FakeChain {
 
   async getBlockchainInfo(): Promise<BlockchainInfo> {
     const b = this.branchId.toString(16).padStart(8, "0");
-    return { chain: this.chain, blocks: this.tip, headers: this.tip, bestblockhash: "00".repeat(32), consensus: { chaintip: b, nextblock: b }, upgrades: {} };
+    return { chain: this.chain, blocks: this.tip, headers: this.tip, bestblockhash: "00".repeat(32), consensus: { chaintip: b, nextblock: b }, upgrades: this.upgrades };
   }
 
   async getTxOut(txid: string, n: number, includeMempool: boolean): Promise<TxOutInfo | null> {

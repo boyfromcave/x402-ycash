@@ -50,6 +50,8 @@ export interface FakeLwdState {
   nextBranchId?: string;
   /** Leave GetChainInfo out of YellowbackStreamer, as lightwalletd-dd before 0b3448e (UNIMPLEMENTED). */
   noChainInfo?: boolean;
+  /** GetChainInfo's `upgrades` (YedUpgrade messages, int64 as strings); absent: none sent. */
+  upgrades?: { branchId: string; name: string; activationHeight: string; status: string }[];
   /** What GetYellowbackInfo serves (the message, int64s as strings); absent: the method is UNIMPLEMENTED. */
   yellowbackInfo?: object;
   /** GetLightdInfo never answers (deadline tests). */
@@ -106,7 +108,7 @@ export async function startFakeLwd(init: Partial<FakeLwdState> = {}): Promise<{ 
       call.end();
     },
     ...(state.noChainInfo ? {} : {
-      GetChainInfo: unary("GetChainInfo", () => ({ chainName: state.chainName, blockHeight: String(state.height), consensusBranchId: state.branchId, nextBlockBranchId: state.nextBranchId ?? state.branchId })),
+      GetChainInfo: unary("GetChainInfo", () => ({ chainName: state.chainName, blockHeight: String(state.height), consensusBranchId: state.branchId, nextBlockBranchId: state.nextBranchId ?? state.branchId, upgrades: state.upgrades ?? [] })),
     }),
     ...(state.yellowbackInfo === undefined ? {} : {
       GetYellowbackInfo: unary("GetYellowbackInfo", () => state.yellowbackInfo),

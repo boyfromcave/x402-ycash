@@ -26,6 +26,18 @@ export interface YedChainInfoMsg {
   consensusBranchId: string;
   /** getblockchaininfo `consensus.nextblock`, hex: differs from the chaintip's on the block before an upgrade. */
   nextBlockBranchId: string;
+  /** getblockchaininfo `upgrades` as a list (yellowback.proto `YedUpgrade`); empty or absent on an older server. */
+  upgrades?: YedUpgradeMsg[];
+}
+
+/** One network upgrade (yellowback.proto `YedUpgrade`): getblockchaininfo `upgrades[branchId]`. */
+export interface YedUpgradeMsg {
+  branchId: string;
+  name: string;
+  /** int64 as a decimal string */
+  activationHeight: string;
+  /** "active", "pending" or "disabled", as the node reports it */
+  status: string;
 }
 
 /** `GetAddressUtxosReply` (service.proto:133-140); txid in internal (little-endian) byte order. */
