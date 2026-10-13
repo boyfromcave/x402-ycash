@@ -3,7 +3,7 @@
 //
 // The hybrid TX_PQCHANNEL (quantum spec D-Q-19): the template against the node's matcher vectors
 // (vectors/pq/yellowback_pq_vectors.json "scripts" = ycash-dd src/test/data/yellowback_pq_vectors.json
-// at aa0fd3812, reviewer B's differential of MatchPQChannel / the TX_PQPKH Solver match), and the
+// at 8af82551b; its "scripts" unchanged since aa0fd3812, reviewer B's differential of MatchPQChannel / the TX_PQPKH Solver match), and the
 // spends: the cooperative close (client PQ chunks + server ECDSA + OP_1) and the refund (client PQ
 // chunks + OP_0 after t).
 import { readFileSync } from "node:fs";
