@@ -111,6 +111,16 @@ after it. A server MUST therefore close every channel before the activation heig
 network upgrade (it can treat that height like t for its margin), or a client MUST choose t below
 that height. The refund is signed when it is broadcast, so it is unaffected.
 
+The reference server implements the first: the next activation height (the least
+`getblockchaininfo.upgrades[*].activationheight` with status `pending` above the tip; through
+lightwalletd, `GetChainInfo.upgrades`) is a `closeBy` bound beside the Falcon height. It is taken
+at open (an open already inside `activation − closeMarginBlocks` is refused) and re-read at every
+voucher and every watcher sweep, because a height can be set by a later release while channels are
+open; a lower bound is recorded with the channel, so a restarted server keeps it. Inside the
+margin the server refuses vouchers (`invalid_batch_settlement_ycash_channel_closing`) and closes the channel (close reason
+`upgrade`). The reference client chooses t below the next activation height when `minLockBlocks`
+leaves room, retires a channel inside the activation margin, and refuses to open inside it.
+
 The refund is a script branch, not a pre-signed transaction. Nothing depends on a txid before it
 is mined, so transaction malleability does not matter, and the binding needs no CSV.
 
@@ -650,7 +660,7 @@ The core codes apply. Scheme-specific codes:
 | `invalid_batch_settlement_ycash_deposit_too_large` | D above `maxDeposit` |
 | `invalid_batch_settlement_ycash_funding_depth` | the funding transaction has not reached the funding depth |
 | `invalid_batch_settlement_ycash_unknown_channel` | no open channel with that id |
-| `invalid_batch_settlement_ycash_channel_closing` | tip ≥ t − `closeMarginBlocks`, or the channel output is spent |
+| `invalid_batch_settlement_ycash_channel_closing` | tip ≥ min(t, closeBy) − `closeMarginBlocks` (closeBy: the Falcon height or the next network-upgrade activation height, when lower than t), or the channel output is spent |
 | `invalid_batch_settlement_ycash_voucher_shape` | inputs, lock time, expiry or outputs differ from the rules |
 | `invalid_batch_settlement_ycash_cumulative_mismatch` | `cumulative` is below charged + `amount` (corrective 402) |
 | `invalid_batch_settlement_ycash_cumulative_exceeds_deposit` | `cumulative` above D |
@@ -687,7 +697,8 @@ The core codes apply. Scheme-specific codes:
   payload.
 - **Network upgrades.** Vouchers are signed under the current consensus branch id (ZIP-243), so
   a voucher cannot be mined after the next upgrade's activation height. Servers close every
-  channel before it, or clients choose t below it (see [Spends](#spends)).
+  channel before it, or clients choose t below it (see [Spends](#spends); the reference server
+  treats the activation height as a `closeBy` bound re-read every sweep).
 - **Key handling.** Channel keys are SDK keys. They are never imported into a node wallet (whose
   signer cannot spend the channel script anyway).
 
