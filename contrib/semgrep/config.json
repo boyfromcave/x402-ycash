@@ -1,0 +1,103 @@
+{
+  "_comment": "Semgrep scan policy for x402-ycash (contrib/semgrep/README.md). TypeScript/JavaScript packages, the Python bindings, the Rust light client and tools, the Falcon C the Python signer compiles, shell, Dockerfile, workflows.",
+  "semgrep_version": "1.179.0",
+  "rule_sources": [
+    {
+      "name": "semgrep-rules",
+      "repo": "https://github.com/semgrep/semgrep-rules",
+      "commit": "16b9e6d45f10649f6a531ec4838ed9924372c3bc",
+      "license": "Semgrep Rules License v1.0: free, for our own use; fetched at scan time, never copied in, never quoted in PRs",
+      "id_prefix": "",
+      "paths": [
+        "typescript",
+        "javascript",
+        "python",
+        "rust",
+        "c",
+        "bash",
+        "dockerfile",
+        "generic/secrets",
+        "yaml/github-actions"
+      ]
+    },
+    {
+      "name": "trailofbits",
+      "repo": "https://github.com/trailofbits/semgrep-rules",
+      "commit": "31390b3a99c04c81522d1b37c8d1900aa2dd4094",
+      "license": "AGPL-3.0",
+      "id_prefix": "trailofbits.",
+      "paths": [
+        "python",
+        "rs",
+        "generic",
+        "yaml/github-actions"
+      ]
+    }
+  ],
+  "local_rules": "contrib/semgrep/rules",
+  "categories": [
+    "security"
+  ],
+  "exclude_rules": {},
+  "audit_rules": {},
+  "bucket_overrides": [],
+  "non_production_paths": [
+    "**/test/**",
+    "**/tests/**",
+    "**/*.test.ts",
+    "**/*.spec.ts",
+    "light/src/fake_lwd.rs",
+    "examples/**",
+    "tools/**",
+    "scripts/**",
+    "light/scripts/**",
+    "contrib/**",
+    "docs/**",
+    "specs/**",
+    "vectors/**",
+    "*.md"
+  ],
+  "buckets": {
+    "critical": {
+      "sla_days": 7,
+      "color": "b60205",
+      "label": "semgrep:critical"
+    },
+    "high": {
+      "sla_days": 30,
+      "color": "d93f0b",
+      "label": "semgrep:high"
+    },
+    "medium": {
+      "sla_days": 90,
+      "color": "fbca04",
+      "label": "semgrep:medium"
+    },
+    "low": {
+      "sla_days": 180,
+      "color": "0e8a16",
+      "label": "semgrep:low"
+    }
+  },
+  "autofix_rules": [],
+  "autofix_never_paths": [
+    "python/x402_ycash/pq/_falcon_c/**",
+    "packages/ycash/src/pq/**",
+    "python/x402_ycash/pq/**",
+    "packages/ycash/src/tx/**",
+    "python/x402_ycash/tx/**",
+    "packages/ycash/src/shielded/**",
+    "python/x402_ycash/shielded/**",
+    "light/src/**"
+  ],
+  "fail_on": [
+    "critical"
+  ],
+  "base_branch": "upgrade/vault",
+  "branch_prefix": "semgrep/",
+  "pr_labels": [
+    "security",
+    "semgrep"
+  ],
+  "overdue_label": "sla:overdue"
+}

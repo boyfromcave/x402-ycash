@@ -2,6 +2,7 @@
 // CLI, each started from source with tsx in its own package directory (so its tsconfig `paths` read
 // the workspace packages from source, as `npm start` does). Output is JSON lines on stdout.
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -122,7 +123,7 @@ export class SideNode {
     if (!conf) throw new Error(`no node conf in ${devnetDir}/node0`);
     const p2p = (n: number) => Number(/^port=(\d+)$/m.exec(readFileSync(join(devnetDir, `node${n}`, conf), "utf8"))?.[1]);
     mkdirSync(datadir, { recursive: true });
-    this.password = "side-" + Math.random().toString(36).slice(2, 12);
+    this.password = "side-" + randomBytes(8).toString("hex");
     writeFileSync(join(datadir, conf), `regtest=1\nrpcuser=${this.user}\nrpcpassword=${this.password}\nport=${p2pPort}\nrpcport=${rpcPort}\nlistenonion=0\n`);
     this.args = [`-datadir=${datadir}`, ...flags, `-connect=127.0.0.1:${p2p(0)}`, `-connect=127.0.0.1:${p2p(1)}`, "-listen=0", ...extraArgs];
     this.url = `http://127.0.0.1:${rpcPort}`;

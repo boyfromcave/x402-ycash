@@ -1,0 +1,149 @@
+{
+  "_comment": "Accepted Semgrep findings (contrib/semgrep/README.md, 'Fixing or accepting a finding'). findings: fingerprint -> {rule, path, reason, by, date}. rule_paths: [{rule (glob), paths (globs), reason, by, date}]. Every entry needs a reason a reviewer can check.",
+  "findings": {
+    "78181d7454a9c410": {
+      "rule": "x402.payments.route-before-paywall",
+      "path": "examples/merchant-express/src/app.ts",
+      "reason": "GET / is the merchant's free index: it lists the paid routes and whether each is wired, and serves no paid resource. Every paid handler is registered after app.use(paymentMiddleware(...)) (app.ts, the handlers loop).",
+      "by": "secops CI setup",
+      "date": "2026-10-23"
+    },
+    "a2f5dddc3f04a10c": {
+      "rule": "python.lang.security.audit.dangerous-subprocess-use-tainted-env-args",
+      "path": "python/x402_ycash/pq/falcon.py",
+      "reason": "Builds the vendored Falcon C with the C compiler the operator chose ($CC, as every C build honours); an argv list, no shell, the other arguments are this package's own source paths and a mkstemp name.",
+      "by": "secops CI setup",
+      "date": "2026-10-23"
+    },
+    "7294fdf75dd9b22f": {
+      "rule": "python.lang.security.audit.dangerous-subprocess-use-audit",
+      "path": "python/x402_ycash/pq/falcon.py",
+      "reason": "Same call as a2f5dddc3f04a10c: the compiler invocation, an argv list without a shell.",
+      "by": "secops CI setup",
+      "date": "2026-10-23"
+    },
+    "64a96d48adf6c40b": {
+      "rule": "trailofbits.rs.panic-in-function-returning-result",
+      "path": "light/src/rpc.rs",
+      "reason": "serde_json::to_value of the crate's own plain structs (no maps with non-string keys, no custom Serialize) cannot fail.",
+      "by": "secops CI setup",
+      "date": "2026-10-23"
+    },
+    "99d23aeb9b5c6040": {
+      "rule": "trailofbits.rs.panic-in-function-returning-result",
+      "path": "light/src/rpc.rs",
+      "reason": "Response::builder with a constant status and header cannot fail; the body is the reply already built.",
+      "by": "secops CI setup",
+      "date": "2026-10-23"
+    },
+    "eb3344d78458358c": {
+      "rule": "trailofbits.rs.panic-in-function-returning-result",
+      "path": "light/src/spend.rs",
+      "reason": "The transaction was built a few lines earlier with a Sapling bundle (the only kind light/ builds); the expect states that invariant.",
+      "by": "secops CI setup",
+      "date": "2026-10-23"
+    },
+    "801c0ab7e8dbfd4b": {
+      "rule": "trailofbits.rs.panic-in-function-returning-result",
+      "path": "light/src/sync.rs",
+      "reason": "scan_chunk indexes blocks[0] first, and its caller passes only non-empty chunks; blocks.last() is Some.",
+      "by": "secops CI setup",
+      "date": "2026-10-23"
+    },
+    "426b4c292e33cb1f": {
+      "rule": "trailofbits.rs.panic-in-function-returning-result",
+      "path": "light/src/sync.rs",
+      "reason": "Same invariant as 801c0ab7e8dbfd4b: a chunk is never empty.",
+      "by": "secops CI setup",
+      "date": "2026-10-23"
+    }
+  },
+  "rule_paths": [
+    {
+      "rule": "python.sqlalchemy.security.sqlalchemy-execute-raw-query",
+      "paths": [
+        "python/x402_ycash/store.py"
+      ],
+      "reason": "sqlite3, not SQLAlchemy: every value is a ? parameter; the f-strings only splice the class constant _LIVE and a run of '?' placeholders.",
+      "by": "secops CI setup",
+      "date": "2026-10-23"
+    },
+    {
+      "rule": "c.lang.security.insecure-use-memset",
+      "paths": [
+        "python/x402_ycash/pq/_falcon_c/**"
+      ],
+      "reason": "The vendored PQClean falcon-padded-512 code (from the node's src/crypto/pq/falcon): the memsets zero algorithm state (keygen) and signature padding (ycash_falcon_sign.c), not secrets to wipe; kept byte-for-byte with the node copy.",
+      "by": "secops CI setup",
+      "date": "2026-10-23"
+    },
+    {
+      "rule": "python.lang.security.audit.*",
+      "paths": [
+        "tools/x4m/**",
+        "python/tests/**"
+      ],
+      "reason": "Local measurement tools (tools/x4m, run by hand against the operator's own node) and devnet tests: subprocess argv lists and urllib to a URL the operator passes; no shell, no untrusted input.",
+      "by": "secops CI setup",
+      "date": "2026-10-23"
+    },
+    {
+      "rule": "x402.crypto.non-crypto-rng-python",
+      "paths": [
+        "tools/x4m/**"
+      ],
+      "reason": "Picks which mainnet blocks to sample for a size measurement (tools/x4m/mainnet_block_sizes.py); nothing secret.",
+      "by": "secops CI setup",
+      "date": "2026-10-23"
+    },
+    {
+      "rule": "rust.lang.security.args",
+      "paths": [
+        "tools/x4m/rust/**"
+      ],
+      "reason": "Command-line measurement tools: argv is the operator's own input.",
+      "by": "secops CI setup",
+      "date": "2026-10-23"
+    },
+    {
+      "rule": "rust.lang.security.temp-dir",
+      "paths": [
+        "light/src/fake_lwd.rs"
+      ],
+      "reason": "#[cfg(test)] fake lightwalletd: a scratch directory for a unit test.",
+      "by": "secops CI setup",
+      "date": "2026-10-23"
+    },
+    {
+      "rule": "trailofbits.rs.panic-in-function-returning-result",
+      "paths": [
+        "light/src/fake_lwd.rs",
+        "light/tests/**"
+      ],
+      "reason": "Test code (#[cfg(test)] fake lightwalletd, the regtest integration test): a panic is a failed test.",
+      "by": "secops CI setup",
+      "date": "2026-10-23"
+    },
+    {
+      "rule": "javascript.lang.security.html-in-template-string",
+      "paths": [
+        "packages/ycash/test/devnet/**"
+      ],
+      "reason": "A devnet test's console.warn text containing \"<tip + 100 or more>\"; nothing is rendered as HTML.",
+      "by": "secops CI setup",
+      "date": "2026-10-23"
+    },
+    {
+      "rule": "generic.secrets.*",
+      "paths": [
+        "vectors/**",
+        "**/test/**",
+        "**/tests/**",
+        "*.md"
+      ],
+      "reason": "Test vectors, regtest keys and documentation examples, not real secrets. A secret anywhere else is still reported.",
+      "by": "secops CI setup",
+      "date": "2026-10-23"
+    }
+  ]
+}

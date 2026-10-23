@@ -23,5 +23,8 @@
     "eslint-plugin-import": "^2.32.0",
     "eslint-plugin-jsdoc": "^50.8.0",
     "eslint-plugin-sonarjs": "^3.0.7"
+  },
+  "overrides": {
+    "eslint-plugin-sonarjs": { "minimatch": "10.2.6" }
   }
 }
