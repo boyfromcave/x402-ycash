@@ -3,29 +3,9 @@
 # again. secops.yml passes this file with --config, so it applies to every lockfile in the repository.
 # The Rust entries are also in deny.toml (cargo-deny), with the same reasons.
 
-# --- contrib/semgrep/requirements.txt: Semgrep's own hash-locked dependency set, shared verbatim with
-# ycash-dd, ycash6 and librustzcash6 (contrib/semgrep/README.md); it moves there first and is copied here.
-# CI tooling, never an x402-ycash dependency. contrib/secops/ already carries the fixed certifi.
-
-[[IgnoredVulns]]
-id = "GHSA-84m7-p3x7-pcfv"  # mcp 1.29.0
-ignoreUntil = 2026-11-22T00:00:00Z
-reason = "Session-state exhaustion in mcp's Streamable HTTP server. Semgrep's optional MCP server is never started: scan.py runs only `semgrep scan` on the runner, with no listening socket. Bump with the shared semgrep lock."
-
-[[IgnoredVulns]]
-id = "GHSA-xcq7-p3pf-p88h"  # opentelemetry-api 1.37.0
-ignoreUntil = 2026-11-22T00:00:00Z
-reason = "ReDoS in TraceState.from_header on an inbound W3C tracestate header. Semgrep runs with --metrics=off and receives no HTTP requests. Bump with the shared semgrep lock."
-
-[[IgnoredVulns]]
-id = "GHSA-6q48-6c7w-9gw2"  # PYSEC-2026-4320, certifi 2026.7.22 (semgrep lock only)
-ignoreUntil = 2026-11-22T00:00:00Z
-reason = "Distrusted emSign intermediates in certifi's bundle. The semgrep venv makes no TLS connection of its own (no registry, no login, --metrics=off; rule packs come by git with the system CA store). Bump with the shared semgrep lock."
-
-[[IgnoredVulns]]
-id = "PYSEC-2026-4320"  # alias of GHSA-6q48-6c7w-9gw2
-ignoreUntil = 2026-11-22T00:00:00Z
-reason = "Alias of GHSA-6q48-6c7w-9gw2 above (certifi in the shared semgrep lock); same reason."
+# contrib/semgrep/requirements.txt (the shared, hash-locked Semgrep CLI, copied byte-for-byte from
+# ycash-dd) has no open advisory: certifi, mcp and opentelemetry-* are overridden there to fixed
+# versions (contrib/semgrep/security-overrides.txt), so it needs no entry here.
 
 # --- package-lock.json: the test runner (dev dependencies only; `npm audit --omit=dev` is clean). The fixes
 # are in vitest 4 (a major version, a test-suite migration of its own); vite 7.3.7 and minimatch 10.2.6 are
