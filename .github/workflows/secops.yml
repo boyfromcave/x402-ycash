@@ -1,0 +1,232 @@
+name: secops
+
+# Supply-chain and secrets checks (SECURITY-CI.md). One job per leg; each writes SARIF to GitHub code
+# scanning (category = the tool) or a table to the run summary, and never opens a PR or an issue.
+#
+#   zizmor       every workflow and .github/dependabot.yml, default persona; fails on any finding
+#   gitleaks     PR: the PR's own commits, fails on a new leak; push / nightly / dispatch: full history
+#   osv-scanner  every lockfile (package-lock.json, light/ and tools/x4m/rust/ Cargo.lock, the
+#                tools/x4m/lwdprobe go.mod, python/requirements-lock.txt, contrib/**/requirements*.txt);
+#                fails on a known vulnerability not excepted in osv-scanner.toml (reason + ignoreUntil)
+#   npm-audit    the npm workspaces' production dependencies (package-lock.json, `npm ci --ignore-scripts`),
+#                fails at high or critical
+#   pip-audit    the Python bindings' locked dependencies (python/requirements-lock.txt) and the CI tool
+#                locks; fails on any
+#   cargo-deny   advisories, bans, sources for light/ and tools/x4m/rust/ (deny.toml), --locked
+#   semgrep-rules  the local Semgrep rules against their tests (semgrep --test contrib/semgrep/rules)
+#
+# Every tool is installed at an exact version: zizmor, pip-audit and semgrep from hash-locked
+# requirements (contrib/secops/, contrib/semgrep/), gitleaks, osv-scanner and cargo-deny as release
+# binaries checked against the sha256 recorded below; npm is the one setup-node installs.
+# Nightly at 03:43 UTC, off semgrep's 02:17.
+on:
+  pull_request:
+  push:
+    branches: [ upgrade/vault ]
+  schedule:
+    - cron: '43 3 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: secops-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GITLEAKS_VERSION: 8.30.1
+  GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+  OSV_SCANNER_VERSION: 2.6.0
+  OSV_SCANNER_SHA256: ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108
+  CARGO_DENY_VERSION: 0.20.2
+  CARGO_DENY_SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+  NODE_VERSION: 22
+
+jobs:
+  zizmor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install zizmor (hash-locked)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zizmor"
+          "$RUNNER_TEMP/zizmor/bin/pip" install --quiet --disable-pip-version-check --require-hashes --no-deps \
+            -r contrib/secops/requirements-zizmor.txt
+      - name: zizmor
+        env:
+          GH_TOKEN: ${{ github.token }}  # online audits (impostor commits, known-vulnerable actions)
+        run: |
+          rc=0
+          "$RUNNER_TEMP/zizmor/bin/zizmor" --format sarif . > zizmor.sarif || rc=$?
+          { echo '## zizmor'; echo '```'; "$RUNNER_TEMP/zizmor/bin/zizmor" --format plain . 2>&1 || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+      - uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        if: ${{ !cancelled() && hashFiles('zizmor.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        with:
+          sarif_file: zizmor.sarif
+          category: zizmor
+
+  gitleaks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0  # the full history (nightly) or the PR's commits
+          persist-credentials: false
+      - name: Install gitleaks ${{ env.GITLEAKS_VERSION }} (sha256-checked)
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -sSfLo gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
+          tar xzf gitleaks.tgz gitleaks
+      - name: gitleaks (accepted fingerprints in .gitleaksignore)
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          args=(git . --redact --no-banner --exit-code 1 --report-format sarif --report-path gitleaks.sarif)
+          if [ "$EVENT" = pull_request ]; then
+            args+=(--log-opts "$PR_BASE..$PR_HEAD")
+            scope="the PR's commits ($PR_BASE..$PR_HEAD)"
+          else
+            scope="full history"
+          fi
+          rc=0
+          "$RUNNER_TEMP/gitleaks" "${args[@]}" || rc=$?
+          { echo '## gitleaks'; echo "Scope: $scope. Exit $rc (0 = no leak; findings are redacted, see code scanning)."; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+      - uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        if: ${{ !cancelled() && hashFiles('gitleaks.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        with:
+          sarif_file: gitleaks.sarif
+          category: gitleaks
+
+  osv-scanner:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install osv-scanner ${{ env.OSV_SCANNER_VERSION }} (sha256-checked)
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -sSfLo osv-scanner "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SCANNER_SHA256}  osv-scanner" | sha256sum -c -
+          chmod +x osv-scanner
+      - name: osv-scanner (every lockfile; exceptions in osv-scanner.toml)
+        run: |
+          rc=0
+          "$RUNNER_TEMP/osv-scanner" scan source -r --config osv-scanner.toml --format sarif --output-file osv.sarif . || rc=$?
+          { echo '## OSV-Scanner'; echo '```'; "$RUNNER_TEMP/osv-scanner" scan source -r --config osv-scanner.toml --format table . 2>&1 || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+      - uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        if: ${{ !cancelled() && hashFiles('osv.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        with:
+          sarif_file: osv.sarif
+          category: osv-scanner
+
+  pip-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install pip-audit (hash-locked)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/pip-audit"
+          "$RUNNER_TEMP/pip-audit/bin/pip" install --quiet --disable-pip-version-check --require-hashes --no-deps \
+            -r contrib/secops/requirements-pip-audit.txt
+      - name: pip-audit (the Python bindings' locked dependencies and the CI tool locks)
+        run: |
+          rc=0
+          for lock in python/requirements-lock.txt contrib/secops/requirements-zizmor.txt contrib/secops/requirements-pip-audit.txt; do
+            echo "== $lock"
+            "$RUNNER_TEMP/pip-audit/bin/pip-audit" --disable-pip --require-hashes --progress-spinner off \
+              --format markdown -r "$lock" > audit.md || rc=$?
+            cat audit.md
+            { echo "## pip-audit: \`$lock\`"; cat audit.md; echo; } >> "$GITHUB_STEP_SUMMARY"
+          done
+          exit "$rc"
+
+  npm-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # One lockfile: the root package-lock.json covers every npm workspace (package.json "workspaces").
+      - name: npm ci (no install scripts)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: npm audit (production dependencies, high and critical)
+        run: |
+          rc=0
+          npm audit --omit=dev --audit-level=high || rc=$?
+          { echo '## npm audit (--omit=dev, --audit-level=high)'; echo '```'; npm audit --omit=dev 2>&1 || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
+  cargo-deny:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: [light, tools/x4m/rust]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install cargo-deny ${{ env.CARGO_DENY_VERSION }} (sha256-checked)
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -sSfLo cargo-deny.tgz "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          echo "${CARGO_DENY_SHA256}  cargo-deny.tgz" | sha256sum -c -
+          tar xzf cargo-deny.tgz --strip-components=1 "cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl/cargo-deny"
+      - name: cargo deny check advisories bans sources (deny.toml)
+        env:
+          CRATE: ${{ matrix.crate }}
+        run: |
+          "$RUNNER_TEMP/cargo-deny" --locked --manifest-path "$CRATE/Cargo.toml" --config deny.toml check advisories bans sources
+
+  semgrep-rules:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install semgrep (hash-locked, contrib/semgrep/requirements.txt)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/semgrep"
+          "$RUNNER_TEMP/semgrep/bin/pip" install --quiet --disable-pip-version-check --require-hashes --no-deps \
+            -r contrib/semgrep/requirements.txt
+      - name: semgrep --test contrib/semgrep/rules
+        run: |
+          "$RUNNER_TEMP/semgrep/bin/semgrep" --test --metrics=off --disable-version-check contrib/semgrep/rules

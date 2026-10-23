@@ -1,0 +1,31 @@
+# cargo-deny policy for the Rust crates in this repository (SECURITY-CI.md): light/ (the Sapling light
+# client) and tools/x4m/rust/ (the X4-M measurement tools). secops.yml runs
+#   cargo deny --locked --manifest-path <crate>/Cargo.toml check advisories bans sources
+# for each. An advisory is ignored only with a reason a reviewer can check, and is listed in
+# osv-scanner.toml too (the same finding, the other scanner).
+
+[graph]
+all-features = false
+
+[advisories]
+# The RustSec database; yanked crates fail the check too.
+yanked = "deny"
+# (atomic-polyfill, RUSTSEC-2023-0089, is in light/Cargo.lock for a target cargo-deny's graph never builds;
+# OSV-Scanner reads the lock file and excepts it in osv-scanner.toml.)
+ignore = [
+  { id = "RUSTSEC-2026-0009", reason = "time 0.3.37 (stack exhaustion parsing attacker-chosen RFC 2822 dates; fixed in 0.3.47): librustzcash6 @ 4867cf85 pins time-core =0.1.2, so light/ cannot move until librustzcash6 does. light/ parses no RFC 2822 input." },
+  { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 is unmaintained (no fix exists): a build-time proc macro under getset in sapling-crypto, in the local-only tools/x4m/rust measurement tools. An unmaintained notice, no vulnerability." },
+]
+
+[bans]
+# Duplicate versions are normal in the librustzcash graph; not a security finding.
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# The patched librustzcash the Vault upgrade's node line pins (light/Cargo.toml "Pinning").
+allow-git = ["https://github.com/boyfromcave/librustzcash6.git"]

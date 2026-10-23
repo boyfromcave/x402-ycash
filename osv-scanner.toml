@@ -1,0 +1,85 @@
+# OSV-Scanner exceptions (SECURITY-CI.md). Each entry: the advisory, why it does not reach a shipped part of
+# this repository, and an ignoreUntil (effectiveUntil) at most 90 days out, after which it fails the scan
+# again. secops.yml passes this file with --config, so it applies to every lockfile in the repository.
+# The Rust entries are also in deny.toml (cargo-deny), with the same reasons.
+
+# --- contrib/semgrep/requirements.txt: Semgrep's own hash-locked dependency set, shared verbatim with
+# ycash-dd, ycash6 and librustzcash6 (contrib/semgrep/README.md); it moves there first and is copied here.
+# CI tooling, never an x402-ycash dependency. contrib/secops/ already carries the fixed certifi.
+
+[[IgnoredVulns]]
+id = "GHSA-84m7-p3x7-pcfv"  # mcp 1.29.0
+ignoreUntil = 2026-11-22T00:00:00Z
+reason = "Session-state exhaustion in mcp's Streamable HTTP server. Semgrep's optional MCP server is never started: scan.py runs only `semgrep scan` on the runner, with no listening socket. Bump with the shared semgrep lock."
+
+[[IgnoredVulns]]
+id = "GHSA-xcq7-p3pf-p88h"  # opentelemetry-api 1.37.0
+ignoreUntil = 2026-11-22T00:00:00Z
+reason = "ReDoS in TraceState.from_header on an inbound W3C tracestate header. Semgrep runs with --metrics=off and receives no HTTP requests. Bump with the shared semgrep lock."
+
+[[IgnoredVulns]]
+id = "GHSA-6q48-6c7w-9gw2"  # PYSEC-2026-4320, certifi 2026.7.22 (semgrep lock only)
+ignoreUntil = 2026-11-22T00:00:00Z
+reason = "Distrusted emSign intermediates in certifi's bundle. The semgrep venv makes no TLS connection of its own (no registry, no login, --metrics=off; rule packs come by git with the system CA store). Bump with the shared semgrep lock."
+
+[[IgnoredVulns]]
+id = "PYSEC-2026-4320"  # alias of GHSA-6q48-6c7w-9gw2
+ignoreUntil = 2026-11-22T00:00:00Z
+reason = "Alias of GHSA-6q48-6c7w-9gw2 above (certifi in the shared semgrep lock); same reason."
+
+# --- package-lock.json: the test runner (dev dependencies only; `npm audit --omit=dev` is clean). The fixes
+# are in vitest 4 (a major version, a test-suite migration of its own); vite 7.3.7 and minimatch 10.2.6 are
+# fixed in this lock.
+
+[[IgnoredVulns]]
+id = "GHSA-82fw-gwwq-j7x9"  # vitest / @vitest/mocker 3.2.7, fixed in 4.1.11
+ignoreUntil = 2026-12-22T00:00:00Z
+reason = "File read through @vitest/mocker's redirect mock, reachable only through vitest's browser-mode/UI server. This repository runs `vitest run` (no server, no browser mode) on its own test files, in CI and on developer machines; vitest never ships. Fix: move to vitest 4."
+
+[[IgnoredVulns]]
+id = "GHSA-qxg6-89mg-rqv8"  # @vitest/mocker 3.2.7, fixed in 4.1.12
+ignoreUntil = 2026-12-22T00:00:00Z
+reason = "Code injection through unauthenticated manual-mock registration on vitest's dev server, which `vitest run` does not start. Dev-only; fix with vitest 4."
+
+[[IgnoredVulns]]
+id = "GHSA-5gmw-xhrv-c9v3"  # tinypool 1.1.1 (vitest 3's worker pool), fixed in 2.1.1
+ignoreUntil = 2026-12-22T00:00:00Z
+reason = "A prototype-pollution gadget in worker options: it needs an attacker who can already pollute Object.prototype inside the test process. Dev-only (vitest's pool); fix with vitest 4."
+
+[[IgnoredVulns]]
+id = "GHSA-85c8-ppgw-ccpr"  # tinypool 1.1.1, fixed in 2.1.2
+ignoreUntil = 2026-12-22T00:00:00Z
+reason = "Same class as GHSA-5gmw-xhrv-c9v3 (prototype-pollution gadget in run() options). Dev-only; fix with vitest 4."
+
+# --- Rust.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0009"  # time 0.3.37, fixed in 0.3.47 (light/Cargo.lock)
+ignoreUntil = 2027-01-20T00:00:00Z
+reason = "Stack exhaustion parsing attacker-chosen RFC 2822 dates. librustzcash6 @ 4867cf85 pins time-core =0.1.2, so light/ cannot take time 0.3.47 until librustzcash6 moves; light/ parses no RFC 2822 input."
+
+[[IgnoredVulns]]
+id = "GHSA-r6v5-fh4h-64xc"  # alias of RUSTSEC-2026-0009
+ignoreUntil = 2027-01-20T00:00:00Z
+reason = "Alias of RUSTSEC-2026-0009 above; same reason."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2023-0089"  # atomic-polyfill 1.0.3 (light/Cargo.lock), unmaintained, no fix
+ignoreUntil = 2027-01-20T00:00:00Z
+reason = "An unmaintained notice, not a vulnerability: pulled in through heapless 0.7 in the librustzcash6 graph, for a target light/ does not build (cargo-deny's graph never reaches it). Goes when librustzcash6 drops heapless 0.7."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0173"  # proc-macro-error2 2.0.1 (tools/x4m/rust/Cargo.lock), unmaintained, no fix
+ignoreUntil = 2027-01-20T00:00:00Z
+reason = "An unmaintained notice, not a vulnerability: a build-time proc macro under getset in sapling-crypto, in the local-only X4-M measurement tools."
+
+# --- Go: tools/x4m/lwdprobe, a read-only lightwalletd client for the X4-M measurements, built by hand
+# inside the workspace only (go.mod replaces github.com/zcash/lightwalletd with ../../../../lightwalletd-dd).
+# Its gRPC, protobuf and golang.org/x versions are exactly lightwalletd-dd's (the same go.mod lines), so
+# they move with lightwalletd-dd's own security update; nothing here ships or runs in CI.
+
+[[PackageOverrides]]
+ecosystem = "Go"
+ignore = true
+effectiveUntil = 2027-01-20T00:00:00Z
+reason = "tools/x4m/lwdprobe only (the one Go module here): a local measurement tool whose dependency versions mirror lightwalletd-dd's go.mod; fixed when lightwalletd-dd bumps grpc, protobuf and golang.org/x/{net,sys,text}."
