@@ -31,6 +31,13 @@ id = "GHSA-85c8-ppgw-ccpr"  # tinypool 1.1.1, fixed in 2.1.2
 ignoreUntil = 2026-12-22T00:00:00Z
 reason = "Same class as GHSA-5gmw-xhrv-c9v3 (prototype-pollution gadget in run() options). Dev-only; fix with vitest 4."
 
+# --- package-lock.json, production: zod 3 under @x402/core (also in contrib/secops/npm-audit-exceptions.json).
+
+[[IgnoredVulns]]
+id = "GHSA-mrhx-c7xc-m3w5"  # zod 3.25.76, fixed in 4.6.6
+ignoreUntil = 2027-01-20T00:00:00Z
+reason = "zod is @x402/core 2.28.0's own dependency (zod ^3.24.2; no @x402/core on zod 4 yet). The facilitator's untrusted input reaches zod only after express.json's body limit (X402_BODY_LIMIT, 512kb default), which bounds the collections validated. Fix: @x402/core on zod 4."
+
 # --- Rust.
 
 [[IgnoredVulns]]
