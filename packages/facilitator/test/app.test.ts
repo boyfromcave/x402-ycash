@@ -35,7 +35,7 @@ interface Harness {
   shutdown: () => void;
 }
 
-async function start(opts: { apiKey?: string; bodyLimit?: string } = {}): Promise<Harness> {
+async function start(opts: { apiKey?: string; bodyLimit?: string; rateLimit?: { windowMs: number; max: number } } = {}): Promise<Harness> {
   const logs: string[] = [];
   const logger: Logger = createLogger("debug", {}, l => logs.push(l));
   const scheme = new FakeFacilitatorScheme();
@@ -272,6 +272,24 @@ describe("limits and access", () => {
       expect((await fetch(`${h.url}/supported`)).status).toBe(200);
       const client = new HTTPFacilitatorClient({ url: h.url, createAuthHeaders: async () => ({ verify: { Authorization: `Bearer ${key}` } }) });
       await expect(client.verify(paymentPayload(), requirements())).resolves.toMatchObject({ isValid: true });
+    } finally {
+      await new Promise<void>(r => h.server.close(() => r()));
+    }
+  });
+
+  it("rate-limits /verify and /settle per client, bad bearer attempts included, not /supported", async () => {
+    const key = "k".repeat(32);
+    const h = await start({ apiKey: key, rateLimit: { windowMs: 60_000, max: 3 } });
+    try {
+      expect((await post(`${h.url}/verify`, body(), { authorization: "Bearer wrong" })).status).toBe(401);
+      expect((await post(`${h.url}/verify`, body(), { authorization: `Bearer ${key}` })).status).toBe(200);
+      expect((await post(`${h.url}/settle`, body(), { authorization: `Bearer ${key}` })).status).toBe(200);
+      const limited = await post(`${h.url}/settle`, body(), { authorization: `Bearer ${key}` });
+      expect(limited.status).toBe(429);
+      expect(await limited.json()).toEqual({ error: "too many requests" });
+      expect(limited.headers.get("ratelimit-policy")).toMatch(/q=3/);
+      expect((await post(`${h.url}/verify`, body(), { authorization: `Bearer ${key}` })).status).toBe(429);
+      expect((await fetch(`${h.url}/supported`)).status).toBe(200);
     } finally {
       await new Promise<void>(r => h.server.close(() => r()));
     }

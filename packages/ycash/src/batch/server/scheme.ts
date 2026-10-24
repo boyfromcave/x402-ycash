@@ -73,6 +73,19 @@ function centsOf(s: string): string {
   return cents.toString();
 }
 
+/**
+ * Drops a trailing unit ("0.01 YED" → "0.01"), case-insensitively, and the whitespace before it.
+ * A string compare and trimEnd, not `/\s*UNIT$/`: that regex backtracks quadratically on a long run
+ * of spaces, and a price string can come from a route's configuration or a caller.
+ *
+ * @param s - The trimmed price string.
+ * @param units - The three-letter units to strip.
+ * @returns The amount part.
+ */
+function withoutUnit(s: string, units: readonly string[]): string {
+  return units.includes(s.slice(-3).toUpperCase()) ? s.slice(0, -3).trimEnd() : s;
+}
+
 /** A 115-byte channel script stand-in, for the close-fee floor (C, S and t do not change its size). */
 const CLOSE_FLOOR_SCRIPT = new Uint8Array(115);
 const CLOSE_FLOOR_OUTPUTS = [
@@ -193,10 +206,11 @@ export class BatchYcashScheme implements SchemeNetworkServer {
       return { amount: price.amount, asset: price.asset };
     }
     const s = typeof price === "number" ? price.toFixed(8) : price.trim();
-    const yed = /\s*YED$/i.test(s) || (s.startsWith("$") && this.cfg.usdAsset === ASSET_YED) || (/\s*USD$/i.test(s) && this.cfg.usdAsset === ASSET_YED);
-    if (yed) return { amount: centsOf(s.replace(/^\$/, "").replace(/\s*(YED|USD)$/i, "")), asset: ASSET_YED };
+    const unit = s.slice(-3).toUpperCase();
+    const yed = unit === "YED" || (s.startsWith("$") && this.cfg.usdAsset === ASSET_YED) || (unit === "USD" && this.cfg.usdAsset === ASSET_YED);
+    if (yed) return { amount: centsOf(withoutUnit(s.replace(/^\$/, ""), ["YED", "USD"])), asset: ASSET_YED };
     if (s.startsWith("$")) throw new Error("USD prices need a price source; give the price in YEC");
-    return { amount: yecToZat(s.replace(/\s*YEC$/i, "")).toString(), asset: ASSET_YEC };
+    return { amount: yecToZat(withoutUnit(s, ["YEC"])).toString(), asset: ASSET_YEC };
   }
 
   /**

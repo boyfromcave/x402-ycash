@@ -217,7 +217,9 @@ be used, with the same keys in camelCase; the environment wins over the file.
 | `X402_SAPLING_BASE_ADDRESS`, `X402_SAPLING_NOTE_WAIT_MS` | (wallet's), `10000` | The merchant's base Sapling address; how long settle waits for a just-sent note to reach the wallet. |
 | `X402_SAPLING_ISSUER`, `X402_SAPLING_VIEWING_KEY`, `X402_SAPLING_START_INDEX`, `X402_SAPLING_INDEX_FILE` | `node-wallet`, (unset), `1099511627776` (2^40), `x402-ycash-sapling-index.json` | `offline` is the viewing-key setup: addresses are issued from the merchant's `zxview…` key, and the node holds only that key (checked at startup). See docs/mainnet-runbook.md, "Shielded layout". |
 | `X402_SHIELDED_METHODS`, `X402_SAPLING_MAINNET_OK` | `sapling-proof`, (unset) | The shielded methods served, a comma list of `sapling-proof` and `sapling`. `sapling` (the facilitator-submitted method) trial-decrypts the client's transaction with the offline issuer's viewing key, so it needs `X402_SAPLING_ISSUER=offline`; it is refused on `ycash:mainnet` unless `X402_SAPLING_MAINNET_OK=1`, since the spec says not to list it there before the end-to-end proof against the Rust light client exists. `/supported` lists the methods. |
-| `X402_API_KEY` | (unset) | When set, `/verify` and `/settle` require `Authorization: Bearer <key>`. |
+| `X402_API_KEY` | (unset) | When set, `/verify` and `/settle` require `Authorization: Bearer <key>`. Use a random key (`openssl rand -hex 32`): it is a bearer secret, not a password. |
+| `X402_RATE_LIMIT`, `X402_RATE_LIMIT_WINDOW_MS` | `1200`, `60000` | Per client address, at most this many `/verify` + `/settle` requests per window (failed bearer attempts count); then `429`. |
+| `X402_TRUST_PROXY` | `0` | Reverse-proxy hops in front of the facilitator, so the limit applies to the client's address from `X-Forwarded-For`, not the proxy's. Leave `0` when clients connect directly. |
 | `X402_BODY_LIMIT`, `X402_LOG_LEVEL`, `X402_SHUTDOWN_TIMEOUT_MS`, `X402_NODE_WAIT_MS`, `X402_RPC_TIMEOUT_MS` | `512kb`, `info`, `30000`, `60000`, `30000` | |
 
 ### Examples

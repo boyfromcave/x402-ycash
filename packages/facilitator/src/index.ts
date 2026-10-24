@@ -1,6 +1,6 @@
 // x402-ycash-facilitator: a standalone x402 facilitator service for Ycash (spec §7).
 export { createApp, withConfirmationLimits, EXTENSION_RESPONSES_HEADER, type AppOptions, type FacilitatorApp } from "./app.js";
-export { loadConfig, resolveConfig, redactConfig, ConfigError, DEFAULTS, type FacilitatorConfig, type FacilitatorConfigFile, type ConfirmationLimits, type RpcSource, type SaplingProofConfig, type OfflineIssuerConfig, DEFAULT_SAPLING_INDEX_PATH } from "./config.js";
+export { loadConfig, resolveConfig, redactConfig, ConfigError, DEFAULTS, type FacilitatorConfig, type FacilitatorConfigFile, type ConfirmationLimits, type RateLimit, type RpcSource, type SaplingProofConfig, type OfflineIssuerConfig, DEFAULT_SAPLING_INDEX_PATH } from "./config.js";
 export { createLogger, silentLogger, type Logger, type LogLevel } from "./logger.js";
 export { CHAIN_OF_NETWORK, ChainMismatchError, assertChain, assertViewingKeyNode, createRpc, waitForNode, type NodeProbe, type ViewingKeyProbe } from "./node.js";
 export { facilitatorHalf, registerSchemes, type SaplingProofDeps, type SchemeDeps } from "./schemes.js";

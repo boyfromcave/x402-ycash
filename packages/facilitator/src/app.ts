@@ -2,10 +2,11 @@
 // GET /healthz. Generic over the schemes registered on the x402Facilitator it is given.
 import { randomUUID, timingSafeEqual, createHash } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
+import { rateLimit } from "express-rate-limit";
 import type { x402Facilitator } from "@x402/core/facilitator";
 import type { Network, SettleResponse, VerifyResponse } from "@x402/core/types";
 import type { YcashNetwork } from "x402-ycash-mechanism";
-import type { ConfirmationLimits } from "./config.js";
+import { DEFAULTS, type ConfirmationLimits, type RateLimit } from "./config.js";
 import type { Logger } from "./logger.js";
 import { CHAIN_OF_NETWORK, type NodeProbe } from "./node.js";
 import { ERR_INVALID_PAYLOAD, ERR_UNEXPECTED_SETTLE, ERR_UNEXPECTED_VERIFY, validateRequest } from "./validation.js";
@@ -24,6 +25,10 @@ export interface AppOptions {
   logger: Logger;
   bodyLimit?: string;
   apiKey?: string;
+  /** Per-client limit on /verify and /settle (default {@link DEFAULTS}.rateLimit). */
+  rateLimit?: RateLimit;
+  /** Reverse-proxy hops to trust for the client address (express `trust proxy`, default 0). */
+  trustProxy?: number;
 }
 
 export interface FacilitatorApp {
@@ -57,6 +62,9 @@ function sendWithSidechannel(res: Response, status: number, result: VerifyRespon
   res.status(status).json(body);
 }
 
+// The key is compared as a digest only so timingSafeEqual sees equal lengths: nothing is stored or
+// persisted, and the key itself is in this process's memory anyway, so a slow password hash would
+// protect nothing. It is an operator-generated bearer secret (>= 16 characters), not a user password.
 function digest(s: string): Buffer {
   return createHash("sha256").update(s, "utf8").digest();
 }
@@ -66,6 +74,7 @@ export function createApp(opts: AppOptions): FacilitatorApp {
   const app = express();
   app.disable("x-powered-by");
   app.set("etag", false);
+  app.set("trust proxy", opts.trustProxy ?? 0);
 
   let inFlight = 0;
   let shuttingDown = false;
@@ -112,9 +121,22 @@ export function createApp(opts: AppOptions): FacilitatorApp {
     next();
   };
 
+  // Before the guard, so failed bearer-token attempts count too; keyed by req.ip (see trustProxy).
+  const limits = opts.rateLimit ?? DEFAULTS.rateLimit;
+  const limiter = rateLimit({
+    windowMs: limits.windowMs,
+    limit: limits.max,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    handler: (_req, res) => {
+      res.locals.outcome = { reason: "rate_limited" };
+      res.status(429).json({ error: "too many requests" });
+    },
+  });
+
   const json = express.json({ limit: opts.bodyLimit ?? "512kb", strict: true });
 
-  app.post("/verify", guard("verify"), json, async (req, res) => {
+  app.post("/verify", limiter, guard("verify"), json, async (req, res) => {
     const log = res.locals.log as Logger;
     const v = validateRequest(req.body, facilitator.getSupported().kinds);
     if (!v.ok) {
@@ -135,7 +157,7 @@ export function createApp(opts: AppOptions): FacilitatorApp {
     }
   });
 
-  app.post("/settle", guard("settle"), json, async (req, res) => {
+  app.post("/settle", limiter, guard("settle"), json, async (req, res) => {
     const log = res.locals.log as Logger;
     const v = validateRequest(req.body, facilitator.getSupported().kinds);
     if (!v.ok) {

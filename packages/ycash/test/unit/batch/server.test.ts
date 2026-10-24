@@ -301,4 +301,16 @@ describe("requirements", () => {
     expect(await s.server.parsePrice({ amount: "5", asset: "YEC" }, NET)).toEqual({ amount: "5", asset: "YEC" });
     await expect(s.server.parsePrice("$0.01", NET)).rejects.toThrow(/price source/);
   });
+
+  it("parsePrice strips a unit suffix, in linear time on a long run of spaces", async () => {
+    const s = await setup();
+    expect(await s.server.parsePrice("0.0002 YEC", NET)).toEqual({ amount: "20000", asset: "YEC" });
+    expect(await s.server.parsePrice("0.0002yec", NET)).toEqual({ amount: "20000", asset: "YEC" });
+    expect(await s.server.parsePrice("0.25  YED", NET)).toEqual({ amount: "25", asset: "YED" });
+    expect(await s.server.parsePrice("$0.25 yed", NET)).toEqual({ amount: "25", asset: "YED" });
+    const started = performance.now();
+    await expect(s.server.parsePrice("1" + " ".repeat(200_000) + "x", NET)).rejects.toThrow();
+    await expect(s.server.parsePrice("1" + " ".repeat(200_000) + "YEDx", NET)).rejects.toThrow();
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
 });
