@@ -1,0 +1,15 @@
+# gitleaks configuration: the default rules, plus one path allowlist (SECURITY-CI.md).
+#
+# vectors/**/*.json is published golden data: the zcash-test-vectors Sapling note-encryption
+# vectors, regtest transactions decoded by the node (public ephemeral keys and ciphertexts), the
+# x402 ES256K offer/receipt JWS test signatures and PQ key hashes. None of it is a credential; it
+# matches generic-api-key / jwt only by shape, once per commit that touches a vector, which is why
+# fingerprints in .gitleaksignore alone could not keep up. A hit anywhere else is still reported.
+title = "x402-ycash"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "published test vectors (vectors/**/*.json)"
+paths = ['''^vectors/.+\.json$''']

@@ -144,6 +144,15 @@
       "reason": "Test vectors, regtest keys and documentation examples, not real secrets. A secret anywhere else is still reported.",
       "by": "secops CI setup",
       "date": "2026-10-23"
+    },
+    {
+      "rule": "python.lang.security.audit.dangerous-subprocess-use-audit",
+      "paths": [
+        "contrib/secops/**"
+      ],
+      "reason": "contrib/secops/code-scanning-triage.py: gh api argv lists built from constants and the workflow-supplied repository name (no shell); runs only in .github/workflows/code-scanning.yml with that job's own token.",
+      "by": "code-scanning triage",
+      "date": "2026-10-24"
     }
   ]
 }
