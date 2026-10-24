@@ -9,7 +9,7 @@ name: secops
 #                tools/x4m/lwdprobe go.mod, python/requirements-lock.txt, contrib/**/requirements*.txt);
 #                fails on a known vulnerability not excepted in osv-scanner.toml (reason + ignoreUntil)
 #   npm-audit    the npm workspaces' production dependencies (package-lock.json, `npm ci --ignore-scripts`),
-#                fails at high or critical
+#                fails at high or critical not accepted in contrib/secops/npm-audit-exceptions.json
 #   pip-audit    the Python bindings' locked dependencies (python/requirements-lock.txt) and the CI tool
 #                locks; fails on any
 #   cargo-deny   advisories, bans, sources for light/ and tools/x4m/rust/ (deny.toml), --locked
@@ -181,10 +181,12 @@ jobs:
       # One lockfile: the root package-lock.json covers every npm workspace (package.json "workspaces").
       - name: npm ci (no install scripts)
         run: npm ci --ignore-scripts --no-audit --no-fund
+      # High and critical fail unless contrib/secops/npm-audit-exceptions.json accepts the advisory (with
+      # a reason and an until date); npm audit has no per-advisory ignore of its own.
       - name: npm audit (production dependencies, high and critical)
         run: |
           rc=0
-          npm audit --omit=dev --audit-level=high || rc=$?
+          { npm audit --omit=dev --json || true; } | node contrib/secops/npm-audit-gate.mjs contrib/secops/npm-audit-exceptions.json || rc=$?
           { echo '## npm audit (--omit=dev, --audit-level=high)'; echo '```'; npm audit --omit=dev 2>&1 || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           exit "$rc"
 

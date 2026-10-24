@@ -55,7 +55,8 @@ Every exception carries a reason a reviewer can check:
 - **OSV-Scanner**: an `[[IgnoredVulns]]` entry in `osv-scanner.toml` with `reason` and an `ignoreUntil` at
   most 90 days out. Prefer fixing: bump the package in its lock. A Rust advisory goes in `deny.toml` too.
 - **npm audit / pip-audit**: fix it in the lock; an unfixable advisory gets `--ignore-vuln ID` (pip-audit)
-  in `secops.yml` with the reason in a comment.
+  in `secops.yml` with the reason in a comment, or (npm) an entry in `contrib/secops/npm-audit-exceptions.json`
+  with the reason and an `until` at most 90 days out, read by `contrib/secops/npm-audit-gate.mjs`.
 - **gitleaks**: a fingerprint in `.gitleaksignore` with a reason comment, for test vectors and public
   constants only. A real secret is rotated first, then removed. Note that a re-pinned vector file under
   `vectors/` shows up as a new hit (the fingerprint names the commit); add its fingerprints in the same PR.
