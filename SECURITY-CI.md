@@ -12,7 +12,7 @@ and those are capped (below).
 | Semgrep rule tests | `secops.yml` / `semgrep-rules` | PR, push to `upgrade/vault`, nightly 03:43 UTC | a local rule that misses or over-matches its test cases | job log |
 | CodeQL | `codeql.yml` (javascript-typescript, python, rust, c-cpp, actions; `security-extended`, no build) | PR, push to `upgrade/vault`, weekly | none on pre-existing alerts; new ones are annotated on the PR | code scanning (`codeql-<language>`) |
 | zizmor | `secops.yml` / `zizmor` | PR, push, nightly | any finding in a workflow or `dependabot.yml` | run summary, code scanning (`zizmor`) |
-| gitleaks | `secops.yml` / `gitleaks` | PR: the PR's commits; push / nightly / dispatch: full history | any leak not in `.gitleaksignore` | run summary (redacted), code scanning (`gitleaks`) |
+| gitleaks | `secops.yml` / `gitleaks` | PR: the PR's commits; push / nightly / dispatch: full history | any leak not allowlisted (`.gitleaks.toml` paths: `vectors/**/*.json`) or in `.gitleaksignore` | run summary (redacted), code scanning (`gitleaks`) |
 | OSV-Scanner | `secops.yml` / `osv-scanner` | PR, push, nightly | a known vulnerability in any lockfile not excepted in `osv-scanner.toml` | run summary, code scanning (`osv-scanner`) |
 | npm audit | `secops.yml` / `npm-audit` | PR, push, nightly | a **high** or **critical** advisory in the production dependencies (`--omit=dev`) | run summary |
 | pip-audit | `secops.yml` / `pip-audit` | PR, push, nightly | any known vulnerability in `python/requirements-lock.txt` or the CI tool locks | run summary |
@@ -57,9 +57,13 @@ Every exception carries a reason a reviewer can check:
 - **npm audit / pip-audit**: fix it in the lock; an unfixable advisory gets `--ignore-vuln ID` (pip-audit)
   in `secops.yml` with the reason in a comment, or (npm) an entry in `contrib/secops/npm-audit-exceptions.json`
   with the reason and an `until` at most 90 days out, read by `contrib/secops/npm-audit-gate.mjs`.
-- **gitleaks**: a fingerprint in `.gitleaksignore` with a reason comment, for test vectors and public
-  constants only. A real secret is rotated first, then removed. Note that a re-pinned vector file under
-  `vectors/` shows up as a new hit (the fingerprint names the commit); add its fingerprints in the same PR.
+- **gitleaks**: the published test vectors (`vectors/**/*.json`) are allowlisted by path in
+  `.gitleaks.toml` (default rules otherwise); anything else is a fingerprint in `.gitleaksignore` with a
+  reason comment, for public constants only. A real secret is rotated first, then removed.
+- **Code-scanning alerts** (any tool): a false positive, test-only hit or accepted risk is an entry in
+  `contrib/secops/code-scanning-dismissals.json` (tool, rule, path glob, reason, comment);
+  `.github/workflows/code-scanning.yml` dismisses the matching alerts on a push to `upgrade/vault` that
+  changes it, nightly and by hand, and exports what is left. A real finding is fixed, never listed.
 - **zizmor**: fix the workflow; an intended pattern takes an inline `# zizmor: ignore[<audit>]` with the
   reason beside it.
 
