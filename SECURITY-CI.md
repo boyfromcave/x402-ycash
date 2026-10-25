@@ -1,7 +1,7 @@
 # Security CI
 
 x402-ycash signs and verifies payments: the TypeScript mechanism and facilitator, the Python bindings, the
-Rust light client and the Falcon C the Python signer compiles. Three workflows check it, beside `ci.yml`
+Rust light client and the Falcon C the Python signer compiles. Four workflows check it, beside `ci.yml`
 (lint, typecheck, unit tests, the light client, the Python bindings, the facilitator image). The pattern is
 the same in every Yellowback repository. None of them opens an issue; only Semgrep and Dependabot open PRs,
 and those are capped (below).
@@ -14,9 +14,10 @@ and those are capped (below).
 | zizmor | `secops.yml` / `zizmor` | PR, push, nightly | any finding in a workflow or `dependabot.yml` | run summary, code scanning (`zizmor`) |
 | gitleaks | `secops.yml` / `gitleaks` | PR: the PR's commits; push / nightly / dispatch: full history | any leak not allowlisted (`.gitleaks.toml` paths: `vectors/**/*.json`) or in `.gitleaksignore` | run summary (redacted), code scanning (`gitleaks`) |
 | OSV-Scanner | `secops.yml` / `osv-scanner` | PR, push, nightly | a known vulnerability in any lockfile not excepted in `osv-scanner.toml` | run summary, code scanning (`osv-scanner`) |
-| npm audit | `secops.yml` / `npm-audit` | PR, push, nightly | a **high** or **critical** advisory in the production dependencies (`--omit=dev`) | run summary |
+| npm audit | `secops.yml` / `npm-audit` | PR, push, nightly | a **high** or **critical** advisory in the production dependencies (`--omit=dev`) not accepted in `contrib/secops/npm-audit-exceptions.json` (checked by `contrib/secops/npm-audit-gate.mjs`) | run summary |
 | pip-audit | `secops.yml` / `pip-audit` | PR, push, nightly | any known vulnerability in `python/requirements-lock.txt` or the CI tool locks | run summary |
 | cargo-deny | `secops.yml` / `cargo-deny` (light/, tools/x4m/rust) | PR, push, nightly | an advisory, a banned crate or a source outside `deny.toml` | job log |
+| Code-scanning triage | `code-scanning.yml` | push to `upgrade/vault` changing the dismissals file, nightly 03:53 UTC, dispatch (`dry_run`) | none; dismisses alerts listed in `contrib/secops/code-scanning-dismissals.json` | job log, artifact `code-scanning-alerts` |
 | Dependabot | `.github/dependabot.yml` | GitHub's schedule | security updates only, one grouped PR per ecosystem (npm, cargo, pip, docker, github-actions); version updates off | PRs |
 
 ## What is scanned
