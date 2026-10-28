@@ -48,8 +48,11 @@ class FakeNode:
         self.calls: list[str] = []
         self.send_error: RpcError | None = None
         self.unconfirmed_tokens: set[str] = set()  # token outpoints the overlay cannot see yet (X-F14)
+        self.upgrades: dict[str, dict[str, Any]] = {}  # getblockchaininfo.upgrades (a test schedules one)
         self.z_notes: dict[str, list[dict[str, Any]]] = {}  # address -> z_listreceivedbyaddress entries
         self.issued: list[str] = []
+        self.network_fees: dict[str, Any] | None = None  # yed_getinfo.params.fees.network (rpcversion 8)
+        self.allow_high_fees: list[bool] = []  # allowhighfees of every sendrawtransaction
 
     @staticmethod
     def _key(t: str, n: int) -> str:
@@ -68,7 +71,8 @@ class FakeNode:
 
     async def get_blockchain_info(self) -> dict[str, Any]:
         self.calls.append("getblockchaininfo")
-        return {"chain": self.chain, "blocks": self.tip, "consensus": {"chaintip": "19bd2d2f", "nextblock": "19bd2d2f"}}
+        return {"chain": self.chain, "blocks": self.tip, "consensus": {"chaintip": "19bd2d2f", "nextblock": "19bd2d2f"},
+                "upgrades": self.upgrades}
 
     async def get_block_count(self) -> int:
         self.calls.append("getblockcount")
@@ -107,7 +111,14 @@ class FakeNode:
         return None
 
     def _verify(self, hex_tx: str) -> VerifyScriptsResult:
-        from x402_ycash.channel import parse_channel_script, parse_close_script_sig
+        from x402_ycash.channel import (
+            parse_channel_script,
+            parse_close_script_sig,
+            parse_pq_channel_script,
+            parse_pq_close_script_sig,
+        )
+        from x402_ycash.pq import parse_pq_spend, pqpkh_key_id, spend_matches
+        from x402_ycash.pq import verify as pq_verify
         from x402_ycash.tx import p2sh_hash
 
         tx = parse_tx(hex_tx)
@@ -118,6 +129,30 @@ class FakeNode:
             u = self._prevout(self._key(inp.prevout.txid, inp.prevout.vout))
             if not u:
                 err("Input not found or already spent")
+                continue
+            q = parse_pq_channel_script(u[1])
+            if q is not None:  # a TX_PQCHANNEL: client PQ + server ECDSA (OP_1), or the client's PQ refund after t (OP_0)
+                digest = sighash_v4(tx, i, u[1], u[0], SIGHASH_ALL, BRANCH_ID)
+                coop = parse_pq_close_script_sig(inp.script_sig)
+                if coop is not None:
+                    sp, ok = coop.spend, bool(coop.sig_s) and verify_input_sig(coop.sig_s, digest, q.server_pubkey)
+                else:
+                    cs = parse_script(inp.script_sig)
+                    sp = parse_pq_spend(cs[:-1]) if cs and cs[-1].op == 0 else None
+                    ok = sp is not None and tx.lock_time >= q.refund_height and inp.sequence != 0xFFFFFFFF
+                if sp is None or not ok or not spend_matches(sp, q.client) or sp.sig[-1] != SIGHASH_ALL \
+                        or not pq_verify(sp.scheme, sp.pk, sp.sig[:-1], digest):
+                    err("Script evaluated without error but finished with a false/empty top stack element")
+                continue
+            kid = pqpkh_key_id(u[1])
+            if kid is not None:  # TX_PQPKH: the chunked spend by the key the script names
+                sp = parse_pq_spend(parse_script(inp.script_sig))
+                if sp is None or not spend_matches(sp, kid):
+                    err("Operation not valid with the current stack size")
+                    continue
+                digest = sighash_v4(tx, i, u[1], u[0], sp.sig[-1], BRANCH_ID)
+                if not pq_verify(sp.scheme, sp.pk, sp.sig[:-1], digest):
+                    err("Script evaluated without error but finished with a false/empty top stack element")
                 continue
             if p2sh_hash(u[1]) is not None:  # a channel close: both signatures over the redeem script
                 ss = parse_close_script_sig(inp.script_sig)
@@ -141,8 +176,15 @@ class FakeNode:
                 err("Script evaluated without error but finished with a false/empty top stack element")
         return VerifyScriptsResult(not errors, errors)
 
-    async def send_raw_transaction(self, hex_tx: str) -> str:
+    async def yed_get_info(self) -> dict[str, Any]:
+        """rpcversion 8 with params.fees.network when ``network_fees`` is set; else a node without it."""
+        if self.network_fees is None:
+            raise RpcError(-32601, "Method not found", "yed_getinfo")
+        return {"rpcversion": 8, "params": {"fees": {"network": self.network_fees}}}
+
+    async def send_raw_transaction(self, hex_tx: str, allow_high_fees: bool = False) -> str:
         self.calls.append("sendrawtransaction")
+        self.allow_high_fees.append(allow_high_fees)
         if self.send_error is not None:
             e, self.send_error = self.send_error, None
             raise e

@@ -153,8 +153,17 @@ Check: `curl -si http://127.0.0.1:4021/exact/ticker` answers `402` with a `PAYME
 | **Merchant viewing key** (`zxviews…`) | the settlement node (`z_importviewingkey <key> "no"`) and the merchant's and facilitator's env (`MERCHANT_SAPLING_VIEWING_KEY`, `X402_SAPLING_VIEWING_KEY`; never logged), `chmod 600` | handed to a hosted facilitator or a customer (it reveals all revenue at the key) | rotate the revenue key |
 | **Offline issuer index file** (`MERCHANT_SAPLING_INDEX_FILE`) | the merchant's host, backed up with the registry | shared between two keys (it refuses) | safe while the registry survives; with both lost, an address could be reissued |
 | `X402_API_KEY` | facilitator and merchant env | in a URL or logs | rotate both sides |
+| **Falcon YED key seed** (`--yed-key-file` / `X402_YED_KEY_FILE`, `AGENT_YED_KEY_FILE`; written by `x402-ycash yed-key new`) | a **plaintext** file (`fn-dsa-512:<hex seed>`, mode 0600, never overwritten) on the agent's host, owned by the agent's dedicated service user, on an encrypted volume; for an ephemeral agent, on tmpfs | world- or group-readable; in a shared home directory, an image layer, a repository or a backup that is not encrypted | the YED at its address; anyone who reads the file can spend it. Back it up encrypted, like a wallet |
 
 Generate secrets on the host that uses them: `openssl rand -hex 32 > /etc/x402/merchant-channel.key`.
+
+**The Falcon YED key file is plaintext (audit 06/X-2).** `x402-ycash yed-key new FILE` writes the
+48-byte seed as hex, with mode 0600 and without replacing an existing file; nothing encrypts it, so
+its protection is the host's. Run the agent as a dedicated service user that alone can read the
+file, keep the file on an encrypted volume (or, for an agent that lives only as long as its
+container, on tmpfs, with the seed's backup elsewhere), and keep it out of images and repositories.
+Reading the seed from an environment variable or a secret manager instead of a file is a possible
+follow-up; today the file is the only form.
 
 **Shielded layout (the X4-M verdict, `docs/x4m-measurements.md`).** One dedicated Sapling key for
 x402 revenue, separate from treasury. Three places hold three different things:
@@ -310,6 +319,14 @@ After each run:
   floor rule: a remainder under $1.00 goes to the merchant) and nothing burns.
 - **Shielded.** The receipt verifies against the receipt key's public key, and the payment tx shows
   no transparent output to the merchant.
+- **Network upgrades.** A voucher commits to the consensus branch id current when it was signed,
+  so the merchant closes every channel before the next upgrade's activation height (the spec's
+  "Vouchers are bound to the consensus branch id"). The server reads the height from
+  `getblockchaininfo.upgrades` (the least `pending` activation height above the tip) at every open,
+  every voucher and every watcher sweep, and closes from `activation height − closeMarginBlocks`
+  with reason `upgrade` in its log and `onClose`; it refuses an open or a voucher inside that margin
+  (`CHANNEL_CLOSING`, naming the upgrade). Once a release sets a mainnet activation height, expect
+  every open channel to close that many blocks before it; clients open new ones after it.
 
 Record the txids and results in the plan's X6 checklist.
 

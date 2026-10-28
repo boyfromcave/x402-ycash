@@ -38,8 +38,8 @@ describe("client maxDeposit", () => {
 
 // The server also chooses closeFee, which is locked in V and paid to miners at close (plan X-F50).
 describe("client maxCloseFee", () => {
-  it("defaults to 5,000 zatoshis: a closeFee above it is refused before funding anything", async () => {
-    expect(DEFAULT_CLIENT_MAX_CLOSE_FEE).toEqual({ YEC: 5_000n, YED: 5_000n });
+  it("defaults to 5,000 zatoshis for YEC (40,000 for YED's post-quantum close): a closeFee above it is refused before funding anything", async () => {
+    expect(DEFAULT_CLIENT_MAX_CLOSE_FEE).toEqual({ YEC: 5_000n, YED: 40_000n });
     const ok = await setup({ closeFee: 5_000n });
     expect((await ok.pay()).payload.type).toBe("open");
     const s = await setup({ closeFee: 5_001n });

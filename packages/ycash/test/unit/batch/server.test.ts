@@ -256,6 +256,19 @@ describe("ledger", () => {
     expect(await L.claimClose(s.channelId)).toBe(true);
     expect(await L.claimClose(s.channelId)).toBe(false);
   });
+
+  it.each(stores)("over the %s ChannelStore, the same unsigned voucher signed again is stored (the first bytes kept), another is stale", async (_n, make) => {
+    const store = make();
+    const s = await opened(store ? { store } : {});
+    const L = s.server.manager.ledger;
+    const v = (scriptSig: number[], value: bigint): string =>
+      T.serializeTxHex(T.newTx({ vin: [{ prevout: { txid: "11".repeat(32), vout: 0 }, scriptSig: Uint8Array.from(scriptSig), sequence: T.SEQUENCE_FINAL }], vout: [{ value, scriptPubKey: Uint8Array.of(0x51) }], lockTime: 0, expiryHeight: 0 }));
+    const first = v([1, 2, 3], 5000n);
+    expect(await L.storeVoucher(s.channelId, 9000n, first)).toBe("stored");
+    expect(await L.storeVoucher(s.channelId, 9000n, v([4, 5, 6, 7], 5000n))).toBe("stored"); // re-signed: same spend
+    expect((await L.get(s.channelId))?.voucherTx).toBe(first);
+    expect(await L.storeVoucher(s.channelId, 9000n, v([1, 2, 3], 4999n))).toBe("stale"); // another spend
+  });
 });
 
 describe("requirements", () => {
@@ -287,5 +300,17 @@ describe("requirements", () => {
     expect(await s.server.parsePrice(0.00002, NET)).toEqual({ amount: "2000", asset: "YEC" });
     expect(await s.server.parsePrice({ amount: "5", asset: "YEC" }, NET)).toEqual({ amount: "5", asset: "YEC" });
     await expect(s.server.parsePrice("$0.01", NET)).rejects.toThrow(/price source/);
+  });
+
+  it("parsePrice strips a unit suffix, in linear time on a long run of spaces", async () => {
+    const s = await setup();
+    expect(await s.server.parsePrice("0.0002 YEC", NET)).toEqual({ amount: "20000", asset: "YEC" });
+    expect(await s.server.parsePrice("0.0002yec", NET)).toEqual({ amount: "20000", asset: "YEC" });
+    expect(await s.server.parsePrice("0.25  YED", NET)).toEqual({ amount: "25", asset: "YED" });
+    expect(await s.server.parsePrice("$0.25 yed", NET)).toEqual({ amount: "25", asset: "YED" });
+    const started = performance.now();
+    await expect(s.server.parsePrice("1" + " ".repeat(200_000) + "x", NET)).rejects.toThrow();
+    await expect(s.server.parsePrice("1" + " ".repeat(200_000) + "YEDx", NET)).rejects.toThrow();
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 });

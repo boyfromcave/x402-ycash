@@ -17,7 +17,8 @@ from ..constants import (
     YED_MIN_OUTPUT_CENTS,
     is_ycash_network,
 )
-from ..tx import decode_address
+from ..pq import pq_dust_threshold
+from ..tx import decode_address, is_yed_kind
 from .constants import (
     ATM_SAPLING_PROOF,
     ATM_SAPLING_RESERVED,
@@ -98,8 +99,12 @@ def check_transparent_yec_requirements(network: str, asset: str, amount: Any, pa
         return "maxTimeoutSeconds must be a positive integer"
     try:
         # The network comes from the requirements, never from the address (plan X-F1).
-        if decode_address(pay_to, network).kind == "yed":
+        d = decode_address(pay_to, network)
+        if is_yed_kind(d.kind):
             return "a YEC payTo must be a transparent address"
+        # A post-quantum (sq…) payee's output is dust below its own threshold: its spend is ≈ 8 KB (SLH-DSA).
+        if d.scheme is not None and int(amount) < pq_dust_threshold(d.scheme):
+            return f"amount below the post-quantum dust threshold of {pq_dust_threshold(d.scheme)} zatoshis"
     except ValueError as e:
         return f"invalid payTo: {e}"
     return None
@@ -122,8 +127,9 @@ def check_transparent_yed_requirements(network: str, asset: str, amount: Any, pa
     if not is_int(max_timeout_seconds) or max_timeout_seconds <= 0:
         return "maxTimeoutSeconds must be a positive integer"
     try:
-        if decode_address(pay_to, network).kind != "yed":
-            return "a YED payTo must be a Yellowback (ye…/yt…/yr…) address"
+        # either form: a P2PKH holder (35 characters) or a TX_PQPKH holder (53; quantum spec §4)
+        if not is_yed_kind(decode_address(pay_to, network).kind):
+            return "a YED payTo must be a Yellowback (yb…/yt…/yr…) address"
     except ValueError as e:
         return f"invalid payTo: {e}"
     return None

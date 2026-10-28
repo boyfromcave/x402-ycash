@@ -1,0 +1,4 @@
+# gitleaks fingerprints accepted with a reason (SECURITY-CI.md), one per line, each with its reason above it.
+# The published test vectors under vectors/ are allowlisted by path in .gitleaks.toml (triaged 2026-10-23:
+# Sapling note-encryption shared secrets and ephemeral keys, PQ key hashes, x402 JWS test signatures; none
+# is a credential), so the per-commit fingerprints that were listed here for them are gone.

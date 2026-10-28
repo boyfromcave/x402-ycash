@@ -1,0 +1,55 @@
+name: codeql
+
+# CodeQL (SECURITY-CI.md), security-extended suite, no build (build-mode: none) for every language:
+#   javascript-typescript  packages/, examples/, tools/upstream
+#   python                 python/ (the bindings), tools/x4m
+#   rust                   light/ (the Sapling light client), tools/x4m/rust
+#   c-cpp                  python/x402_ycash/pq/_falcon_c (the Falcon signer the Python bindings compile)
+#   actions                .github/workflows
+# Results go to GitHub code scanning only; a PR is not failed for an alert that already exists on the base
+# branch (code scanning shows the new ones on the PR).
+on:
+  pull_request:
+  push:
+    branches: [ upgrade/vault ]
+  schedule:
+    - cron: '29 4 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: codeql-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ javascript-typescript, python, rust, c-cpp, actions ]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-extended
+          # Golden vectors and generated output, not code.
+          config: |
+            paths-ignore:
+              - vectors
+              - tools/x4m/results
+              - '**/node_modules'
+              - '**/dist'
+      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          category: codeql-${{ matrix.language }}

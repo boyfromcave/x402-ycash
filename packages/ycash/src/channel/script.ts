@@ -13,6 +13,7 @@ import { bytesToHex, equalBytes } from "../tx/bytes.js";
 import { hash160 } from "../tx/hash.js";
 import { OP, buildScript, decodeScriptNum, p2shScript, parseScript } from "../tx/script.js";
 import { LOCKTIME_THRESHOLD } from "./constants.js";
+import { isPQChannelScript } from "./pqScript.js";
 
 export interface ChannelScript {
   /** C, the client's compressed public key. */
@@ -109,13 +110,14 @@ export function parseChannelScript(rs: Uint8Array): ChannelScript | null {
 }
 
 /**
- * The funding output's scriptPubKey: `a9 14 <HASH160(redeemScript)> 87`.
+ * The funding output's scriptPubKey: `a9 14 <HASH160(redeemScript)> 87` for the P2SH channel; a
+ * TX_PQCHANNEL is a bare output, so its script is its own scriptPubKey.
  *
- * @param rs - The redeem script.
- * @returns The P2SH scriptPubKey.
+ * @param rs - The channel script (the P2SH redeem script, or the TX_PQCHANNEL script).
+ * @returns The funding output's scriptPubKey.
  */
 export function channelScriptPubKey(rs: Uint8Array): Uint8Array {
-  return p2shScript(hash160(rs));
+  return isPQChannelScript(rs) ? rs.slice() : p2shScript(hash160(rs));
 }
 
 /**

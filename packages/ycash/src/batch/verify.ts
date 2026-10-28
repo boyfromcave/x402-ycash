@@ -1,8 +1,11 @@
 // The stateless verification rules shared by the server and a facilitator
 // (specs/scheme_batch_settlement_ycash.md, "Verification"). State (charged total, stored voucher,
 // in-flight lock) lives in the server's ledger.
-import { channelFromScript, channelIdOf, yecDeposit, type Channel } from "../channel/channel.js";
-import { channelScriptPubKey, parseChannelScript } from "../channel/script.js";
+import { channelFromScript, channelIdOf, channelTermsOf, yecDeposit, type Channel } from "../channel/channel.js";
+import { channelCloseBy, isFalconActiveAt, readFalconHeight, yedHolderProblem, type FalconHeightSource } from "../channel/falcon.js";
+import { parsePQChannelScript } from "../channel/pqScript.js";
+import { SCHEME_FN_DSA_512 } from "../pq/scheme.js";
+import { channelScriptPubKey } from "../channel/script.js";
 import { checkVoucherShape, verifyVoucherSignature } from "../channel/voucher.js";
 import { yecVoucherOutputs, type VoucherLayout } from "../channel/outputs.js";
 import { assignedTo, YED_TRANSFER_VOUT, yedChannelValue, yedVoucherAssignments, yedVoucherLayout } from "../channel/yed.js";
@@ -26,10 +29,12 @@ import { validateTransferAssignments } from "../yed/transfer.js";
 import { addressToScript } from "../tx/address.js";
 import { equalBytes, hexToBytes } from "../tx/bytes.js";
 import { feeFloor, txFee } from "../tx/fee.js";
+import { readNetworkFees } from "../tx/networkFee.js";
 import { hasShielded, parseTx, serializeTxHex, txid as txidOf, type Tx } from "../tx/tx.js";
 import { BatchError, BatchSettlementError } from "./errors.js";
 import { returnScriptOf } from "./returnAddress.js";
 import { requiredDepth, type BatchOpenPayload, type BatchTerms } from "./types.js";
+import { nextActivationHeightOf } from "./upgrade.js";
 
 /** The node calls verification needs; YcashRpc satisfies it. */
 export interface ChainView {
@@ -37,7 +42,9 @@ export interface ChainView {
   getBlockchainInfo(): Promise<BlockchainInfo>;
   getTxOut(txid: string, n: number, includeMempool: boolean): Promise<TxOutInfo | null>;
   verifyScripts(hex: string): Promise<VerifyScriptsResult>;
-  sendRawTransaction(hex: string): Promise<string>;
+  sendRawTransaction(hex: string, allowHighFees?: boolean): Promise<string>;
+  /** `yed_getinfo`, for the network fee cap of a YED funding (rpcversion 8). */
+  yedGetInfo?(): Promise<{ [field: string]: unknown }>;
 }
 
 /** A Yellowback node's view (`-experimentalfeatures -yellowback`): what YED channels need (plan Y-9). */
@@ -189,19 +196,39 @@ export async function overlayDeposit(chain: ChainView, voucherHex: string): Prom
 
 const CHAIN_OF: Record<YcashNetwork, string> = { [YCASH_MAINNET]: "main", [YCASH_TESTNET]: "test", [YCASH_REGTEST]: "regtest" };
 
+/** What verification reads from the node once per request. */
+export interface ChainContext {
+  tip: number;
+  /** The branch id the next block signs under. */
+  branchId: number;
+  /**
+   * The node's Falcon height F (`yed_getinfo.params.pq.falconHeight`, -1 = never; the network's
+   * default when the node does not answer `yed_getinfo`). Absent: no Falcon rules (YEC callers, old tests).
+   */
+  falconHeight?: number;
+  /**
+   * The next network-upgrade activation height: the least `getblockchaininfo.upgrades[*].activationheight`
+   * whose status is `pending`, above the tip (audit 06/X-1). Every channel must be closed below it,
+   * since a voucher's signature commits to the branch id current when it was signed. Absent: none pending.
+   */
+  nextActivationHeight?: number;
+}
+
 /**
  * Checks that the node's chain matches the network and reads the branch id the next block signs
- * under, which every voucher signature commits to.
+ * under, which every voucher signature commits to, and the node's Falcon height.
  *
  * @param chain - The node view.
  * @param network - The network of the requirements.
- * @returns The tip height and the next block's consensus branch id.
+ * @returns The tip height, the next block's consensus branch id and F.
  * @throws BatchSettlementError with `NETWORK` when the node is on another chain.
  */
-export async function chainContext(chain: ChainView, network: YcashNetwork): Promise<{ tip: number; branchId: number }> {
+export async function chainContext(chain: ChainView, network: YcashNetwork): Promise<ChainContext> {
   const info = await chain.getBlockchainInfo();
   if (info.chain !== CHAIN_OF[network]) throw new BatchSettlementError(BatchError.NETWORK, `node is on ${info.chain}, not ${network}`);
-  return { tip: info.blocks, branchId: parseInt(info.consensus.nextblock, 16) >>> 0 };
+  const falconHeight = await readFalconHeight(chain as ChainView & FalconHeightSource, network);
+  const nextActivationHeight = nextActivationHeightOf(info.upgrades, info.blocks);
+  return { tip: info.blocks, branchId: parseInt(info.consensus.nextblock, 16) >>> 0, falconHeight, ...(nextActivationHeight !== undefined ? { nextActivationHeight } : {}) };
 }
 
 /**
@@ -244,6 +271,15 @@ export interface VerifiedOpen {
   returnScript: Uint8Array;
   /** The funding output already exists (in the mempool or a block). */
   alreadyBroadcast: boolean;
+  /**
+   * The height the channel must be closed below: t, or min(t, F) for a YED channel opened before the
+   * Falcon height, and never past the next network-upgrade activation height (audit 06/X-1).
+   */
+  closeBy: number;
+  /** The Falcon part of `closeBy` alone: t, or min(t, F) (what the ledger's terms record). */
+  falconCloseBy: number;
+  /** Which bound `closeBy` is when it is below t. */
+  closeBound?: "falcon" | "upgrade";
 }
 
 /**
@@ -277,14 +313,15 @@ export async function verifyOpen(
   p: BatchOpenPayload,
   terms: BatchTerms,
   chain: ChainView,
-  ctx: { tip: number; branchId: number },
+  ctx: ChainContext,
 ): Promise<VerifiedOpen> {
   const yed = terms.asset === ASSET_YED;
   if (yed) yedChain(chain);
-  // 2. the redeem script
+  // 2. the channel script: the P2SH redeem script, or (YED only) the bare TX_PQCHANNEL (D-Q-19)
   const rs = hexToBytes(p.redeemScript);
-  const script = parseChannelScript(rs);
+  const script = channelTermsOf(rs);
   if (!script) throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, "not the channel script");
+  if (script.template === "pq" && !yed) throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, "a YEC channel uses the P2SH channel script");
   if (!equalBytes(script.serverPubKey, terms.serverPubKey)) throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, "S is not extra.serverPubKey");
   if (script.refundHeight < ctx.tip + terms.minLockBlocks) {
     throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, `t = ${script.refundHeight} is below tip + minLockBlocks = ${ctx.tip + terms.minLockBlocks}`);
@@ -301,6 +338,41 @@ export async function verifyOpen(
   const fundingTxid = txidOf(fundingTx);
   const payToScript = addressToScript(terms.payTo, terms.network);
   const returnScript = returnScriptOf(p.returnAddress, terms.network, terms.asset, payToScript);
+  // The Falcon height F (quantum spec TOK-PQ, A-1): from F a YED channel is a TX_PQCHANNEL with a
+  // Falcon client and every voucher output receiving YED a Falcon TX_PQPKH; before F, no scheme-2
+  // output relays, and the channel must be funded and closed below F.
+  const falconHeight = ctx.falconHeight ?? -1;
+  let closeBy = script.refundHeight;
+  if (yed) {
+    const falconActive = isFalconActiveAt(falconHeight, ctx.tip + 1);
+    const pqClient = script.template === "pq" ? parsePQChannelScript(rs)?.client : undefined;
+    if (falconActive && pqClient?.scheme !== SCHEME_FN_DSA_512) {
+      throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, `from the Falcon height ${falconHeight} a YED channel is a TX_PQCHANNEL with a Falcon (scheme-2) client (TOK-PQ)`);
+    }
+    if (!falconActive && pqClient?.scheme === SCHEME_FN_DSA_512) {
+      throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, "a Falcon client before the Falcon height (the node's policy refuses a scheme-2 output)");
+    }
+    const returnProblem = yedHolderProblem(returnScript, falconActive);
+    if (returnProblem) throw new BatchSettlementError(BatchError.RETURN_ADDRESS, returnProblem);
+    const payToProblem = yedHolderProblem(payToScript, falconActive);
+    if (payToProblem) throw new BatchSettlementError(BatchError.REQUIREMENTS, `payTo: ${payToProblem}`);
+    closeBy = channelCloseBy(terms.asset, { template: script.template, refundHeight: script.refundHeight, ...(pqClient ? { client: pqClient } : {}) }, falconHeight);
+    if (closeBy < script.refundHeight && ctx.tip >= closeBy - terms.closeMarginBlocks) {
+      throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, `opened before the Falcon height ${falconHeight}, the channel would have to close by ${closeBy - terms.closeMarginBlocks}; tip is ${ctx.tip}`);
+    }
+  }
+  // The next network upgrade (spec "Network upgrades", audit 06/X-1): every voucher commits to the
+  // branch id current at signing, so the channel is closed below the activation height like below t.
+  const falconCloseBy = closeBy;
+  let closeBound: VerifiedOpen["closeBound"] = closeBy < script.refundHeight ? "falcon" : undefined;
+  const activation = ctx.nextActivationHeight;
+  if (activation !== undefined && activation < closeBy) {
+    closeBy = activation;
+    closeBound = "upgrade";
+    if (ctx.tip >= closeBy - terms.closeMarginBlocks) {
+      throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, `the next network upgrade activates at ${activation}: the channel would have to close by ${closeBy - terms.closeMarginBlocks}; tip is ${ctx.tip}; open one from height ${activation}`);
+    }
+  }
   const channel = channelFromScript({
     outpoint: { txid: fundingTxid, vout: p.vout },
     redeemScript: rs,
@@ -319,6 +391,10 @@ export async function verifyOpen(
   if ((!existing || existing.confirmations === 0) && fundingTx.expiryHeight !== 0 && fundingTx.expiryHeight < minFundingExpiry(ctx.tip, terms.confirmations)) {
     throw new BatchSettlementError(BatchError.FUNDING, `the funding expires at ${fundingTx.expiryHeight}, before ${minFundingExpiry(ctx.tip, terms.confirmations)}`);
   }
+  // A pre-Falcon YED funding must not be able to land at F, where TOK-PQ refuses its channel output.
+  if (falconCloseBy < script.refundHeight && !existing && (fundingTx.expiryHeight === 0 || fundingTx.expiryHeight >= falconHeight)) {
+    throw new BatchSettlementError(BatchError.FUNDING, `opened before the Falcon height ${falconHeight}, the funding must expire below it (nExpiryHeight ${fundingTx.expiryHeight})`);
+  }
   if (!existing) {
     const values: bigint[] = [];
     for (const i of fundingTx.vin) {
@@ -328,6 +404,14 @@ export async function verifyOpen(
     }
     const fee = txFee(fundingTx, values);
     if (fee < feeFloor(fundingTx)) throw new BatchSettlementError(BatchError.FUNDING, `fee ${fee} is below the floor ${feeFloor(fundingTx)}`);
+    // A YED funding pays the Yellowback rate (rpcversion 8) and may be relayed past -maxtxfee
+    // (relay.ts), so it is held to the node's PQ/Yellowback cap here.
+    if (yed) {
+      const fees = await readNetworkFees(chain);
+      if (fees && fee > fees.yellowbackMaxTxFeeZat) {
+        throw new BatchSettlementError(BatchError.FUNDING, `fee ${fee} is above the node's Yellowback fee cap ${fees.yellowbackMaxTxFeeZat}`);
+      }
+    }
     const scripts = await chain.verifyScripts(p.fundingTx);
     if (!scripts.complete || scripts.errors.length > 0) throw new BatchSettlementError(BatchError.FUNDING, "the funding scripts do not verify");
   }
@@ -339,7 +423,10 @@ export async function verifyOpen(
   checkVoucher(decodeTx(p.voucher.tx, BatchError.VOUCHER_SHAPE), channel, cumulative, {
     charged: 0n, amount: terms.amount, deposit, branchId: ctx.branchId, layout: layoutFor(terms.asset, deposit), floor: cumulativeFloor(terms.asset), returnScript,
   });
-  return { channel, channelId: channelIdOf(channel.outpoint), fundingTx, fundingTxid, deposit, returnScript, alreadyBroadcast: existing !== null };
+  return {
+    channel, channelId: channelIdOf(channel.outpoint), fundingTx, fundingTxid, deposit, returnScript, alreadyBroadcast: existing !== null, closeBy, falconCloseBy,
+    ...(closeBound ? { closeBound } : {}),
+  };
 }
 
 /**

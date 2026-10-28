@@ -26,6 +26,8 @@ describe("loadConfig", () => {
       settlementStorePath: DEFAULTS.settlementStorePath,
       bodyLimit: "512kb",
       logLevel: "info",
+      rateLimit: { windowMs: 60_000, max: 1200 },
+      trustProxy: 0,
     });
     expect(c.apiKey).toBeUndefined();
   });
@@ -63,6 +65,13 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ ...base, X402_LOG_LEVEL: "loud" })).toThrow(ConfigError);
     expect(() => loadConfig({ ...base, X402_BODY_LIMIT: "lots" })).toThrow(ConfigError);
     expect(() => loadConfig({ ...base, X402_API_KEY: "short" })).toThrow(ConfigError);
+    expect(() => loadConfig({ ...base, X402_RATE_LIMIT: "0" })).toThrow(ConfigError);
+    expect(() => loadConfig({ ...base, X402_RATE_LIMIT_WINDOW_MS: "10" })).toThrow(ConfigError);
+    expect(() => loadConfig({ ...base, X402_TRUST_PROXY: "-1" })).toThrow(ConfigError);
+  });
+
+  it("reads the rate limit and proxy hops from the environment", () => {
+    expect(loadConfig({ ...base, X402_RATE_LIMIT: "50", X402_RATE_LIMIT_WINDOW_MS: "10000", X402_TRUST_PROXY: "1" })).toMatchObject({ rateLimit: { windowMs: 10_000, max: 50 }, trustProxy: 1 });
   });
 
   it("reads a JSON file, with env overriding it key by key", () => {

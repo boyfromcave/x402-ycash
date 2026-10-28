@@ -1,4 +1,4 @@
-// The Yellowback payload codec, version 3: "YB" || 0x03 || type || body, the data of a
+// The Yellowback payload codec: "YB" || version || type || body, the data of a
 // transaction's only OP_RETURN output. Translation source: ycash-dd/src/yellowback/payload.{h,cpp}
 // (identical on ycash6). The node's decoder is the parse the overlay applies, so this file keeps its
 // structure: a bounds-checked little-endian reader, one body per type, never a throw on decode.
@@ -8,8 +8,28 @@
 
 /** PAYLOAD_MAGIC_0, PAYLOAD_MAGIC_1 (ycash-dd/src/yellowback/params.h:44-45): "YB". */
 export const PAYLOAD_MAGIC = Uint8Array.of(0x59, 0x42);
-/** PAYLOAD_VERSION (params.h:46). Versions 1, 2 and later than 3 are non-Yellowback (V23). */
+/**
+ * PAYLOAD_VERSION (params.h:46): every type but the MINT, TRANSFER included. Versions 1, 2 and any
+ * other version are non-Yellowback (V23). The SDK only ever emits version-3 TRANSFERs: a version-4
+ * TRANSFER is non-Yellowback, and its YED inputs burn (quantum clients C-1).
+ */
 export const PAYLOAD_VERSION = 0x03;
+/**
+ * MINT_PAYLOAD_VERSION: on the quantum line the MINT alone is version 4, its owner the 33-byte id
+ * scheme ‖ keyHash (quantum spec §3.1, header C-1; ycash-dd src/yellowback/payload.h). A version-3
+ * MINT is non-Yellowback there.
+ */
+export const MINT_PAYLOAD_VERSION = 0x04;
+
+/**
+ * The version byte a payload of `type` carries (the node's VersionOf).
+ *
+ * @param type - The type byte.
+ * @returns 4 for a MINT, 3 otherwise.
+ */
+export function payloadVersionOf(type: number): number {
+  return type === 0x01 ? MINT_PAYLOAD_VERSION : PAYLOAD_VERSION;
+}
 /** MIN_PAYLOAD (params.h:51): the four-byte header alone. */
 export const MIN_PAYLOAD = 4;
 /** MAX_PAYLOAD (params.h:50): the OP_RETURN data cap. */
@@ -86,7 +106,10 @@ export interface MintPayload {
   readonly cents: number;
   readonly lockHeight: number;
   readonly refHeight: number;
-  /** Any 33 bytes; the overlay's MINT-3 judges whether they are a key. */
+  /**
+   * The 33 owner bytes verbatim: on the quantum line (version 4) the owner id scheme ‖ keyHash of a
+   * post-quantum vault owner. Any 33 bytes decode; the overlay's MINT-3 judges them.
+   */
   readonly ownerKey: Uint8Array;
   readonly feeVout: number;
   readonly attestFeeVout: number;
@@ -350,7 +373,7 @@ export function decodePayload(data: Uint8Array): Payload | PayloadError {
   r.u8();
   const version = r.u8();
   const type = r.u8();
-  if (version !== PAYLOAD_VERSION) return { error: "payload_unsupported_version" };
+  if (version !== payloadVersionOf(type)) return { error: "payload_unsupported_version" };
   const p = decodeBody(r, type, data.length);
   if (isPayloadError(p)) return p;
   if (!r.atEnd()) return { error: "payload_bad_length" }; // unreachable after the size checks; kept as the node keeps it

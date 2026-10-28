@@ -188,6 +188,11 @@ async def test_store_voucher_compare_and_set_under_concurrency():
     assert await env.m.ledger.store_voucher(v.channel_id, 4000, hexes[4000]) == "stale"
     assert await env.m.ledger.store_voucher(v.channel_id, 5000, hexes[3000]) == "stale"  # same cumulative, another voucher
     assert await env.m.ledger.store_voucher(v.channel_id, 5000, hexes[5000]) == "stored"
+    # the same voucher signed again (other scriptSig bytes): stored, the first bytes kept
+    resigned = parse_tx(hexes[5000])
+    resigned.vin[0].script_sig = resigned.vin[0].script_sig + b"\x00"
+    assert await env.m.ledger.store_voucher(v.channel_id, 5000, resigned.serialize_hex()) == "stored"
+    assert (await env.m.ledger.get(v.channel_id)).voucher_tx == hexes[5000]
 
 
 # --- close triggers --------------------------------------------------------------------------------

@@ -10,6 +10,18 @@ export const DEFAULT_CLOSE_MARGIN_BLOCKS = 96;
  */
 export const DEFAULT_CLOSE_FEE = 1500n;
 /**
+ * The close fee of a YED channel, zatoshis: a TX_PQCHANNEL close with an SLH-DSA client carries an
+ * ≈ 8,013-byte scriptSig (quantum spec D-Q-19), so 54 logical actions and a 27,000 fee floor; a
+ * little over it.
+ */
+export const DEFAULT_YED_CLOSE_FEE = 30_000n;
+/**
+ * The default YED close fee from the node's Falcon height, zatoshis: twice the close's fee floor with a
+ * Falcon client (a ≈ 1,650-byte scriptSig and 35-byte Falcon TX_PQPKH outputs: 12 logical actions,
+ * 6,000). On mainnet and testnet every YED channel is Falcon (F = 0).
+ */
+export const DEFAULT_YED_CLOSE_FEE_FALCON = 12_000n;
+/**
  * An output below 54 zatoshis is dust and non-standard on both lines (plan X-F15): 3 × (34 + 148)
  * bytes at the 100 zat/kB minimum relay fee (ycash-dd/src/primitives/transaction.h:460-479).
  */

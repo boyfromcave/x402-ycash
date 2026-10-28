@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { link, open, readFile, rename, stat, unlink } from "node:fs/promises";
+import { link, open, readFile, rename, unlink } from "node:fs/promises";
 
 export interface JsonFileOptions {
   /** A lock older than this is taken to belong to a crashed process and is broken (default 30 s). */
@@ -135,9 +135,15 @@ export class JsonFile<T> {
   private async breakIfStale(): Promise<void> {
     let seen: string;
     try {
-      const st = await stat(this.lockPath);
-      if (Date.now() - st.mtimeMs < this.staleLockMs) return;
-      seen = await readFile(this.lockPath, "utf8");
+      // One handle for the age and the token, so both describe the same lock file.
+      const fh = await open(this.lockPath, "r");
+      try {
+        const st = await fh.stat();
+        if (Date.now() - st.mtimeMs < this.staleLockMs) return;
+        seen = await fh.readFile("utf8");
+      } finally {
+        await fh.close();
+      }
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
       throw e;

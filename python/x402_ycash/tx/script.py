@@ -47,6 +47,8 @@ class OP(IntEnum):
     OP_CHECKMULTISIG = 0xAE
     OP_CHECKMULTISIGVERIFY = 0xAF
     OP_CHECKLOCKTIMEVERIFY = 0xB1
+    OP_CHECKPQSIG = 0xC2
+    """The vault upgrade's post-quantum signature check (quantum spec §0)."""
 
 
 class Num(int):

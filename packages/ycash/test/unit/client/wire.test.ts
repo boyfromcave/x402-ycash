@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PaymentRequirements } from "@x402/core/types";
 import { describe, expect, it } from "vitest";
-import { channel, exact, FileClientChannelStorage, tx as T, utxoSourceFunder } from "../../../src/index.js";
+import { channel, exact, FileClientChannelStorage, pq, tx as T, utxoSourceFunder } from "../../../src/index.js";
 import type { ClientChannelRecord } from "../../../src/batch/client/index.js";
 
 const NET = "ycash:regtest" as const;
@@ -76,5 +76,29 @@ describe("utxoSourceFunder", () => {
     expect(T.equalBytes(first.vout[0]!.scriptPubKey, channel.channelScriptPubKey(redeemScript))).toBe(true);
     expect(first.vin.every((i) => i.scriptSig.length > 100)).toBe(true);
     await expect(f.fund({ network: NET, redeemScript, value: 100_000n, branchId: 0x19bd2d2f })).rejects.toThrow(/cannot fund/); // only 30k left
+  });
+
+  it("with a Falcon YED key: from F a YED funding spends the key's Falcon tokens (verified Falcon spend), returns YED change and the channel's return to it; without the key it refuses", async () => {
+    const key = pq.yedFalconKeyFromSeed(new Uint8Array(48).fill(7));
+    const token = { outpoint: { txid: "aa".repeat(32), vout: 1 }, cents: 700, value: 10_000n, scriptPubKey: key.script };
+    const listedTokens: string[] = [];
+    const source = {
+      listCoins: async () => [coin(5, 2_000_000n)],
+      listTokens: async (a: string) => (listedTokens.push(a), a === pq.yedFalconAddress(NET, key) ? [token] : []),
+    };
+    const req = { network: NET, redeemScript, value: 60_000n, branchId: 0x6d5b7a31, asset: "YED", deposit: 300n, falconActive: true };
+    await expect(utxoSourceFunder(priv, source).fund(req)).rejects.toThrow(/Falcon YED key/);
+    const f = utxoSourceFunder(priv, source, true, { yedKey: key });
+    expect(await f.returnAddress!({ network: NET, asset: "YED", falconActive: true })).toBe(pq.yedFalconAddress(NET, key));
+    expect(await f.returnAddress!({ network: NET, asset: "YED", falconActive: false })).toBe(T.encodeAddress(NET, "yed", T.hash160(T.pubkeyFromPriv(priv))));
+    const tx = T.parseTx(await f.fund(req));
+    expect(listedTokens).toContain(pq.yedFalconAddress(NET, key));
+    const n = tx.vin.findIndex((i) => i.prevout.txid === token.outpoint.txid);
+    const spend = pq.parsePQSpend(T.parseScript(tx.vin[n]!.scriptSig))!;
+    expect(pq.spendMatches(spend, key.id)).toBe(true);
+    const digest = T.sighashV4(tx, n, key.script, token.value, T.SIGHASH.ALL, 0x6d5b7a31);
+    expect(pq.pqVerify(2, spend.pk, spend.sig.slice(0, -1), digest)).toBe(true);
+    expect(tx.vout.some((o) => T.equalBytes(o.scriptPubKey, key.script))).toBe(true); // YED change: the Falcon key
+    expect(tx.vin.filter((i) => i.prevout.txid !== token.outpoint.txid).every((i) => i.scriptSig.length > 100 && i.scriptSig.length < 120)).toBe(true); // the WIF key's YEC
   });
 });

@@ -9,6 +9,9 @@ from .address import (
     base58check_encode,
     decode_address,
     encode_address,
+    encode_pq_address,
+    is_pq_kind,
+    is_yed_kind,
 )
 from .encoding import from_reversed_hex, reversed_hex
 from .fee import GRACE_ACTIONS, MARGINAL_FEE, MIN_FEE, fee_floor, logical_actions, tx_fee
@@ -23,6 +26,17 @@ from .keys import (
     sig_hash_type,
     sign_input,
     verify_input_sig,
+)
+from .network_fee import (
+    FEES_RPC_VERSION,
+    FeeKind,
+    NetworkFees,
+    needs_high_fees,
+    network_fee,
+    network_fee_cap,
+    network_fees_of,
+    read_network_fees,
+    size_fee,
 )
 from .script import (
     OP,
@@ -58,6 +72,7 @@ from .transaction import (
 )
 
 __all__ = [
+    "FEES_RPC_VERSION",
     "GRACE_ACTIONS",
     "MARGINAL_FEE",
     "MIN_FEE",
@@ -72,6 +87,8 @@ __all__ = [
     "AddressKind",
     "DecodedAddress",
     "DecodedWif",
+    "FeeKind",
+    "NetworkFees",
     "Num",
     "OutPoint",
     "OutputDescription",
@@ -89,12 +106,19 @@ __all__ = [
     "decode_script_num",
     "decode_wif",
     "encode_address",
+    "encode_pq_address",
     "encode_wif",
     "fee_floor",
     "from_reversed_hex",
     "hash160",
+    "is_pq_kind",
     "is_strict_der",
+    "is_yed_kind",
     "logical_actions",
+    "needs_high_fees",
+    "network_fee",
+    "network_fee_cap",
+    "network_fees_of",
     "op_return_script",
     "p2pkh_hash",
     "p2pkh_script",
@@ -108,12 +132,14 @@ __all__ = [
     "push_data",
     "push_int",
     "random_priv_key",
+    "read_network_fees",
     "reversed_hex",
     "script_num",
     "sha256d",
     "sig_hash_type",
     "sighash_v4",
     "sign_input",
+    "size_fee",
     "tx_fee",
     "txid",
     "verify_input_sig",

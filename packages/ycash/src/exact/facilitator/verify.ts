@@ -6,7 +6,9 @@ import { ASSET_YED, type YcashNetwork } from "../../constants.js";
 import { yecToZat, type YcashRpc } from "../../node/index.js";
 import type { SettlementStore } from "../../store/index.js";
 import { txidKey } from "../../store/index.js";
-import { addressToScript, encodeAddress, equalBytes, feeFloor, hasShielded, hexToBytes, p2pkhHash, parseTx, txFee, txid as txidOf, type Tx } from "../../tx/index.js";
+import { pqpkhKeyId } from "../../pq/script.js";
+import { isFalconActiveAt, readFalconHeight, yedHolderProblem, type FalconHeightSource } from "../../channel/falcon.js";
+import { addressToScript, encodeAddress, encodePQAddress, equalBytes, feeFloor, hasShielded, hexToBytes, needsHighFees, networkFeeCap, p2pkhHash, parseTx, readNetworkFees, txFee, txid as txidOf, type FeeKind, type Tx } from "../../tx/index.js";
 import { checkTransferVerdict, decodedTransferOf, findPayload, isFindPayloadFailure, sameAssignments, validateTransferAssignments, type Assignment } from "../../yed/index.js";
 import {
   ERR_AMOUNT_MISMATCH,
@@ -23,6 +25,7 @@ import {
   ERR_SCRIPT,
   ERR_SIGHASH,
   ERR_TRANSACTION,
+  ERR_YED_HOLDER,
   ERR_YED_INPUT,
   ERR_YED_NODE_REQUIRED,
   ERR_YED_PAYLOAD,
@@ -80,6 +83,11 @@ export interface ResolvedPayment {
 export interface VerifiedPayment extends ResolvedPayment {
   payer: string;
   feeZat: bigint;
+  /**
+   * Settle submits with `allowhighfees`: a PQ or YED payment's fee is above -maxtxfee but within the
+   * node's PQ/Yellowback cap (rule 7, rpcversion 8).
+   */
+  allowHighFees?: boolean;
 }
 
 const fail = (reason: string, message: string, payer?: string): Failure => ({ ok: false, reason, message, ...(payer !== undefined ? { payer } : {}) });
@@ -222,6 +230,16 @@ export async function verifyTransparent(
   const s = resolved.state;
   const net = await checkNetwork(rpc, s.network);
   if (!net.ok) return net;
+  // Rule 4Y, the Falcon height (quantum spec TOK-PQ): from F every output the TRANSFER assigns YED to,
+  // payTo included, is a Falcon TX_PQPKH (the node would refuse the transaction, not burn it); below F
+  // a scheme-2 output does not relay.
+  if (s.yed) {
+    const falconActive = isFalconActiveAt(await readFalconHeight(rpc as ExactFacilitatorRpc & FalconHeightSource, s.network), net.tip + 1);
+    for (const a of s.yed.assignments) {
+      const problem = yedHolderProblem(s.tx.vout[a.vout]?.scriptPubKey ?? new Uint8Array(), falconActive);
+      if (problem) return fail(ERR_YED_HOLDER, `${a.vout === s.payToVout ? "payTo" : `output ${a.vout}`}: ${problem}`);
+    }
+  }
 
   if (await store.isClaimed(s.key)) {
     return fail(ERR_DUPLICATE_SETTLEMENT, `${s.txid} is already claimed`, addressOfScriptSig(s.tx.vin[0]?.scriptSig ?? new Uint8Array(), s.network));
@@ -230,12 +248,14 @@ export async function verifyTransparent(
   // Rule 6: every input confirmed and unspent, and not spent in the mempool (plan R-6, X-F10).
   const values: bigint[] = [];
   let payer = "";
+  let pqInput = false;
   for (const [i, input] of s.tx.vin.entries()) {
     const { txid, vout } = input.prevout;
     const confirmed = await rpc.getTxOut(txid, vout, false);
     if (!confirmed) return fail(ERR_INPUT_SPENT, `input ${i} (${txid}:${vout}) is unknown, unconfirmed or spent`);
     if (!(await rpc.getTxOut(txid, vout, true))) return fail(ERR_INPUT_SPENT, `input ${i} (${txid}:${vout}) is spent by a mempool transaction`);
     values.push(yecToZat(confirmed.value));
+    if (pqpkhKeyId(hexToBytes(confirmed.scriptPubKey.hex))) pqInput = true;
     if (i === 0) payer = payerOf(hexToBytes(confirmed.scriptPubKey.hex), s);
   }
 
@@ -248,11 +268,17 @@ export async function verifyTransparent(
     }
   }
 
-  // Rule 7: fee floor (SDK and facilitator policy, X-F3) and sanity cap.
+  // Rule 7: fee floor (SDK and facilitator policy, X-F3) and sanity cap. A YED or post-quantum
+  // payment pays a dollar-per-KB rate (rpcversion 8, yed_getinfo.params.fees.network), far above a
+  // plain cap: its cap is the node's PQ/Yellowback cap. The floor stays S-6, what both lines mine:
+  // the rate is the payer's policy and moves with the price between build and verify.
   const fee = txFee(s.tx, values);
   const floor = feeFloor(s.tx);
   if (fee < floor) return fail(ERR_FEE_TOO_LOW, `fee ${fee} is below the floor ${floor}`, payer);
-  if (fee > limits.feeCapZat) return fail(ERR_FEE_TOO_HIGH, `fee ${fee} is above the cap ${limits.feeCapZat}`, payer);
+  const kind: FeeKind = s.yed ? "yellowback" : pqInput ? "pq" : "plain";
+  const fees = kind === "plain" ? undefined : await readNetworkFees(rpc as { yedGetInfo?: YcashRpc["yedGetInfo"] });
+  const cap = networkFeeCap(kind, limits.feeCapZat, fees);
+  if (fee > cap) return fail(ERR_FEE_TOO_HIGH, `fee ${fee} is above the cap ${cap}`, payer);
 
   // Rule 8: expiry window, read against the tip rule 2 saw.
   const w = expiryWindow(net.tip, req.maxTimeoutSeconds);
@@ -279,17 +305,23 @@ export async function verifyTransparent(
 
   // Rule 10: not claimed (re-read: the claim may have landed while the lookups ran).
   if (await store.isClaimed(s.key)) return fail(ERR_DUPLICATE_SETTLEMENT, `${s.txid} is already claimed`, payer);
-  return { ok: true, state: { ...s, payer, feeZat: fee } };
+  return { ok: true, state: { ...s, payer, feeZat: fee, ...(needsHighFees(fee, kind, fees) ? { allowHighFees: true } : {}) } };
 }
 
 /**
- * The response's `payer`: input 0's address, in the `ye…` form for a YED payment from a P2PKH coin.
+ * The response's `payer`: input 0's address, in the Yellowback form (`yb…`/`yt…`/`yr…`, 35 or 53
+ * characters) for a YED payment from a P2PKH or TX_PQPKH coin.
  *
  * @param spk - The scriptPubKey of the coin input 0 spends.
  * @param s - The payment's network and, for YED, its decoded transfer.
  * @returns The payer address.
  */
 export function payerOf(spk: Uint8Array, s: Pick<ResolvedPayment, "network" | "yed">): string {
-  const pkh = s.yed ? p2pkhHash(spk) : null;
-  return pkh ? encodeAddress(s.network, "yed", pkh) : addressOfScript(spk, s.network);
+  if (s.yed) {
+    const pkh = p2pkhHash(spk);
+    if (pkh) return encodeAddress(s.network, "yed", pkh);
+    const pq = pqpkhKeyId(spk);
+    if (pq) return encodePQAddress(s.network, "yedpq", pq);
+  }
+  return addressOfScript(spk, s.network);
 }

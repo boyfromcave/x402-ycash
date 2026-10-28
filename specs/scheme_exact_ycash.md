@@ -70,8 +70,34 @@ network:
 | Address | `ycash:mainnet` | `ycash:testnet` | `ycash:regtest` |
 |---|---|---|---|
 | transparent P2PKH / P2SH | `s1…` / `s2…` or `s3…` | `sm…` / `s2…` | `sm…` / `s2…` |
-| Yellowback (YED, P2PKH only) | `ye…` | `yt…` | `yr…` |
+| Yellowback (YED), a P2PKH holder: version ‖ 20-byte key hash, 35 characters | `yb…` (`1F DD`) | `yt…` (`20 07`) | `yr…` (`20 02`) |
+| Yellowback (YED), a post-quantum holder: version ‖ scheme ‖ 32-byte key hash, 53 characters | `yb…` (`56 AB`) | `yt…` (`57 1E`) | `yr…` (`57 10`) |
+| post-quantum YEC (`TX_PQPKH`), 53 characters | `sq…` (`4D D9`) | `tq…` (`4F 61`) | `rq…` (`4C 51`) |
 | Sapling | `ys1…` | `ytestsapling1…` | `yregtestsapling1…` |
+
+**The quantum line** (ycash-dd/ycash6 `upgrade/quantum-vaults`, `rpcversion` 7; it rides the vault
+upgrade, branch ID `6d5b7a31`). The mainnet YED prefix is `yb…` there (owner decision D-Q-21; `ye…`,
+version `1F E4`, before it). A post-quantum holder or payee is `TX_PQPKH`, the 35-byte script
+`20 <keyHash:32> 51|52 c2` (`<hash> OP_1|OP_2 OP_CHECKPQSIG`), keyHash = SHA256(scheme ‖ pk); scheme
+`0x01` is SLH-DSA-SHA2-128s (FIPS 205), `0x02` FN-DSA-512 (gated by the node's Falcon height). The
+two YED forms share a prefix and differ in length; a decoder accepts both and refuses a scheme
+other than 1 or 2. The `sq…` form is the same script for plain YEC (D-Q-20); a YED `payTo` MUST be a
+Yellowback address of either form, never `sq…`. A YEC `payTo` MAY be `sq…`; its output is dust below
+the post-quantum threshold (2,406 zatoshis for SLH-DSA at the default relay fee, the node's
+`GetPQDustThreshold`), and a client MUST refuse a smaller `amount` to it.
+
+**YED and the Falcon height.** The node reports its Falcon height F in
+`yed_getinfo.params.pq.falconHeight` (-1: never; 0 on mainnet and testnet, where Falcon is live from
+the vault upgrade's first block; regtest `-pqfalconheight`). From F the module's `TOK-PQ` rule lets
+only a Falcon (scheme-2) `TX_PQPKH` receive YED, and a TRANSFER assigning YED to any other output
+makes the transaction invalid; below F the node's policy relays no scheme-2 output. Judged at the next
+block (tip + 1): a YED `payTo` MUST be a Falcon post-quantum address from F (a P2PKH or SLH-DSA one
+below F), and every YED change output a client builds MUST be one too. A client MUST refuse such an
+offer, and refuse to sign a TRANSFER breaking the rule, before anything is signed; the TypeScript
+SDK's RPC wallet signer takes its YED change from the node wallet's `yed_getnewaddress` (a Falcon
+address from F), its local-key signer from the `yedChangeAddress` option (without it, a payment
+leaving YED change is refused after F). A client SDK trusts the node's reported F; without
+`yed_getinfo` it assumes the network's default (0 on mainnet and testnet, never on regtest).
 
 **Client spend controls.** YED is a dollar (cents, 2 decimals), so a client SDK recognises it as
 a default asset (the TypeScript SDK's `findDefaultAsset` returns it) and its USD spend cap
@@ -81,8 +107,8 @@ with a per-payment cap in zatoshis (the SDK's `yecSpendControl(network, maxZat)`
 the client refuses every YEC requirement.
 
 Ycash's transparent addresses are not Zcash's `t1…`/`t3…`: the node decodes only its own
-prefixes. A `ye…` address encodes the same 20-byte key hash as an `s1…` address, so a YED output
-is an ordinary P2PKH output; the different prefix exists so that YED is never sent to a wallet
+prefixes. A 35-character Yellowback address encodes the same 20-byte key hash as an `s1…` address, so a YED output
+is an ordinary P2PKH output (a 53-character one, a `TX_PQPKH` output); the different prefix exists so that YED is never sent to a wallet
 that cannot see it.
 
 Testnet and regtest share their transparent version bytes (P2PKH `1C 95`, P2SH `1C 2A`, and WIF
@@ -506,7 +532,11 @@ Any failure is a rejection with the reason in parentheses.
    (`invalid_exact_ycash_amount_mismatch`).
 5. **Signature hash types.** Every input's scriptSig ends in signatures whose hash type is
    `SIGHASH_ALL` (0x01), so no one who sees the payload can change its outputs
-   (`invalid_exact_ycash_sighash`).
+   (`invalid_exact_ycash_sighash`). A `TX_PQPKH` input's scriptSig is the chunked post-quantum spend
+   `<sig_1>…<sig_s> <s> <pk_1>…<pk_p> <p>` (every chunk but the last 520 bytes; SLH-DSA s = 16, p = 1,
+   7,938 bytes); its one signature's hash type is the last byte of its last signature chunk. The
+   response's `payer` for such a coin is its post-quantum address (`sq…`/`tq…`/`rq…`; for YED the
+   53-character Yellowback form).
 6. **Inputs.** For every input, `gettxout(txid, n, false)` finds the coin (confirmed and unspent)
    and `gettxout(txid, n, true)` still finds it (no transaction in the mempool spends it)
    (`invalid_exact_ycash_input_spent`). Before first submission this check is authoritative;
@@ -549,7 +579,9 @@ replaced by 4Y, and 9Y by the YED form:
     its `opReturnIndex`. Exactly one output's script is the P2PKH script of `payTo`'s key hash, it
     is assigned exactly `amount` cents by exactly one assignment, and its YEC value is at least the
     dust threshold (`invalid_exact_ycash_recipient_mismatch`, `invalid_exact_ycash_amount_mismatch`,
-    `invalid_exact_ycash_yed_payload`). Every assignment is in [100, 10000000].
+    `invalid_exact_ycash_yed_payload`). Every assignment is in [100, 10000000]. From the node's
+    Falcon height (judged at tip + 1) every assigned output, `payTo` included, is a Falcon
+    `TX_PQPKH`; below it none is a scheme-2 output (`invalid_exact_ycash_yed_holder`).
 
 9Y. **Overlay verdict.** `yed_validaterawtransaction(hex)` reports `valid` true, `type`
     `"transfer"`, `verdict` `"ok"` (lowercase, as the node reports it; never `"burned"` or a failure verdict), `burned` 0, `yedOut`
@@ -965,6 +997,7 @@ Scheme-specific codes:
 | `invalid_exact_ycash_yed_node_required` | a YED payment at a facilitator without a Yellowback node |
 | `invalid_exact_ycash_yed_payload` | no TRANSFER payload, or its assignments are not as required |
 | `invalid_exact_ycash_yed_verdict` | the overlay's verdict is not OK, or something burns |
+| `invalid_exact_ycash_yed_holder` | from the node's Falcon height an output the TRANSFER assigns YED to is not a Falcon `TX_PQPKH` (TOK-PQ), or below it a scheme-2 one |
 | `invalid_exact_ycash_yed_unconfirmed_input` | a YED payment spends an unconfirmed input |
 | `invalid_exact_ycash_unknown_instrument` | `payTo` or `memo` was not issued for a held request |
 | `invalid_exact_ycash_txid_malformed` | `payload.txid` is not 64 lowercase hex characters |

@@ -1,5 +1,6 @@
 // Run: FACILITATOR_URL=http://127.0.0.1:4022 MERCHANT_PAY_TO=sm… npm start -w x402-ycash-example-merchant-express
 // (the README's "Quick start on the devnet" has every variable).
+import { createServer } from "node:http";
 import { createMerchant, facilitatorClientOf } from "./app.js";
 import { describeConfig, loadMerchantConfig } from "./config.js";
 import { probeYed } from "./yed.js";
@@ -13,7 +14,12 @@ const yedConfig = config.yed;
 const yedProbe = yedConfig ? (f: typeof facilitator) => probeYed(yedConfig, f, config.network, config.wallet, log) : undefined;
 const yed = yedProbe ? await yedProbe(facilitator) : undefined;
 const merchant = createMerchant(config, { facilitator, ...(yed ? { yed } : {}), ...(yedProbe ? { yedProbe } : {}) });
-const server = merchant.app.listen(config.port, config.host, () => {
+// A YED channel voucher on the hybrid TX_PQCHANNEL with an SLH-DSA client (below the Falcon height)
+// carries an ≈ 8 KB scriptSig, so its PAYMENT-SIGNATURE header is ≈ 22 KB of base64 (an open with its
+// funding, ≈ 25 KB): above Node's default 16 KB header limit, which answers 431. A Falcon client's
+// voucher (from the Falcon height; always on mainnet) is ≈ 1.8 KB. A server taking both raises it.
+const MAX_HEADER_BYTES = 64 * 1024;
+const server = createServer({ maxHeaderSize: MAX_HEADER_BYTES }, merchant.app).listen(config.port, config.host, () => {
   const addr = server.address();
   const port = typeof addr === "object" && addr ? addr.port : config.port;
   console.log(JSON.stringify({ msg: "merchant listening", url: `http://${config.host}:${port}`, modes: merchant.modes, config: describeConfig(config) }));

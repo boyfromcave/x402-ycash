@@ -8,3 +8,4 @@ coverage/
 
 # Rust light client (light/)
 light/target/
+.DS_Store

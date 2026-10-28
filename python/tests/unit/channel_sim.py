@@ -14,8 +14,10 @@ from x402_ycash.channel import (
     Channel,
     ChannelScript,
     FundingInput,
+    PQChannelScript,
     build_channel_script,
     build_funding_tx,
+    build_pq_channel_script,
     build_voucher,
     build_yed_funding_tx,
     channel_id_of,
@@ -24,6 +26,7 @@ from x402_ycash.channel import (
     yed_channel_value,
     yed_voucher_layout,
 )
+from x402_ycash.pq import SCHEME_SLH_DSA_SHA2_128S, PQKeyPair
 from x402_ycash.tx import OutPoint, address_to_script, encode_address, hash160, txid
 from x402_ycash.yed import TokenCoin, YecCoin
 
@@ -58,6 +61,9 @@ class ClientSim:
     """The funding's nExpiryHeight (0: never)."""
     channel: Channel | None = None
     funding_hex: str = ""
+    pq: bool = False
+    """Open on the hybrid TX_PQCHANNEL (D-Q-19) with an SLH-DSA client key, as the TypeScript client does for YED."""
+    pq_key: PQKeyPair | None = None
 
     def __post_init__(self) -> None:
         if not self.return_address:
@@ -74,7 +80,12 @@ class ClientSim:
     def fund(self) -> None:
         """Builds and signs the funding transaction (not broadcast: the server relays it at open)."""
         close_fee = int(self.req.extra["closeFee"])
-        rs = build_channel_script(ChannelScript(self.key.pub, bytes.fromhex(self.req.extra["serverPubKey"]), self.node.tip + self.lock_blocks))
+        server = bytes.fromhex(self.req.extra["serverPubKey"])
+        if self.pq:
+            self.pq_key = self.pq_key or PQKeyPair.from_seed(SCHEME_SLH_DSA_SHA2_128S, bytes(range(48)))
+            rs = build_pq_channel_script(PQChannelScript(self.pq_key.key_id, server, self.node.tip + self.lock_blocks))
+        else:
+            rs = build_channel_script(ChannelScript(self.key.pub, server, self.node.tip + self.lock_blocks))
         w = self.wallet
         if self.yed:
             token = self.node.add_coin(10_000, w.script)
@@ -102,7 +113,8 @@ class ClientSim:
         """A voucher signed by C, its client output paying the return address (or ``to``)."""
         assert self.channel is not None
         layout = layout or (yed_voucher_layout(self.deposit) if self.yed else yec_voucher_outputs)
-        return build_voucher(self.channel, cumulative, self.key.priv, BRANCH_ID, to or self.return_script, layout).serialize_hex()
+        key = self.pq_key if self.pq and self.pq_key is not None else self.key.priv
+        return build_voucher(self.channel, cumulative, key, BRANCH_ID, to or self.return_script, layout).serialize_hex()
 
     def open(self, cumulative: int, req: PaymentRequirements | None = None) -> PaymentPayload:
         if self.channel is None:

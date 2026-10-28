@@ -1,0 +1,63 @@
+# Dependabot: security updates only, one grouped PR per ecosystem (SECURITY-CI.md). Version updates are
+# suppressed (open-pull-requests-limit: 0): the dependencies move by hand with their lock files
+# (package-lock.json, the two Cargo.lock files, python/requirements-lock.txt, whose header has the command),
+# and the shared tool locks (contrib/semgrep, contrib/secops) move with the other Yellowback repos.
+# Not here: gomod for tools/x4m/lwdprobe, a local-only tool whose go.mod replaces lightwalletd with the
+# workspace's lightwalletd-dd checkout (Dependabot cannot resolve it); its versions follow lightwalletd-dd's.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    cooldown:
+      default-days: 7
+    groups:
+      security:
+        applies-to: security-updates
+        patterns: [ "*" ]
+  - package-ecosystem: cargo
+    directories: [ "/light", "/tools/x4m/rust" ]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    cooldown:
+      default-days: 7
+    groups:
+      security:
+        applies-to: security-updates
+        patterns: [ "*" ]
+  - package-ecosystem: pip
+    directories: [ "/python", "/contrib/semgrep", "/contrib/secops" ]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    cooldown:
+      default-days: 7
+    groups:
+      security:
+        applies-to: security-updates
+        patterns: [ "*" ]
+  - package-ecosystem: docker
+    directory: /packages/facilitator
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    cooldown:
+      default-days: 7
+    groups:
+      security:
+        applies-to: security-updates
+        patterns: [ "*" ]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    cooldown:
+      default-days: 7
+    groups:
+      security:
+        applies-to: security-updates
+        patterns: [ "*" ]

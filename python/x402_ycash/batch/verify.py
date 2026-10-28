@@ -10,14 +10,18 @@ from typing import Any, Protocol, TypeVar
 
 from ..channel import (
     Channel,
+    ChannelScript,
+    PQChannelScript,
     VoucherLayout,
     channel_id_of,
     channel_script_pubkey,
     check_voucher_shape,
     parse_channel_script,
+    parse_pq_channel_script,
     verify_voucher_signature,
     yec_voucher_outputs,
 )
+from ..channel.falcon import channel_close_by, is_falcon_active_at, read_falcon_height, yed_holder_problem
 from ..channel.yed import YED_TRANSFER_VOUT, yed_channel_value, yed_voucher_assignments, yed_voucher_layout
 from ..constants import (
     ASSET_YEC,
@@ -28,7 +32,8 @@ from ..constants import (
     chain_of_network,
 )
 from ..node import RPC_METHOD_NOT_FOUND, RpcError, VerifyScriptsResult
-from ..tx import OutPoint, Tx, address_to_script, fee_floor, parse_tx, tx_fee, txid
+from ..pq import SCHEME_FN_DSA_512
+from ..tx import NetworkFees, OutPoint, Tx, address_to_script, fee_floor, parse_tx, read_network_fees, tx_fee, txid
 from ..yed import (
     FindPayloadFailure,
     assigned_to,
@@ -41,6 +46,7 @@ from ..yed import (
 from .errors import BatchError, BatchSettlementError
 from .return_address import return_script_of
 from .types import BatchTerms, required_depth
+from .upgrade import next_activation_height_of
 
 T = TypeVar("T")
 
@@ -52,7 +58,7 @@ class ChainView(Protocol):
     async def get_blockchain_info(self) -> dict[str, Any]: ...
     async def get_tx_out(self, txid: str, n: int, include_mempool: bool) -> dict[str, Any] | None: ...
     async def verify_scripts(self, hex_tx: str) -> VerifyScriptsResult: ...
-    async def send_raw_transaction(self, hex_tx: str) -> str: ...
+    async def send_raw_transaction(self, hex_tx: str, allow_high_fees: bool = False) -> str: ...
 
 
 def yed_chain(chain: Any) -> Any:
@@ -135,14 +141,23 @@ class ChainContext:
     tip: int
     branch_id: int
     """The branch id the next block signs under (getblockchaininfo.consensus.nextblock)."""
+    falcon_height: int = -1
+    """The node's Falcon height F (``yed_getinfo.params.pq.falconHeight``; -1 = never; the network's
+    default when the node does not answer ``yed_getinfo``)."""
+    network_fees: NetworkFees | None = None
+    """The node's network fee rates (``yed_getinfo.params.fees.network``, rpcversion 8), when it reports them."""
+    next_activation_height: int | None = None
+    """The next network-upgrade activation height (the least ``pending`` ``getblockchaininfo.upgrades``
+    height above the tip; audit 06/X-1): every channel must be closed below it. None: none pending."""
 
 
 async def chain_context(chain: ChainView, network: str) -> ChainContext:
-    """The node's chain matches the network, and the branch id vouchers are signed under."""
+    """The node's chain matches the network, the branch id vouchers are signed under, and F."""
     info = await chain.get_blockchain_info()
     if info["chain"] != chain_of_network(network):
         raise BatchSettlementError(BatchError.NETWORK, f"node is on {info['chain']}, not {network}")
-    return ChainContext(int(info["blocks"]), int(info["consensus"]["nextblock"], 16))
+    return ChainContext(int(info["blocks"]), int(info["consensus"]["nextblock"], 16), await read_falcon_height(chain, network),
+                        await read_network_fees(chain), next_activation_height_of(info.get("upgrades"), int(info["blocks"])))
 
 
 def decode_tx(hex_tx: str, reason: str) -> Tx:
@@ -172,6 +187,13 @@ class VerifiedOpen:
     """The client's output script in every voucher, from ``returnAddress``."""
     already_broadcast: bool
     """The funding output already exists (in the mempool or a block)."""
+    close_by: int = 0
+    """The height the channel must be closed below: t, or min(t, F) for a YED channel opened before F,
+    and never past the next network-upgrade activation height (audit 06/X-1)."""
+    falcon_close_by: int = 0
+    """The Falcon part of ``close_by`` alone: t, or min(t, F) (what the ledger's terms record)."""
+    close_bound: str | None = None
+    """Which bound ``close_by`` is when it is below t: ``falcon`` or ``upgrade``."""
 
 
 def min_funding_expiry(tip: int, confirmations: int) -> int:
@@ -188,9 +210,13 @@ async def verify_open(p: dict[str, Any], terms: BatchTerms, chain: ChainView, ct
     yed = terms.asset == ASSET_YED
     if yed:
         yed_chain(chain)
-    # 2. the redeem script
+    # 2. the channel script: the P2SH redeem script, or (YED only) the bare TX_PQCHANNEL (D-Q-19)
     rs = bytes.fromhex(p["redeemScript"])
-    script = parse_channel_script(rs)
+    script: ChannelScript | PQChannelScript | None = parse_pq_channel_script(rs)
+    if script is not None and not yed:
+        raise BatchSettlementError(BatchError.REDEEM_SCRIPT, "a YEC channel uses the P2SH channel script")
+    if script is None:
+        script = parse_channel_script(rs)
     if script is None:
         raise BatchSettlementError(BatchError.REDEEM_SCRIPT, "not the channel script")
     if script.server_pubkey != terms.server_pubkey:
@@ -209,6 +235,40 @@ async def verify_open(p: dict[str, Any], terms: BatchTerms, chain: ChainView, ct
     pay_to_script = address_to_script(terms.pay_to, terms.network)
     # 7. the return address
     return_script = return_script_of(p["returnAddress"], terms.network, terms.asset, pay_to_script)
+    # The Falcon height F (TOK-PQ, A-1): from F a YED channel is a TX_PQCHANNEL with a Falcon client and
+    # every voucher output receiving YED a Falcon TX_PQPKH; before F no scheme-2 output relays, and the
+    # channel must be funded and closed below F.
+    close_by = script.refund_height
+    if yed:
+        falcon_active = is_falcon_active_at(ctx.falcon_height, ctx.tip + 1)
+        client_scheme = script.client.scheme if isinstance(script, PQChannelScript) else None
+        if falcon_active and client_scheme != SCHEME_FN_DSA_512:
+            raise BatchSettlementError(BatchError.REDEEM_SCRIPT,
+                                       f"from the Falcon height {ctx.falcon_height} a YED channel is a TX_PQCHANNEL with a Falcon (scheme-2) client (TOK-PQ)")
+        if not falcon_active and client_scheme == SCHEME_FN_DSA_512:
+            raise BatchSettlementError(BatchError.REDEEM_SCRIPT, "a Falcon client before the Falcon height (the node's policy refuses a scheme-2 output)")
+        problem = yed_holder_problem(return_script, falcon_active)
+        if problem:
+            raise BatchSettlementError(BatchError.RETURN_ADDRESS, problem)
+        problem = yed_holder_problem(pay_to_script, falcon_active)
+        if problem:
+            raise BatchSettlementError(BatchError.REQUIREMENTS, f"payTo: {problem}")
+        close_by = channel_close_by(terms.asset, client_scheme, script.refund_height, ctx.falcon_height)
+        if close_by < script.refund_height and ctx.tip >= close_by - terms.close_margin_blocks:
+            raise BatchSettlementError(BatchError.REDEEM_SCRIPT, f"opened before the Falcon height {ctx.falcon_height}, the channel would have to "
+                                                                 f"close by {close_by - terms.close_margin_blocks}; tip is {ctx.tip}")
+    # The next network upgrade (spec "Network upgrades", audit 06/X-1): every voucher commits to the
+    # branch id current at signing, so the channel is closed below the activation height like below t.
+    falcon_close_by = close_by
+    close_bound = "falcon" if close_by < script.refund_height else None
+    activation = ctx.next_activation_height
+    if activation is not None and activation < close_by:
+        close_by = activation
+        close_bound = "upgrade"
+        if ctx.tip >= close_by - terms.close_margin_blocks:
+            raise BatchSettlementError(BatchError.REDEEM_SCRIPT, f"the next network upgrade activates at {activation}: the channel would have to "
+                                                                 f"close by {close_by - terms.close_margin_blocks}; tip is {ctx.tip}; "
+                                                                 f"open one from height {activation}")
     channel = Channel.from_script(OutPoint(funding_txid, vout), rs, funding.vout[vout].value, terms.close_fee, pay_to_script)
     # 4. the deposit: V − closeFee for YEC; for YED the cents the funding TRANSFER assigns the channel
     deposit = _yed_funding_deposit(funding, vout, channel.value, terms.close_fee) if yed else channel.yec_deposit
@@ -223,6 +283,10 @@ async def verify_open(p: dict[str, Any], terms: BatchTerms, chain: ChainView, ct
     least = min_funding_expiry(ctx.tip, terms.confirmations)
     if (not existing or int(existing["confirmations"]) == 0) and funding.expiry_height != 0 and funding.expiry_height < least:
         raise BatchSettlementError(BatchError.FUNDING, f"the funding expires at {funding.expiry_height}, before {least}")
+    # A pre-Falcon YED funding must not be able to land at F, where TOK-PQ refuses its channel output.
+    if falcon_close_by < script.refund_height and not existing and (funding.expiry_height == 0 or funding.expiry_height >= ctx.falcon_height):
+        raise BatchSettlementError(BatchError.FUNDING, f"opened before the Falcon height {ctx.falcon_height}, the funding must expire below it "
+                                                       f"(nExpiryHeight {funding.expiry_height})")
     if not existing:
         values: list[int] = []
         for i in funding.vin:
@@ -234,6 +298,10 @@ async def verify_open(p: dict[str, Any], terms: BatchTerms, chain: ChainView, ct
         fee = tx_fee(funding, values)
         if fee < fee_floor(funding):
             raise BatchSettlementError(BatchError.FUNDING, f"fee {fee} is below the floor {fee_floor(funding)}")
+        # A YED funding pays the Yellowback rate (rpcversion 8) and may be relayed past -maxtxfee
+        # (relay.py), so it is held to the node's PQ/Yellowback cap here.
+        if yed and ctx.network_fees is not None and fee > ctx.network_fees.yellowback_max_tx_fee_zat:
+            raise BatchSettlementError(BatchError.FUNDING, f"fee {fee} is above the node's Yellowback fee cap {ctx.network_fees.yellowback_max_tx_fee_zat}")
         scripts = await chain.verify_scripts(p["fundingTx"])
         if not scripts.complete or scripts.errors:
             raise BatchSettlementError(BatchError.FUNDING, "the funding scripts do not verify")
@@ -246,7 +314,8 @@ async def verify_open(p: dict[str, Any], terms: BatchTerms, chain: ChainView, ct
     check_voucher(decode_tx(p["voucher"]["tx"], BatchError.VOUCHER_SHAPE), channel, cumulative, charged=0, amount=terms.amount,
                   deposit=deposit, branch_id=ctx.branch_id, layout=layout_for(terms.asset, deposit), floor=cumulative_floor(terms.asset),
                   return_script=return_script)
-    return VerifiedOpen(channel, channel_id_of(channel.outpoint), funding, funding_txid, deposit, return_script, existing is not None)
+    return VerifiedOpen(channel, channel_id_of(channel.outpoint), funding, funding_txid, deposit, return_script, existing is not None, close_by,
+                        falcon_close_by, close_bound)
 
 
 def _yed_funding_deposit(funding: Tx, vout: int, value: int, close_fee: int) -> int:

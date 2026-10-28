@@ -66,7 +66,7 @@ export function buildClient(config: CliConfig): PayingClient {
   const source = config.wif ? (config.lwd ? new LwdUtxoSource(config.lwd, held) : new exact.RpcUtxoSource(mustNode(node), { importAddress: true, ...held })) : undefined;
   // A light-client-only CLI (--sapling-builder http://… alone) has no transparent payer and no channels.
   const privateOnly = !node && !config.wif;
-  const transparent = privateOnly ? undefined : new exact.ExactYcashScheme(config.wif && source ? new exact.LocalKeySigner(config.wif, source) : new exact.RpcWalletSigner(mustNode(node), held));
+  const transparent = privateOnly ? undefined : new exact.ExactYcashScheme(config.wif && source ? new exact.LocalKeySigner(config.wif, source, config.yedKey ? { yedKey: config.yedKey } : {}) : new exact.RpcWalletSigner(mustNode(node), held));
   // sapling-proof: the node wallet's z_sendmany from --shielded-from, else the light client's send.
   const shielded = config.shieldedFrom ? new ShieldedExactClient({ rpc: mustNode(node), from: config.shieldedFrom }) : config.light ? new LightClientShieldedPayer({ light: config.light }) : undefined;
   // sapling: the external builder signs, nothing is broadcast here; the tip for nExpiryHeight comes
@@ -80,7 +80,7 @@ export function buildClient(config: CliConfig): PayingClient {
     return { client, http: new x402HTTPClient(client), storage };
   }
   // Both assets; the channel's remainder returns to the WIF key's address or a new wallet address.
-  const funder = config.wif && source ? utxoSourceFunder(tx.decodeWif(config.wif, config.network).privKey, source) : rpcWalletFunder(mustNode(node), held);
+  const funder = config.wif && source ? utxoSourceFunder(tx.decodeWif(config.wif, config.network).privKey, source, true, config.yedKey ? { yedKey: config.yedKey } : {}) : rpcWalletFunder(mustNode(node), held);
   const deposit = depositFor(config);
   const maxDeposit = {
     ...(config.maxDepositZat !== undefined ? { [ASSET_YEC]: config.maxDepositZat } : {}),

@@ -1,8 +1,8 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { batch as B, channel, FileClientChannelStorage, tx as T, type YcashRpc } from "x402-ycash-mechanism";
+import { batch as B, channel, FileClientChannelStorage, pq, tx as T, type YcashRpc } from "x402-ycash-mechanism";
 import { buildClient } from "../src/client.js";
 import { loadCliConfig, parseCli, run, UsageError } from "../src/index.js";
 
@@ -56,6 +56,23 @@ describe("configuration", () => {
     expect(loadCliConfig(parseCli(["pay", "x"]), { ...devnetEnv, X402_MAX_CLOSE_FEE_ZAT: "4000" }).maxCloseFeeZat).toBe(4_000n);
     expect(loadCliConfig(parseCli(["pay", "x"]), devnetEnv).maxCloseFeeZat).toBeUndefined();
     expect(() => loadCliConfig(parseCli(["pay", "x", "--max-close-fee", "x"]), devnetEnv)).toThrow(/--max-close-fee/);
+  });
+
+  it("yed-key new writes a Falcon YED seed (0600, never over a file) and prints its addresses; --yed-key-file loads it beside --wif", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "x402-cli-yedkey-"));
+    const file = join(dir, "yed.key");
+    const out: Record<string, unknown>[] = [];
+    const io = { out: (r: Record<string, unknown>) => out.push(r), err: () => undefined };
+    expect(await run(["yed-key", "new", file], {}, io)).toBe(0);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(await run(["yed-key", "new", file], {}, io)).toBe(1); // exists
+    expect(await run(["yed-key", "address", "--yed-key-file", file], {}, io)).toBe(0);
+    expect(out[0]!.yedAddress).toBe(out[1]!.yedAddress);
+    expect(String(out[0]!.yedAddress)).toMatch(/^yr.{51}$/);
+    expect(String(out[0]!.pqAddress)).toMatch(/^rq/);
+    const c = loadCliConfig(parseCli(["pay", "x", "--wif", wif, "--yed-key-file", file]), devnetEnv);
+    expect(c.yedKey && pq.yedFalconAddress(NET, c.yedKey)).toBe(out[0]!.yedAddress);
+    expect(() => loadCliConfig(parseCli(["pay", "x", "--yed-key-file", file]), devnetEnv)).toThrow(/needs --wif/);
   });
 
   it("refuses a missing node, a bad network, a mainnet WIF on regtest, and bad numbers", () => {

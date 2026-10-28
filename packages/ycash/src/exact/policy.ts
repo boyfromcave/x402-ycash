@@ -13,7 +13,8 @@ import {
   YED_MIN_OUTPUT_CENTS,
   type YcashNetwork,
 } from "../constants.js";
-import { decodeAddress } from "../tx/index.js";
+import { pqDustThreshold } from "../pq/script.js";
+import { decodeAddress, isYedKind } from "../tx/index.js";
 import { ATM_SAPLING, ATM_SAPLING_PROOF, ATM_TRANSPARENT, FLOW_AUTHORIZATION, type ConfirmationPolicy } from "./types.js";
 
 /** Dust threshold of a P2PKH/P2SH output at the default relay fee (plan S-5, X-F15). */
@@ -146,7 +147,12 @@ export function checkTransparentYecRequirements(req: PaymentRequirements): strin
   if (!Number.isSafeInteger(req.maxTimeoutSeconds) || req.maxTimeoutSeconds <= 0) return "maxTimeoutSeconds must be a positive integer";
   try {
     // The network comes from the requirements, never from the address (plan X-F1).
-    if (decodeAddress(req.payTo, req.network).kind === "yed") return "a YEC payTo must be a transparent address";
+    const d = decodeAddress(req.payTo, req.network);
+    if (isYedKind(d.kind)) return "a YEC payTo must be a transparent address";
+    // A post-quantum (sq…) payee's output is dust below its own threshold: its spend is ≈ 8 KB (SLH-DSA).
+    if (d.scheme !== undefined && BigInt(req.amount) < pqDustThreshold(d.scheme)) {
+      return `amount below the post-quantum dust threshold of ${pqDustThreshold(d.scheme)} zatoshis`;
+    }
   } catch (e) {
     return `invalid payTo: ${(e as Error).message}`;
   }
@@ -171,7 +177,8 @@ export function checkTransparentYedRequirements(req: PaymentRequirements): strin
   }
   if (!Number.isSafeInteger(req.maxTimeoutSeconds) || req.maxTimeoutSeconds <= 0) return "maxTimeoutSeconds must be a positive integer";
   try {
-    if (decodeAddress(req.payTo, req.network).kind !== "yed") return "a YED payTo must be a Yellowback (ye…/yt…/yr…) address";
+    // either form: a P2PKH holder (35 characters) or a TX_PQPKH holder (53; quantum spec §4)
+    if (!isYedKind(decodeAddress(req.payTo, req.network).kind)) return "a YED payTo must be a Yellowback (yb…/yt…/yr…) address";
   } catch (e) {
     return `invalid payTo: ${(e as Error).message}`;
   }

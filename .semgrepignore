@@ -1,0 +1,18 @@
+# Paths Semgrep never scans (contrib/semgrep/README.md). Semgrep scans git-tracked files only; this file
+# replaces its built-in ignore list, so the usual build and vendor directories are named here too.
+# Golden vectors (JSON test data pinned to the node's vectors; inputs, not code).
+vectors/
+tools/x4m/results/
+# Generated lock file (OSV-Scanner and npm audit read it; its integrity hashes are not secrets).
+package-lock.json
+# The scanner's own rules, rule tests and ledgers.
+contrib/semgrep/
+# Build output and caches.
+dist/
+coverage/
+target/
+light/target/
+.cargo/
+node_modules/
+.venv/
+*.min.js

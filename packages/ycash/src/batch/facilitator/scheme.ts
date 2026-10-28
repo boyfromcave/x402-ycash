@@ -8,9 +8,11 @@
 import type { Network, PaymentPayload, PaymentRequirements, SchemeNetworkFacilitator, SettleResponse, VerifyResponse } from "@x402/core/types";
 import { channelFromScript, channelIdOf, commitmentIdOf, type Channel } from "../../channel/channel.js";
 import { channelScriptPubKey, parseChannelScript } from "../../channel/script.js";
-import { parseCloseScriptSig } from "../../channel/voucher.js";
+import { parsePQChannelScript } from "../../channel/pqScript.js";
+import { parseCloseScriptSig, parsePQCloseScriptSig } from "../../channel/voucher.js";
 import { ASSET_YED } from "../../constants.js";
 import { SendRawTransactionError } from "../../node/errors.js";
+import { sendChannelTransaction } from "../relay.js";
 import { DEFAULT_CLOSED_RETENTION_MS, InMemoryChannelStore, type ChannelStore } from "../../store/channelStore.js";
 import { RETAIN_FOREVER, txidKey, type SettlementStore } from "../../store/settlementStore.js";
 import { addressToScript } from "../../tx/address.js";
@@ -164,8 +166,8 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
           const tx = decodeTx(p.fundingTx, BatchError.FUNDING);
           const fundingTxid = txidOf(tx);
           const channelId = channelIdOf({ txid: fundingTxid, vout: p.vout });
-          await this.relay(p.fundingTx);
           const terms = parseTerms(requirements);
+          await this.relay(p.fundingTx, terms.asset === ASSET_YED);
           if (!(await this.waitForDepth(fundingTxid, p.vout, requiredDepth(terms.confirmations)))) {
             return { ...fail(new BatchSettlementError(BatchError.SETTLEMENT_PENDING, "funding below the policy depth"), fundingTxid), payer: channelId };
           }
@@ -182,7 +184,7 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
           if (store && !(await store.claim(txidKey(requirements.network as BatchTerms["network"], closeTxid), RETAIN_FOREVER))) {
             throw new BatchSettlementError("duplicate_settlement", closeTxid);
           }
-          await this.relay(p.tx);
+          await this.relay(p.tx, parseTerms(requirements).asset === ASSET_YED);
           await this.recordClaim(p.channelId, BigInt(p.cumulative));
           return { success: true, transaction: closeTxid, network, payer: p.channelId, amount: "", extra: { commitmentId: commitmentId(p.channelId) } };
         }
@@ -229,17 +231,31 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
   private async liveChannel(txHex: string, channelId: string, terms: BatchTerms): Promise<{ channel: Channel; tx: Tx }> {
     const tx = decodeTx(txHex, BatchError.VOUCHER_SHAPE);
     const input = tx.vin[0];
+    // A P2SH channel's scriptSig carries its redeem script; a TX_PQCHANNEL is bare, so its script is
+    // read from the live output, and the scriptSig must be the cooperative PQ form.
     const ss = input ? parseCloseScriptSig(input.scriptSig) : null;
-    if (tx.vin.length !== 1 || !input || !ss) throw new BatchSettlementError(BatchError.VOUCHER_SHAPE, "inputs");
+    const pqs = input && !ss ? parsePQCloseScriptSig(input.scriptSig) : null;
+    if (tx.vin.length !== 1 || !input || (!ss && !pqs)) throw new BatchSettlementError(BatchError.VOUCHER_SHAPE, "inputs");
     if (channelIdOf(input.prevout) !== channelId) throw new BatchSettlementError(BatchError.VOUCHER_SHAPE, "the voucher does not spend channelId");
-    const script = parseChannelScript(ss.redeemScript);
-    if (!script || !equalBytes(script.serverPubKey, terms.serverPubKey)) throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, bytesToHex(ss.redeemScript));
+    let rs: Uint8Array | undefined;
+    if (ss) {
+      const script = parseChannelScript(ss.redeemScript);
+      if (!script || !equalBytes(script.serverPubKey, terms.serverPubKey)) throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, bytesToHex(ss.redeemScript));
+      rs = ss.redeemScript;
+    }
     const out = await this.chain.getTxOut(input.prevout.txid, input.prevout.vout, true);
     if (!out) throw new BatchSettlementError(BatchError.CHANNEL_CLOSING, "the channel output is spent or unknown");
-    if (out.scriptPubKey.hex !== bytesToHex(channelScriptPubKey(ss.redeemScript))) throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, "not the channel output's script");
+    if (pqs) {
+      const spk = hexToBytes(out.scriptPubKey.hex);
+      const script = parsePQChannelScript(spk);
+      if (!script || !equalBytes(script.serverPubKey, terms.serverPubKey)) throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, out.scriptPubKey.hex);
+      if (terms.asset !== ASSET_YED) throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, "a YEC channel uses the P2SH channel script");
+      rs = spk;
+    }
+    if (!rs || out.scriptPubKey.hex !== bytesToHex(channelScriptPubKey(rs))) throw new BatchSettlementError(BatchError.REDEEM_SCRIPT, "not the channel output's script");
     const channel = channelFromScript({
       outpoint: input.prevout,
-      redeemScript: ss.redeemScript,
+      redeemScript: rs,
       value: zatOf(out),
       closeFee: terms.closeFee,
       payToScript: addressToScript(terms.payTo, terms.network),
@@ -265,10 +281,11 @@ export class BatchYcashScheme implements SchemeNetworkFacilitator {
    * Broadcasts a transaction, treating "already in chain" as success so a retried settle is idempotent.
    *
    * @param hex - The raw transaction.
+   * @param yed - A YED channel's transaction (verify bounded its fee; relay.ts).
    */
-  private async relay(hex: string): Promise<void> {
+  private async relay(hex: string, yed: boolean): Promise<void> {
     try {
-      await this.chain.sendRawTransaction(hex);
+      await sendChannelTransaction(this.chain, hex, yed);
     } catch (e) {
       if (e instanceof SendRawTransactionError && e.kind === "already-in-chain") return;
       throw e;

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_PAYLOAD,
+  MINT_PAYLOAD_VERSION,
+  PAYLOAD_VERSION,
   PayloadType,
+  payloadVersionOf,
   decodePayload,
   encodeTransferPayload,
   extractOpReturnData,
@@ -33,6 +36,17 @@ describe("encodeTransferPayload", () => {
     expect(() => encodeTransferPayload([{ vout: 256, cents: 100 }])).toThrow(/u8/);
     expect(() => encodeTransferPayload([{ vout: 0, cents: 2 ** 32 }])).toThrow(/u32/);
     expect(() => encodeTransferPayload([{ vout: 0, cents: 1.5 }])).toThrow(/u32/);
+  });
+  it("C-1: never emits a version-4 TRANSFER (it would be non-Yellowback and burn); only the MINT is version 4", () => {
+    for (let n = 0; n <= 15; n++) {
+      expect(encodeTransferPayload(Array.from({ length: n }, (_, i) => ({ vout: i, cents: 100 })))[2]).toBe(PAYLOAD_VERSION);
+    }
+    expect([PAYLOAD_VERSION, MINT_PAYLOAD_VERSION, payloadVersionOf(PayloadType.MINT), payloadVersionOf(PayloadType.TRANSFER), payloadVersionOf(PayloadType.REDEEM)]).toEqual([3, 4, 4, 3, 3]);
+    const t = encodeTransferPayload([{ vout: 0, cents: 100 }]);
+    expect(decodePayload(Uint8Array.from([...t.slice(0, 2), 4, ...t.slice(3)]))).toEqual({ error: "payload_unsupported_version" });
+    const mintBody = "01" + "01" + "a8610000" + "09000000" + "08000000" + "01" + "00".repeat(32) + "00ff";
+    expect(decodePayload(unhex("594203" + mintBody))).toEqual({ error: "payload_unsupported_version" });
+    expect(decodePayload(unhex("594204" + mintBody))).toMatchObject({ type: "mint", cents: 25000, ownerKey: unhex("01" + "00".repeat(32)) });
   });
   it("round-trips through decodePayload", () => {
     const assignments = [{ vout: 3, cents: 4_000_000_000 }, { vout: 0, cents: 100 }];

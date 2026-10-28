@@ -1,7 +1,8 @@
 // An in-process chain for the batch-settlement unit tests: a UTXO set with a mempool, gettxout's
 // two views, sendrawtransaction with first-seen conflicts, and a script verifier that really checks
-// channel spends (both multisig signatures, or the refund's CLTV signature) and accepts P2PKH spends.
-import { channel, tx as T, RpcError, SendRawTransactionError, zatToYecString } from "../../../src/index.js";
+// channel spends (both multisig signatures, or the refund's CLTV signature; for a TX_PQCHANNEL the
+// client's post-quantum signature and the server's ECDSA one, or the PQ refund) and accepts P2PKH spends.
+import { channel, pq, tx as T, RpcError, SendRawTransactionError, zatToYecString } from "../../../src/index.js";
 import type { BlockchainInfo, TxOutInfo, VerifyScriptsResult } from "../../../src/node/types.js";
 
 export const CANOPY = 0x19bd2d2f;
@@ -22,6 +23,8 @@ export class FakeChain {
   readonly sent: string[] = [];
   /** Make verifyScripts fail every input (a node refusing the scripts). */
   failScripts = false;
+  /** getblockchaininfo.upgrades (settable: a test schedules a network upgrade). */
+  upgrades: BlockchainInfo["upgrades"] = {};
 
   addCoin(txid: string, vout: number, value: bigint, spk: Uint8Array, mempool = false): void {
     this.coins.set(`${txid}:${vout}`, { value, spk, height: mempool ? null : this.tip, spentInMempool: false });
@@ -43,7 +46,7 @@ export class FakeChain {
 
   async getBlockchainInfo(): Promise<BlockchainInfo> {
     const b = this.branchId.toString(16).padStart(8, "0");
-    return { chain: this.chain, blocks: this.tip, headers: this.tip, bestblockhash: "00".repeat(32), consensus: { chaintip: b, nextblock: b }, upgrades: {} };
+    return { chain: this.chain, blocks: this.tip, headers: this.tip, bestblockhash: "00".repeat(32), consensus: { chaintip: b, nextblock: b }, upgrades: this.upgrades };
   }
 
   async getTxOut(txid: string, n: number, includeMempool: boolean): Promise<TxOutInfo | null> {
@@ -72,6 +75,8 @@ export class FakeChain {
     const c = this.coins.get(`${i.prevout.txid}:${i.prevout.vout}`);
     if (!c) return false;
     if (T.p2pkhHash(c.spk)) return true;
+    const pqc = channel.parsePQChannelScript(c.spk);
+    if (pqc) return this.pqChannelInputOk(tx, n, c, pqc);
     const close = channel.parseCloseScriptSig(i.scriptSig);
     const chunks = T.parseScript(i.scriptSig);
     const rs = close?.redeemScript ?? chunks[chunks.length - 1]?.data;
@@ -86,6 +91,25 @@ export class FakeChain {
     if (chunks.length !== 3 || chunks[1]?.op !== T.OP.OP_0) return false;
     if (tx.lockTime < script.refundHeight || i.sequence === T.SEQUENCE_FINAL) return false;
     return T.verifyInputSig(chunks[0]!.data!, sh, script.clientPubKey);
+  }
+
+  /**
+   * A TX_PQCHANNEL spend: cooperative `<sigS> <client spend> OP_1` or refund `<client spend> OP_0`
+   * after t; the client's key must hash to the channel's (D-Q-19).
+   */
+  private pqChannelInputOk(tx: T.Tx, n: number, c: Coin, ps: channel.PQChannelScript): boolean {
+    const i = tx.vin[n]!;
+    const sh = T.sighashV4(tx, n, c.spk, c.value, T.SIGHASH.ALL, this.branchId);
+    const pqOk = (sp: pq.PQSpend): boolean =>
+      pq.spendMatches(sp, ps.client) && sp.sig[sp.sig.length - 1] === T.SIGHASH.ALL && pq.pqVerify(sp.scheme, sp.pk, sp.sig.subarray(0, -1), sh);
+    const coop = channel.parsePQCloseScriptSig(i.scriptSig);
+    if (coop) return coop.sigS.length > 0 && pqOk(coop.spend) && T.verifyInputSig(coop.sigS, sh, ps.serverPubKey);
+    const chunks = T.parseScript(i.scriptSig);
+    const last = chunks[chunks.length - 1];
+    if (!last || last.op !== T.OP.OP_0) return false;
+    const sp = pq.parsePQSpend(chunks.slice(0, -1));
+    if (!sp || tx.lockTime < ps.refundHeight || i.sequence === T.SEQUENCE_FINAL) return false;
+    return pqOk(sp);
   }
 
   async sendRawTransaction(hex: string): Promise<string> {

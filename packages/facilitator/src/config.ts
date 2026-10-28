@@ -75,6 +75,15 @@ export interface FacilitatorConfig {
   nodeWaitMs: number;
   /** When set, /verify and /settle require `Authorization: Bearer <apiKey>`. */
   apiKey?: string;
+  /** Per-client limit on /verify and /settle: at most `max` requests per `windowMs`, then 429. */
+  rateLimit: RateLimit;
+  /** Reverse-proxy hops in front of the facilitator (express `trust proxy`); 0 = the socket's peer is the client. */
+  trustProxy: number;
+}
+
+export interface RateLimit {
+  windowMs: number;
+  max: number;
 }
 
 // Spec range for `confirmationPolicy.confirmations`: −1 (mempool) to 20.
@@ -124,6 +133,8 @@ const fileSchema = z
     shutdownTimeoutMs: z.number().int().min(0),
     nodeWaitMs: z.number().int().min(0),
     apiKey: z.string().min(16),
+    rateLimit: z.object({ windowMs: z.number().int().min(1000).max(3_600_000), max: z.number().int().min(1).max(1_000_000) }).strict(),
+    trustProxy: z.number().int().min(0).max(10),
   })
   .partial()
   .strict();
@@ -148,6 +159,9 @@ export const DEFAULTS = {
   logLevel: "info" as LogLevel,
   shutdownTimeoutMs: 30_000,
   nodeWaitMs: 60_000,
+  // Per client address: 1200 a minute is 10 paid requests a second (a verify and a settle each).
+  rateLimit: { windowMs: 60_000, max: 1200 },
+  trustProxy: 0,
 } as const;
 
 type Env = Record<string, string | undefined>;
@@ -213,6 +227,11 @@ export function resolveConfig(file: z.output<typeof fileSchema>, env: Env): Faci
     shutdownTimeoutMs: intEnv(env, "X402_SHUTDOWN_TIMEOUT_MS") ?? file.shutdownTimeoutMs ?? DEFAULTS.shutdownTimeoutMs,
     nodeWaitMs: intEnv(env, "X402_NODE_WAIT_MS") ?? file.nodeWaitMs ?? DEFAULTS.nodeWaitMs,
     apiKey: strEnv(env, "X402_API_KEY") ?? file.apiKey,
+    rateLimit: {
+      windowMs: intEnv(env, "X402_RATE_LIMIT_WINDOW_MS") ?? file.rateLimit?.windowMs ?? DEFAULTS.rateLimit.windowMs,
+      max: intEnv(env, "X402_RATE_LIMIT") ?? file.rateLimit?.max ?? DEFAULTS.rateLimit.max,
+    },
+    trustProxy: intEnv(env, "X402_TRUST_PROXY") ?? file.trustProxy ?? DEFAULTS.trustProxy,
   };
   // Re-validate the merged values with the file schema so env and file obey one set of rules.
   const checked = fileSchema.safeParse(Object.fromEntries(Object.entries(merged).filter(([, v]) => v !== undefined)));

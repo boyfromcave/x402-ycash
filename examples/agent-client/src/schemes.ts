@@ -46,7 +46,7 @@ export interface ClientSchemeDeps {
   yedChannelDepositCents?: bigint;
   /** YED channels: the client's cap on D, cents (default $50). */
   yedChannelMaxDepositCents?: bigint;
-  /** batch-settlement: the largest server closeFee accepted, zatoshis, for both assets (default 5,000). */
+  /** batch-settlement: the largest server closeFee accepted, zatoshis, for both assets (default 5,000 YEC, 40,000 YED: the post-quantum close). */
   channelMaxCloseFeeZat?: bigint;
 }
 
@@ -94,7 +94,7 @@ export const registerClientSchemes: RegisterClientSchemes = (client, deps) => {
   // Sapling source, sapling-proof (z_sendmany to the per-request address, then the txid).
   const transparent = privateOnly
     ? undefined
-    : new exact.ExactYcashScheme(deps.signer.kind === "wif" && source ? new exact.LocalKeySigner(deps.signer.wif, source) : new exact.RpcWalletSigner(needNode(deps), held));
+    : new exact.ExactYcashScheme(deps.signer.kind === "wif" && source ? new exact.LocalKeySigner(deps.signer.wif, source, deps.signer.yedKey ? { yedKey: deps.signer.yedKey } : {}) : new exact.RpcWalletSigner(needNode(deps), held));
   // sapling-proof: the node wallet's z_sendmany from AGENT_SHIELDED_FROM, else the light client's send.
   const shielded = deps.shieldedFrom ? new ShieldedExactClient({ rpc: needNode(deps), from: deps.shieldedFrom }) : deps.light ? new LightClientShieldedPayer({ light: deps.light }) : undefined;
   // sapling: a signed, unbroadcast Sapling transaction from the external builder; the client sets
@@ -108,7 +108,7 @@ export const registerClientSchemes: RegisterClientSchemes = (client, deps) => {
   // batch-settlement: opens a channel on the first 402, then one voucher per request.
   // YEC or YED, as the route's 402 asks: the WIF funder spends the key's token outputs for YED.
   // The channel's remainder returns to the funder: the WIF key's address or a new wallet address.
-  const funder = deps.signer.kind === "wif" && source ? utxoSourceFunder(deps.signer.privKey, source) : rpcWalletFunder(needNode(deps), held);
+  const funder = deps.signer.kind === "wif" && source ? utxoSourceFunder(deps.signer.privKey, source, true, deps.signer.yedKey ? { yedKey: deps.signer.yedKey } : {}) : rpcWalletFunder(needNode(deps), held);
   const deposits = {
     ...(deps.channelDepositZat !== undefined ? { [ASSET_YEC]: deps.channelDepositZat } : {}),
     ...(deps.yedChannelDepositCents !== undefined ? { [ASSET_YED]: deps.yedChannelDepositCents } : {}),

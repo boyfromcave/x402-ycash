@@ -8,6 +8,7 @@ import type { VoucherLayout } from "../../channel/outputs.js";
 import { completeVoucher } from "../../channel/voucher.js";
 import { ASSET_YED } from "../../constants.js";
 import { SendRawTransactionError } from "../../node/errors.js";
+import { sendChannelTransaction } from "../relay.js";
 import { InMemoryChannelStore, type ChannelStore } from "../../store/channelStore.js";
 import { addressToScript } from "../../tx/address.js";
 import { bytesToHex, hexToBytes } from "../../tx/bytes.js";
@@ -27,12 +28,15 @@ import {
   layoutFor,
   verifyOpen,
   yedChain,
+  type ChainContext,
   type ChainView,
 } from "../verify.js";
-import { ChannelWatcher, type WatchedChannel } from "../watcher.js";
+import { nextActivationHeightOf } from "../upgrade.js";
+import { ChannelWatcher, marginHeightOf, type WatchedChannel } from "../watcher.js";
 import { CHANNEL_OPEN, ChannelLedger, type ChannelTerms, type LedgerChannel } from "./ledger.js";
 
-export type CloseReason = "idle" | "margin" | "exhausted" | "client" | "demand";
+/** `upgrade`: inside the margin of the next network-upgrade activation height (audit 06/X-1). */
+export type CloseReason = "idle" | "margin" | "upgrade" | "exhausted" | "client" | "demand";
 
 export interface ChannelManagerConfig {
   /** the server's node (any line, stock is enough for YEC) */
@@ -160,9 +164,14 @@ export class ChannelManager {
         } else {
           const v = await verifyOpen(p, terms, this.chain, ctx);
           channelId = v.channelId;
-          if (!v.alreadyBroadcast) await this.relayFunding(p.fundingTx, v.fundingTxid, p.vout);
-          await this.ledger.open({ ...this.termsOf(v.channel, channelId, p.fundingTx, terms, v.deposit), returnScript: bytesToHex(v.returnScript) });
-          this.log(`open ${channelId} V=${v.channel.value} D=${v.deposit} t=${v.channel.refundHeight}`);
+          if (!v.alreadyBroadcast) await this.relayFunding(p.fundingTx, v.fundingTxid, p.vout, terms.asset === ASSET_YED);
+          await this.ledger.open({
+            ...this.termsOf(v.channel, channelId, p.fundingTx, terms, v.deposit), returnScript: bytesToHex(v.returnScript),
+            ...(v.falconCloseBy < v.channel.refundHeight ? { closeBy: v.falconCloseBy } : {}),
+          });
+          if (v.closeBound === "upgrade") await this.ledger.lowerCloseBy(channelId, v.closeBy);
+          const bound = v.closeBound === "upgrade" ? "before the next network upgrade's activation" : "opened before the Falcon height";
+          this.log(`open ${channelId} V=${v.channel.value} D=${v.deposit} t=${v.channel.refundHeight}${v.closeBound ? ` closeBy=${v.closeBy} (${bound})` : ""}`);
         }
         this.track(channelId);
         await this.waitForDepth(channelId);
@@ -262,8 +271,9 @@ export class ChannelManager {
   }
 
   /**
-   * Runs the close triggers for every tracked open channel: margin (tip ≥ t − margin) and idle.
-   * Channels no longer open are untracked.
+   * Runs the close triggers for every tracked open channel: margin (tip ≥ min(t, closeBy) − margin),
+   * the next network upgrade (its activation height re-read from the node on every sweep and
+   * recorded as the channel's bound when lower, audit 06/X-1) and idle. Channels no longer open are untracked.
    *
    * @param tip - The chain height; fetched from the node when omitted.
    * @param now - The current time, ms.
@@ -272,14 +282,17 @@ export class ChannelManager {
   async sweep(tip?: number, now = Date.now()): Promise<{ channelId: string; reason: CloseReason; txid: string | undefined }[]> {
     const height = tip ?? (await this.chain.getBlockCount());
     const closed: { channelId: string; reason: CloseReason; txid: string | undefined }[] = [];
-    for (const id of this.tracked()) {
-      const ch = await this.ledger.get(id);
+    const ids = this.tracked();
+    const activation = ids.length > 0 ? await this.nextActivation(height) : undefined;
+    for (const id of ids) {
+      let ch = await this.ledger.get(id);
       if (!ch || ch.state !== CHANNEL_OPEN) {
         this.lastActivity.delete(id);
         continue;
       }
+      ch = await this.boundByUpgrade(ch, activation);
       let reason: CloseReason | null = null;
-      if (height >= ch.terms.refundHeight - ch.terms.closeMarginBlocks) reason = "margin";
+      if (height >= marginHeightOf(ch.terms)) reason = this.marginReason(ch);
       else if (now - (this.lastActivity.get(id) ?? now) >= this.idleMs) reason = "idle";
       if (reason) closed.push({ channelId: id, reason, txid: await this.close(id, reason) });
     }
@@ -309,12 +322,15 @@ export class ChannelManager {
         const open: WatchedChannel[] = [];
         for (const id of this.tracked()) {
           const ch = await this.ledger.get(id);
-          if (ch?.state === CHANNEL_OPEN) open.push({ channelId: id, refundHeight: ch.terms.refundHeight, closeMarginBlocks: ch.terms.closeMarginBlocks });
+          if (ch?.state === CHANNEL_OPEN) {
+            open.push({ channelId: id, refundHeight: ch.terms.refundHeight, closeMarginBlocks: ch.terms.closeMarginBlocks, ...(ch.terms.closeBy !== undefined ? { closeBy: ch.terms.closeBy } : {}) });
+          }
         }
         return open;
       },
       onMargin: async (ch) => {
-        await this.close(ch.channelId, "margin");
+        const led = await this.ledger.get(ch.channelId);
+        await this.close(ch.channelId, led ? this.marginReason(led) : "margin");
       },
       onTick: async (tip) => {
         await this.sweep(tip);
@@ -377,7 +393,7 @@ export class ChannelManager {
     txHex: string,
     cumulative: bigint,
     terms: BatchTerms,
-    ctx: { tip: number; branchId: number },
+    ctx: ChainContext,
   ): Promise<VerifiedVoucher> {
     // 1. known and open
     if (!parseChannelId(channelId)) throw new BatchSettlementError(BatchError.UNKNOWN_CHANNEL, channelId);
@@ -386,11 +402,16 @@ export class ChannelManager {
     if (before.state !== CHANNEL_OPEN) throw new BatchSettlementError(BatchError.CHANNEL_CLOSING, "the channel is closing or closed");
     this.checkSameTerms(before, terms);
     const channel = this.channelOf(before.terms);
-    // 2. margin: refuse and close (a client close is still welcome until t)
-    const marginHeight = before.terms.refundHeight - before.terms.closeMarginBlocks;
+    // 2. margin: refuse and close (a client close is still welcome until t). The bound is t, the
+    // Falcon height for a YED channel opened before it, or the next network upgrade's activation
+    // height (this request's chain context; recorded when lower, audit 06/X-1).
+    const bounded = await this.boundByUpgrade(before, ctx.nextActivationHeight);
+    const marginHeight = marginHeightOf(bounded.terms);
     if (kind !== "close" && ctx.tip >= marginHeight) {
-      await this.close(channelId, "margin").catch((e: unknown) => this.log(`margin close of ${channelId} failed: ${String(e)}`));
-      throw new BatchSettlementError(BatchError.CHANNEL_CLOSING, `tip ${ctx.tip} ≥ t − margin = ${marginHeight}`);
+      const reason = this.marginReason(bounded);
+      await this.close(channelId, reason).catch((e: unknown) => this.log(`${reason} close of ${channelId} failed: ${String(e)}`));
+      const what = reason === "upgrade" ? `the next network upgrade's activation height ${bounded.terms.closeBy}` : bounded.terms.closeBy !== undefined && bounded.terms.closeBy < bounded.terms.refundHeight ? "the Falcon height" : "t";
+      throw new BatchSettlementError(BatchError.CHANNEL_CLOSING, `tip ${ctx.tip} ≥ ${what} − margin = ${marginHeight}`);
     }
     const token = await this.ledger.acquire(channelId);
     if (token === null) throw new BatchSettlementError(BatchError.CHANNEL_BUSY, "another voucher of this channel is in flight");
@@ -474,7 +495,8 @@ export class ChannelManager {
   private async broadcastClose(channelId: string, hex: string): Promise<string | undefined> {
     const txid = txidOf(hexToBytes(hex));
     try {
-      await this.chain.sendRawTransaction(hex);
+      const ch = (await this.ledger.get(channelId)) as LedgerChannel | undefined;
+      await sendChannelTransaction(this.chain, hex, ch?.terms.asset === ASSET_YED);
     } catch (e) {
       if (!(e instanceof SendRawTransactionError) || e.kind !== "already-in-chain") {
         const ch = (await this.ledger.get(channelId)) as LedgerChannel;
@@ -498,11 +520,12 @@ export class ChannelManager {
    * @param hex - The funding transaction.
    * @param txid - Its txid, display-order hex.
    * @param vout - The channel output index.
+   * @param yed - A YED channel's funding (its fee checked against the node's cap by verifyOpen).
    * @throws BatchSettlementError (`funding`) when the relay fails and the output is not visible.
    */
-  private async relayFunding(hex: string, txid: string, vout: number): Promise<void> {
+  private async relayFunding(hex: string, txid: string, vout: number, yed: boolean): Promise<void> {
     try {
-      await this.chain.sendRawTransaction(hex);
+      await sendChannelTransaction(this.chain, hex, yed);
     } catch (e) {
       if (e instanceof SendRawTransactionError && e.kind === "already-in-chain") return;
       if (await this.chain.getTxOut(txid, vout, true)) return;
@@ -574,6 +597,50 @@ export class ChannelManager {
       closeFee: BigInt(t.closeFee),
       payToScript: addressToScript(t.payTo, t.network as BatchTerms["network"]),
     });
+  }
+
+  /**
+   * The next network-upgrade activation height above `tip`, from the node's `getblockchaininfo`
+   * (undefined when none is pending, or when the node cannot be asked: the sweep then runs on the
+   * bounds already recorded, and the failure is logged).
+   *
+   * @param tip - The tip height the sweep runs at.
+   * @returns The activation height, or undefined.
+   */
+  private async nextActivation(tip: number): Promise<number | undefined> {
+    try {
+      return nextActivationHeightOf((await this.chain.getBlockchainInfo()).upgrades, tip);
+    } catch (e) {
+      this.log(`getblockchaininfo failed; the network-upgrade bound is not re-read this sweep: ${String(e)}`);
+      return undefined;
+    }
+  }
+
+  /**
+   * Lowers the channel's recorded close bound to the next activation height when that is below
+   * min(t, closeBy), so the margin is measured from it and a restart keeps it.
+   *
+   * @param ch - The channel as read.
+   * @param activation - The next activation height, or undefined.
+   * @returns The channel with the bound applied.
+   */
+  private async boundByUpgrade(ch: LedgerChannel, activation: number | undefined): Promise<LedgerChannel> {
+    if (activation === undefined || activation >= Math.min(ch.terms.refundHeight, ch.terms.closeBy ?? Infinity)) return ch;
+    if (await this.ledger.lowerCloseBy(ch.terms.channelId, activation)) {
+      this.log(`channel ${ch.terms.channelId}: closeBy lowered to ${activation}, the next network upgrade's activation height (closes from ${activation - ch.terms.closeMarginBlocks})`);
+    }
+    return { ...ch, terms: { ...ch.terms, closeBy: activation }, upgradeCloseBy: activation };
+  }
+
+  /**
+   * The close reason once the margin is reached: `upgrade` when the network-upgrade bound is the
+   * binding one, else `margin` (t or the Falcon height).
+   *
+   * @param ch - The channel.
+   * @returns The reason.
+   */
+  private marginReason(ch: LedgerChannel): CloseReason {
+    return ch.upgradeCloseBy !== undefined && ch.upgradeCloseBy < ch.terms.refundHeight && ch.upgradeCloseBy === ch.terms.closeBy ? "upgrade" : "margin";
   }
 
   /**

@@ -4,6 +4,7 @@
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import { RpcError, SendRawTransactionError, type BlockchainInfo, type NodeCapabilities, type TxOutInfo, type VerifyScriptsResult, type YedPayload, type YedValidation } from "../../../src/node/index.js";
 import { findPayload, isFindPayloadFailure } from "../../../src/yed/index.js";
+import { parsePQSpend, pqpkhKeyId, pqVerify, spendMatches } from "../../../src/pq/index.js";
 import type { ChainState, Coin, ExactFacilitatorRpc, UtxoSource } from "../../../src/exact/index.js";
 import type { TokenCoin } from "../../../src/yed/index.js";
 import {
@@ -19,6 +20,7 @@ import {
   txid as txidOf,
   verifyInputSig,
   encodeAddress,
+  networkFeesOf,
 } from "../../../src/tx/index.js";
 
 export const BRANCH_ID = 0x19bd2d2f;
@@ -34,6 +36,17 @@ export class FakeNode implements ExactFacilitatorRpc {
   chain = "regtest";
   tip = 300;
   yellowback = false;
+  /** The Falcon height `yed_getinfo` reports (unset: the node reports none, so the network default applies). */
+  falconHeight: number | undefined;
+  /** `yed_getinfo.params.fees.network` (rpcversion 8); unset: the node reports rpcversion 7, no rates. */
+  networkFees: Record<string, unknown> | undefined;
+  async yedGetInfo(): Promise<Record<string, unknown>> {
+    const params: Record<string, unknown> = this.falconHeight === undefined ? {} : { pq: { falconHeight: this.falconHeight } };
+    if (this.networkFees) return { rpcversion: 8, params: { ...params, fees: { network: this.networkFees } } };
+    return { rpcversion: 7, params };
+  }
+  /** allowhighfees of every sendrawtransaction, in call order. */
+  allowHighFees: boolean[] = [];
   /** cents of YED each outpoint holds (Yellowback node only) */
   yedCents = new Map<string, number>();
   utxos = new Map<string, Utxo>();
@@ -106,6 +119,15 @@ export class FakeNode implements ExactFacilitatorRpc {
       const e = (error: string) => errors.push({ txid: input.prevout.txid, vout: input.prevout.vout, scriptSig: bytesToHex(input.scriptSig), sequence: input.sequence, error });
       if (!u) return e("Input not found or already spent");
       const chunks = parseScript(input.scriptSig);
+      const pqId = pqpkhKeyId(u.script);
+      if (pqId) {
+        // TX_PQPKH: the chunked spend by the key the script names, its signature over the sighash
+        const sp = parsePQSpend(chunks);
+        if (!sp || !spendMatches(sp, pqId)) return e("Operation not valid with the current stack size");
+        const d = sighashV4(tx, i, u.script, u.value, sp.sig[sp.sig.length - 1] as number, BRANCH_ID);
+        if (!pqVerify(sp.scheme, sp.pk, sp.sig.subarray(0, -1), d)) return e("Script evaluated without error but finished with a false/empty top stack element");
+        return;
+      }
       const sig = chunks[0]?.data;
       const pub = chunks[1]?.data;
       const pkh = p2pkhHash(u.script);
@@ -116,8 +138,9 @@ export class FakeNode implements ExactFacilitatorRpc {
     return { complete: errors.length === 0, errors };
   }
 
-  async sendRawTransaction(hex: string): Promise<string> {
+  async sendRawTransaction(hex: string, allowHighFees?: boolean): Promise<string> {
     this.calls.push("sendrawtransaction");
+    this.allowHighFees.push(allowHighFees === true);
     if (this.sendError) {
       const e = this.sendError;
       this.sendError = undefined;
@@ -222,7 +245,12 @@ function out(u: { value: bigint; script: Uint8Array }, confirmations: number): T
 export class FakeUtxoSource implements UtxoSource {
   constructor(private readonly node: FakeNode) {}
   async chainState(): Promise<ChainState> {
-    return { chain: this.node.chain, height: this.node.tip, branchId: BRANCH_ID };
+    const networkFees = networkFeesOf(await this.node.yedGetInfo());
+    return {
+      chain: this.node.chain, height: this.node.tip, branchId: BRANCH_ID,
+      ...(this.node.falconHeight !== undefined ? { falconHeight: this.node.falconHeight } : {}),
+      ...(networkFees ? { networkFees } : {}),
+    };
   }
   async listTokens(address: string): Promise<TokenCoin[]> {
     void address;

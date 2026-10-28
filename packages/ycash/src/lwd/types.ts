@@ -18,7 +18,7 @@ export interface LightdInfo {
   zcashdSubversion: string;
 }
 
-/** `YedChainInfo` (yellowback.proto:186-192): what a client needs to sign for the next block (X-F71). */
+/** `YedChainInfo` (yellowback.proto:243-249): what a client needs to sign for the next block (X-F71). */
 export interface YedChainInfoMsg {
   chainName: string;
   blockHeight: string;
@@ -26,6 +26,18 @@ export interface YedChainInfoMsg {
   consensusBranchId: string;
   /** getblockchaininfo `consensus.nextblock`, hex: differs from the chaintip's on the block before an upgrade. */
   nextBlockBranchId: string;
+  /** getblockchaininfo `upgrades` as a list (yellowback.proto `YedUpgrade`); empty or absent on an older server. */
+  upgrades?: YedUpgradeMsg[];
+}
+
+/** One network upgrade (yellowback.proto `YedUpgrade`): getblockchaininfo `upgrades[branchId]`. */
+export interface YedUpgradeMsg {
+  branchId: string;
+  name: string;
+  /** int64 as a decimal string */
+  activationHeight: string;
+  /** "active", "pending" or "disabled", as the node reports it */
+  status: string;
 }
 
 /** `GetAddressUtxosReply` (service.proto:133-140); txid in internal (little-endian) byte order. */
@@ -56,7 +68,7 @@ export interface CompactTxMsg {
   hash: Buffer;
 }
 
-/** `YedToken` (yellowback.proto:35-38): one `yed_listtokens` record; txid in display order. */
+/** `YedToken` (yellowback.proto:41-44): one `yed_listtokens` record; txid in display order. */
 export interface YedTokenMsg {
   txid: string;
   vout: number;
@@ -67,7 +79,7 @@ export interface YedTokenMsg {
   transparentAddress: string;
 }
 
-/** `YedValidation` (yellowback.proto:93-97): `yed_validaterawtransaction`. */
+/** `YedValidation` (yellowback.proto:153-157): `yed_validaterawtransaction`. */
 export interface YedValidationMsg {
   blockValid: boolean;
   burned: string;
@@ -82,4 +94,37 @@ export interface YedValidationMsg {
   wouldBeRejected: boolean;
   yedIn: string;
   yedOut: string;
+}
+
+/** `YellowbackNetworkRate` (yellowback.proto:73-75): one rate of `params.fees.network`. */
+export interface YellowbackNetworkRateMsg {
+  zatPerKB: string;
+  maxTxFeeZat: string;
+}
+
+/** `YellowbackNetworkFee` (yellowback.proto:76-79): `yed_getinfo.params.fees.network` (rpcversion 8); a JSON null is 0. */
+export interface YellowbackNetworkFeeMsg {
+  flatZat: string;
+  maxTxFeeZat: string;
+  priceMicroUsd: string;
+  priceSource: string;
+  plain: YellowbackNetworkRateMsg | null;
+  yellowback: YellowbackNetworkRateMsg | null;
+}
+
+/** `YellowbackPQParams` (yellowback.proto:66-68): `yed_getinfo.params.pq` (rpcversion 7). */
+export interface YellowbackPQParamsMsg {
+  schemes: string[];
+  falconActive: boolean;
+  falconHeight: string;
+  feeRateZatPerKB: string;
+}
+
+/** `YellowbackInfo` (yellowback.proto:99-109): `yed_getinfo`; only the fields the SDK reads are typed. */
+export interface YellowbackInfoMsg {
+  rpcversion: string;
+  params: {
+    pq: YellowbackPQParamsMsg | null;
+    fees: { network: YellowbackNetworkFeeMsg | null } | null;
+  } | null;
 }

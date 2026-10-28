@@ -1,4 +1,4 @@
-"""The Yellowback payload codec, version 3: "YB" || 0x03 || type || body, the data of a
+"""The Yellowback payload codec: "YB" || version || type || body, the data of a
 transaction's only OP_RETURN output.
 
 Translation source: ycash-dd/src/yellowback/payload.{h,cpp} (identical on ycash6), through the
@@ -16,7 +16,11 @@ from typing import Literal
 PAYLOAD_MAGIC = b"YB"
 """PAYLOAD_MAGIC_0, PAYLOAD_MAGIC_1 (ycash-dd/src/yellowback/params.h:44-45)."""
 PAYLOAD_VERSION = 0x03
-"""params.h:46. Versions 1, 2 and later than 3 are non-Yellowback (V23)."""
+"""params.h:46: every type but the MINT, TRANSFER included; any other version is non-Yellowback (V23).
+The SDK only ever emits version-3 TRANSFERs: a version-4 TRANSFER would burn its YED (quantum clients C-1)."""
+MINT_PAYLOAD_VERSION = 0x04
+"""On the quantum line the MINT alone is version 4, its owner the 33-byte id scheme || keyHash
+(quantum spec §3.1, C-1); a version-3 MINT is non-Yellowback there."""
 MIN_PAYLOAD = 4
 MAX_PAYLOAD = 80
 MAX_ASSIGNMENTS = 15
@@ -169,6 +173,11 @@ def _decode_body(data: bytes, type_byte: int) -> Payload | PayloadError:
     return bad("payload_reserved_type")  # forward-compatibility rule: non-Yellowback
 
 
+def payload_version_of(type_byte: int) -> int:
+    """The node's VersionOf: 4 for a MINT, 3 for every other type."""
+    return MINT_PAYLOAD_VERSION if type_byte == TYPE_MINT else PAYLOAD_VERSION
+
+
 def decode_payload(data: bytes) -> Payload | PayloadError:
     """DecodePayload (payload.cpp:365-381): the payload, or why the bytes are non-Yellowback.
     Checks that need the transaction (the vout exists, is not the OP_RETURN) are in find_payload."""
@@ -178,7 +187,7 @@ def decode_payload(data: bytes) -> Payload | PayloadError:
         return PayloadError("payload_too_long")
     if data[:2] != PAYLOAD_MAGIC:
         return PayloadError("payload_bad_magic")
-    if data[2] != PAYLOAD_VERSION:
+    if data[2] != payload_version_of(data[3]):
         return PayloadError("payload_unsupported_version")
     return _decode_body(data, data[3])
 

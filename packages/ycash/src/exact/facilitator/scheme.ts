@@ -210,7 +210,7 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
       if (!(await this.store.claim(s.key, retainUntilForExpiry(s.tx.expiryHeight)))) return this.observe(s, requirements, v.state.payer);
       await this.store.prune(await this.rpc.getBlockCount()); // drops claims past expiry + 10 blocks
 
-      const rejected = await this.submit(s);
+      const rejected = await this.submit(s, v.state.allowHighFees === true);
       this.logger?.info("exact settle broadcast", { txid: s.txid, rejected: rejected?.reason });
       if (rejected) {
         await this.store.release(s.key); // the node answered and did not accept it
@@ -228,11 +228,12 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
    * the tx; −27 and transport failures continue to observation, keeping the claim (X-F6).
    *
    * @param s - The resolved payment to broadcast.
+   * @param allowHighFees - Verify found a PQ/YED fee above -maxtxfee and within the node's cap.
    * @returns A terminal rejection reason and message, or null to proceed to observation.
    */
-  private async submit(s: ResolvedPayment): Promise<{ reason: string; message: string } | null> {
+  private async submit(s: ResolvedPayment, allowHighFees: boolean): Promise<{ reason: string; message: string } | null> {
     try {
-      const sent = await this.rpc.sendRawTransaction(s.hex);
+      const sent = await (allowHighFees ? this.rpc.sendRawTransaction(s.hex, true) : this.rpc.sendRawTransaction(s.hex));
       if (sent !== s.txid) throw new Error(`node returned txid ${sent}, expected ${s.txid}`);
       return null;
     } catch (e) {

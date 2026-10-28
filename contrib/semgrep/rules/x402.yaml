@@ -1,0 +1,109 @@
+# Copyright (c) 2026 The Ycash developers
+# Distributed under the MIT software license, see the accompanying
+# file COPYING or https://www.opensource.org/licenses/mit-license.php .
+#
+# x402-ycash rules, scanned beside the pinned semgrep-rules packs (contrib/semgrep/README.md).
+# metadata.bucket pins a rule's bucket; without it the bucket follows severity/impact/confidence.
+# Tests: contrib/semgrep/rules/x402.{ts,py,rs} (`semgrep --test contrib/semgrep/rules`, secops.yml).
+rules:
+  - id: x402.payments.route-before-paywall
+    languages: [typescript, javascript]
+    message: >-
+      A route handler is registered before the x402 paymentMiddleware on the same app, so Express runs
+      it without a verified payment. A paid resource must be served only after the facilitator has
+      verified (and, for the exact scheme, settled) the payment: register paid handlers after
+      `app.use(paymentMiddleware(...))`. A route that is free on purpose (an index, a gate that only
+      answers 501 or calls next()) goes in contrib/semgrep/accepted.json with the reason.
+    patterns:
+      - pattern-inside: |
+          $APP.$METHOD($PATH, ..., $HANDLER);
+          ...
+          $APP.use(paymentMiddleware(...));
+      - pattern: $APP.$METHOD($PATH, ..., $HANDLER)
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(get|post|put|patch|delete|all)$
+      # A gate that takes next and only ever hands over to it or refuses is not a resource.
+      - pattern-not: '$APP.$METHOD($PATH, ..., ($REQ, $RES, $NEXT) => { ... })'
+    severity: ERROR
+    metadata:
+      category: security
+      bucket: high
+      impact: HIGH
+      likelihood: MEDIUM
+      confidence: MEDIUM
+      cwe: ["CWE-862: Missing Authorization"]
+      references: ["specs/transports-v2/http.md", "docs/plans/x402-agent-payments-plan.md"]
+
+  - id: x402.crypto.non-crypto-rng
+    message: >-
+      A non-cryptographic RNG. Nonces, keys, channel secrets, passwords and anything an attacker can
+      observe must come from a CSPRNG: crypto.getRandomValues / crypto.randomBytes (TypeScript),
+      secrets / os.urandom (Python), OsRng or rand::thread_rng (Rust).
+    severity: WARNING
+    metadata:
+      category: security
+      impact: MEDIUM
+      likelihood: MEDIUM
+      confidence: HIGH
+      cwe: ["CWE-338: Use of Cryptographically Weak Pseudo-Random Number Generator (PRNG)"]
+    languages: [typescript, javascript]
+    pattern: Math.random()
+
+  - id: x402.crypto.non-crypto-rng-python
+    message: >-
+      Python's `random` module is not a CSPRNG. Nonces, keys and channel secrets must come from
+      `secrets` or `os.urandom`.
+    severity: WARNING
+    metadata:
+      category: security
+      impact: MEDIUM
+      likelihood: MEDIUM
+      confidence: HIGH
+      cwe: ["CWE-338: Use of Cryptographically Weak Pseudo-Random Number Generator (PRNG)"]
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: random.$FN(...)
+          - pattern: random.Random(...)
+      # random.SystemRandom is os.urandom underneath.
+      - pattern-not: random.SystemRandom(...)
+
+  - id: x402.crypto.non-crypto-rng-rust
+    message: >-
+      A seedable, non-cryptographic or fixed-seed RNG in Rust. Keys and nonces must come from OsRng or
+      rand::thread_rng.
+    severity: WARNING
+    metadata:
+      category: security
+      impact: MEDIUM
+      likelihood: MEDIUM
+      confidence: MEDIUM
+      cwe: ["CWE-338: Use of Cryptographically Weak Pseudo-Random Number Generator (PRNG)"]
+    languages: [rust]
+    pattern-either:
+      - pattern: SmallRng::$F(...)
+      - pattern: $R::seed_from_u64(...)
+      - pattern: XorShiftRng::$F(...)
+
+  - id: x402.node.yed-write-rpc
+    languages: [generic]
+    paths:
+      include: ["*.ts", "*.js", "*.mjs", "*.py", "*.rs", "*.sh"]
+      exclude: ["**/test/**", "**/tests/**", "*.test.ts"]
+    # A method name in quotes (an RPC call's argument); docs and comments name RPCs in backticks.
+    pattern-regex: >-
+      ["']yed_(addattestation|buildbundle|buildcancel|claim|claimnotice|lockcoins|mint|redeem|registerattestor|reportequivocation|revive|send|sendmany|setquote|signattestation|signcancelcosign|sweepcarriers|unlockcoin|withdrawbond)["']
+    message: >-
+      x402-ycash reaches the node only through stock RPCs and the read-only `yed_*` RPCs (workspace
+      CLAUDE.md rule 2; docs/plans/x402-agent-payments-plan.md §4): it builds and signs its own
+      transactions and never asks the node's wallet to mint, send, redeem or sign Yellowback state.
+      (`yed_getnewaddress` for a change address is allowed.) Tests may drive the devnet with these.
+    severity: ERROR
+    metadata:
+      category: security
+      bucket: high
+      impact: HIGH
+      likelihood: MEDIUM
+      confidence: HIGH
+      cwe: ["CWE-284: Improper Access Control"]

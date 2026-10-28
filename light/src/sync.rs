@@ -358,9 +358,12 @@ impl Wallet {
             let outputs: u32 = block.vtx.iter().map(|tx| tx.outputs.len() as u32).sum();
             size += u64::from(outputs);
             outputs_total += outputs;
+            // The sizes come from the lightwalletd's tree state and blocks: a size past u32 is the
+            // server's error, not a reason to panic.
+            let sapling_commitment_tree_size =
+                u32::try_from(size).map_err(|_| bad_cmu(block.height()))?;
             block.chain_metadata = Some(ChainMetadata {
-                sapling_commitment_tree_size: u32::try_from(size)
-                    .expect("Sapling tree size fits u32"),
+                sapling_commitment_tree_size,
                 orchard_commitment_tree_size: 0,
             });
         }

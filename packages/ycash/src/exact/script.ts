@@ -1,6 +1,8 @@
 // scriptSig inspection for verification rule 5 and the response's `payer`.
 import type { YcashNetwork } from "../constants.js";
-import { encodeAddress, hash160, p2pkhHash, p2shHash, parseScript, SIGHASH, type ScriptChunk } from "../tx/index.js";
+import { keyIdOf } from "../pq/scheme.js";
+import { parsePQSpend, pqpkhKeyId } from "../pq/script.js";
+import { encodeAddress, encodePQAddress, hash160, p2pkhHash, p2shHash, parseScript, SIGHASH, type ScriptChunk } from "../tx/index.js";
 
 /**
  * Whether a push is a DER signature followed by a hash-type byte, by its shape alone: 0x30, a
@@ -19,7 +21,8 @@ export function looksLikeSignature(b: Uint8Array): boolean {
 
 /**
  * Rule 5: every signature in the scriptSig carries SIGHASH_ALL, and there is at least one (an
- * unsigned input would let anyone rewrite the outputs).
+ * unsigned input would let anyone rewrite the outputs). A post-quantum (TX_PQPKH) spend,
+ * `<sig chunks> <s> <pk chunks> <p>`, carries one signature, its hash type the last byte of its last chunk.
  *
  * @param scriptSig - The input's raw scriptSig.
  * @returns A rejection reason, or null when the scriptSig passes.
@@ -31,6 +34,11 @@ export function checkSighashAll(scriptSig: Uint8Array): string | null {
   } catch {
     return "scriptSig does not parse";
   }
+  const pq = parsePQSpend(chunks);
+  if (pq) {
+    const t = pq.sig[pq.sig.length - 1] as number;
+    return t === SIGHASH.ALL ? null : `signature hash type 0x${t.toString(16)} is not SIGHASH_ALL`;
+  }
   const sigs = chunks.filter((c) => c.data !== undefined && looksLikeSignature(c.data)).map((c) => c.data as Uint8Array);
   if (sigs.length === 0) return "scriptSig carries no signature";
   const bad = sigs.find((s) => s[s.length - 1] !== SIGHASH.ALL);
@@ -38,7 +46,8 @@ export function checkSighashAll(scriptSig: Uint8Array): string | null {
 }
 
 /**
- * Encodes the address a P2PKH or P2SH scriptPubKey pays to.
+ * Encodes the address a P2PKH, P2SH or TX_PQPKH scriptPubKey pays to (a TX_PQPKH in the plain-YEC
+ * `sq…`/`tq…`/`rq…` form).
  *
  * @param spk - The scriptPubKey.
  * @param network - The network whose address prefix to use.
@@ -47,14 +56,16 @@ export function checkSighashAll(scriptSig: Uint8Array): string | null {
 export function addressOfScript(spk: Uint8Array, network: YcashNetwork): string {
   const pkh = p2pkhHash(spk);
   if (pkh) return encodeAddress(network, "p2pkh", pkh);
+  const pq = pqpkhKeyId(spk);
+  if (pq) return encodePQAddress(network, "pq", pq);
   const sh = p2shHash(spk);
   return sh ? encodeAddress(network, "p2sh", sh) : "";
 }
 
 /**
  * The address a verified scriptSig spends from, for a settle that resumes after the inputs are
- * spent (gettxout no longer shows them): `<sig> <pubkey>` is P2PKH, otherwise the last push is
- * a P2SH redeem script.
+ * spent (gettxout no longer shows them): `<sig> <pubkey>` is P2PKH, a chunked post-quantum spend is
+ * the TX_PQPKH of SHA256(scheme ‖ pk), otherwise the last push is a P2SH redeem script.
  *
  * @param scriptSig - The input's raw scriptSig.
  * @param network - The network whose address prefix to use.
@@ -67,6 +78,8 @@ export function addressOfScriptSig(scriptSig: Uint8Array, network: YcashNetwork)
   } catch {
     return "";
   }
+  const pq = parsePQSpend(chunks);
+  if (pq) return encodePQAddress(network, "pq", keyIdOf(pq.scheme, pq.pk));
   const last = chunks[chunks.length - 1]?.data;
   if (!last || last.length === 0) return "";
   const isPubkey = (last.length === 33 && (last[0] === 2 || last[0] === 3)) || (last.length === 65 && last[0] === 4);

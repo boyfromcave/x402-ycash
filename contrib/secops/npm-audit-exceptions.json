@@ -1,0 +1,11 @@
+{
+  "_comment": "npm audit advisories accepted for the production dependencies (SECURITY-CI.md): one entry per advisory with the reason it does not reach a shipped path and an until date at most 90 days out, after which it fails the npm-audit job again. Read by contrib/secops/npm-audit-gate.mjs. Prefer fixing in package-lock.json.",
+  "exceptions": [
+    {
+      "id": "GHSA-mrhx-c7xc-m3w5",
+      "package": "zod",
+      "until": "2027-01-20",
+      "reason": "zod 3.25.76 (fixed only in 4.6.6) is @x402/core 2.28.0's own dependency (zod ^3.24.2; no @x402/core on zod 4 yet). The facilitator's untrusted input reaches zod only after express.json's body limit (X402_BODY_LIMIT, 512kb default), which bounds the collections validated. Fix: @x402/core on zod 4."
+    }
+  ]
+}

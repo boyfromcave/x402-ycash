@@ -1,6 +1,7 @@
 // The client's channel records. A record holds the channel key C, so a durable storage must be
 // treated like a wallet file.
 import { channelFromScript, type Channel } from "../../channel/channel.js";
+import { pqKeygen, type PQKeyPair } from "../../pq/sign.js";
 import type { YcashNetwork } from "../../constants.js";
 import { addressToScript } from "../../tx/address.js";
 import { hexToBytes } from "../../tx/bytes.js";
@@ -24,8 +25,17 @@ export interface ClientChannelRecord {
   deposit: string;
   refundHeight: number;
   closeMarginBlocks: number;
-  /** C's private key, hex */
+  /**
+   * The client key, hex: C's 32-byte secp256k1 private key (P2SH channel), or the 48-byte seed of
+   * the client's post-quantum key (TX_PQCHANNEL; the scheme is the channel script's).
+   */
   clientPrivKey: string;
+  /**
+   * The client key's scheme: 1 (SLH-DSA, a TX_PQCHANNEL opened before the Falcon height), 2 (Falcon,
+   * at or after it), absent for a P2SH channel's secp256k1 C. Informational: the channel script is
+   * authoritative (records written before this field have none).
+   */
+  clientScheme?: number;
   /** where each voucher (and the refund, by default) returns the client's remainder: the return address's script */
   clientScript: string;
   /** the open's `returnAddress` (absent in records written before it existed, whose clientScript is C's) */
@@ -124,4 +134,27 @@ export function channelOfRecord(r: ClientChannelRecord): Channel {
     closeFee: BigInt(r.closeFee),
     payToScript: addressToScript(r.payTo, r.network),
   });
+}
+
+/** Key pairs derived from stored seeds, so a channel's SLH-DSA key generation (≈ 0.2 s) runs once per process. */
+const pqKeyCache = new Map<string, PQKeyPair>();
+
+/**
+ * The client's signing keys of a stored record: C's private key for a P2SH channel, the
+ * post-quantum key pair (derived from the stored seed) for a TX_PQCHANNEL.
+ *
+ * @param r - The stored record.
+ * @returns The key fields a voucher or refund builder takes.
+ * @throws Error when a post-quantum record's seed does not give the channel's client key.
+ */
+export function clientKeysOfRecord(r: ClientChannelRecord): { clientPrivKey?: Uint8Array; clientPQKey?: PQKeyPair } {
+  const ch = channelOfRecord(r);
+  if (ch.template === "p2sh") return { clientPrivKey: hexToBytes(r.clientPrivKey) };
+  const cacheKey = `${ch.client.scheme}:${r.clientPrivKey}`;
+  let kp = pqKeyCache.get(cacheKey);
+  if (!kp) {
+    kp = pqKeygen(ch.client.scheme, hexToBytes(r.clientPrivKey));
+    pqKeyCache.set(cacheKey, kp);
+  }
+  return { clientPQKey: kp };
 }

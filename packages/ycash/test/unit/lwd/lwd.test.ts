@@ -1,7 +1,7 @@
 // The lightwalletd adapter over a real gRPC wire (fakeLwd.ts): URL parsing, the client's decoding
 // and error mapping, LwdChain's gettxout and broadcast, and LwdUtxoSource's listings and holds.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { exact, InMemoryCoinReservationStore, SendRawTransactionError, tx as T } from "../../../src/index.js";
+import { batch, exact, InMemoryCoinReservationStore, SendRawTransactionError, tx as T } from "../../../src/index.js";
 import { LwdChain, LwdClient, LwdError, LwdUtxoSource, parseLwdUrl } from "../../../src/lwd/index.js";
 import { startFakeLwd, type FakeLwdState } from "./fakeLwd.js";
 
@@ -166,6 +166,25 @@ describe("LwdChain", () => {
     }
   });
 
+  it("GetChainInfo's upgrades reach getBlockchainInfo keyed by branch id (the batch client's next-activation bound, 06/X-1)", async () => {
+    fake.state.height = 302;
+    fake.state.upgrades = [
+      { branchId: "19BD2D2F", name: "Canopy", activationHeight: "1", status: "active" },
+      { branchId: "6d5b7a31", name: "Vault", activationHeight: "400", status: "pending" },
+    ];
+    try {
+      const info = await chain.getBlockchainInfo();
+      expect(info.upgrades).toEqual({
+        "19bd2d2f": { name: "Canopy", activationheight: 1, status: "active" },
+        "6d5b7a31": { name: "Vault", activationheight: 400, status: "pending" },
+      });
+      expect(batch.nextActivationHeightOf(info.upgrades, info.blocks)).toBe(400);
+    } finally {
+      delete fake.state.upgrades;
+      fake.state.height = 300;
+    }
+  });
+
   it("a server without GetChainInfo (or without YellowbackStreamer): the tip's branch id from GetLightdInfo", async () => {
     for (const init of [{ noChainInfo: true }, { yellowback: false }]) {
       const old = await startFakeLwd({ height: 300, nextBranchId: "6d5b7a31", ...init });
@@ -205,6 +224,70 @@ describe("LwdChain", () => {
     fake.state.txs.set(t.id, { hex: t.hex, height: 5 });
     expect(await chain.getRawTransaction(t.id)).toBe(t.hex);
     await expect(chain.getRawTransaction(txid("e"))).rejects.toThrow(/knows no transaction/);
+  });
+});
+
+/**
+ * GetYellowbackInfo as lightwalletd-dd serves an rpcversion-8 node's yed_getinfo (the message carries
+ * the node's JSON names; int64s are decimal strings on the wire): the contract example's
+ * params.fees.network at $0.40/YEC, and params.pq with the Falcon height.
+ */
+const INFO8_MSG = {
+  rpcversion: "8",
+  params: {
+    pq: { schemes: ["1", "2"], falconActive: true, falconHeight: "0", feeRateZatPerKB: "100" },
+    fees: {
+      network: {
+        priceMicroUsd: "400000", priceSource: "tip", flatZat: "1000", maxTxFeeZat: "10000000", floorZatPerKB: "5000", fallbackZatPerKB: "100",
+        plain: { zatPerKB: "5000000", usdPerKBMicro: "20000" },
+        yellowback: { zatPerKB: "12500000", usdPerKBMicro: "50000", maxTxFeeZat: "1000000000", maxTxFeeUsdMicro: "2000000", maxTxFeeCeilingZat: "1000000000" },
+      },
+    },
+  },
+};
+/** The same rates as yed_getinfo's JSON gives them to the RPC path. */
+const INFO8_JSON = {
+  rpcversion: 8,
+  params: { fees: { network: { priceMicroUsd: 400000, priceSource: "tip", flatZat: 1000, maxTxFeeZat: 10000000, plain: { zatPerKB: 5000000 }, yellowback: { zatPerKB: 12500000, maxTxFeeZat: 1000000000 } } } },
+};
+
+describe("LwdChain network fees (GetYellowbackInfo, rpcversion 8)", () => {
+  it("chainState carries params.fees.network and the Falcon height, as the RPC path's chainStateWithFalcon does", async () => {
+    const f = await startFakeLwd({ height: 300, yellowbackInfo: INFO8_MSG });
+    const c = new LwdChain(new LwdClient(f.url));
+    try {
+      const want = T.networkFeesOf(INFO8_JSON);
+      expect(want?.yellowbackZatPerKB).toBe(12_500_000n);
+      expect(await c.chainState()).toEqual({ chain: "regtest", height: 300, branchId: 0x19bd2d2f, falconHeight: 0, networkFees: want });
+      expect(await T.readNetworkFees(c)).toEqual(want); // the batch client's readNetworkFees(chain) path
+      expect(await new LwdUtxoSource(c.lwd).chainState()).toMatchObject({ networkFees: want });
+      // Rate-limited server side: once per tip height on this LwdChain.
+      expect(f.state.calls.filter((x) => x === "GetYellowbackInfo")).toHaveLength(2); // c, then the LwdUtxoSource's own chain
+      f.state.height = 301;
+      expect((await c.chainState()).networkFees).toEqual(want);
+      expect(f.state.calls.filter((x) => x === "GetYellowbackInfo")).toHaveLength(3);
+    } finally {
+      c.lwd.close();
+      await f.stop();
+    }
+  });
+
+  it("an rpcversion-7 server: the Falcon height, no rates (the S-6 floor); a server without the info: neither", async () => {
+    const f7 = await startFakeLwd({ height: 300, yellowbackInfo: { ...INFO8_MSG, rpcversion: "7", params: { ...INFO8_MSG.params, fees: null } } });
+    const c7 = new LwdChain(new LwdClient(f7.url));
+    const none = await startFakeLwd({ height: 300 });
+    const c0 = new LwdChain(new LwdClient(none.url));
+    try {
+      expect(await c7.chainState()).toEqual({ chain: "regtest", height: 300, branchId: 0x19bd2d2f, falconHeight: 0 });
+      expect(await T.readNetworkFees(c7)).toBeUndefined();
+      expect(await c0.chainState()).toEqual({ chain: "regtest", height: 300, branchId: 0x19bd2d2f });
+      expect(await T.readNetworkFees(c0)).toBeUndefined();
+    } finally {
+      c7.lwd.close();
+      c0.lwd.close();
+      await f7.stop();
+      await none.stop();
+    }
   });
 });
 

@@ -17,6 +17,10 @@
 # YCASH6 (the built node tree; default the workspace's ycash-dd / ycash6, which are NOT necessarily
 # on upgrade/vault: point these at an upgrade/vault tree, e.g. an integration worktree under wt/).
 # The script warns when the tree's devnet does not activate the vault upgrade.
+# X402_NODE_ARGS: extra ycashd arguments for every node, e.g. "-pqfalconheight=400" (the quantum line's
+# regtest Falcon height; a consensus parameter, so every node gets it). The devnet CLI has no such
+# option, so the script points it at a small wrapper in the devnet's scratch directory that execs ycashd
+# with the arguments appended (exec: the node's command line, which `down` matches, stays ycashd's).
 set -euo pipefail
 
 usage() {
@@ -53,7 +57,19 @@ dir=$scratch/$line-$seed
 mkdir -p "$scratch"
 
 export YELLOWBACK_DEVNET_DIR=$dir YELLOWBACK_DEVNET_PORTSEED=$seed
-export "$binvar=$repo/src/ycashd"
+node_bin=$repo/src/ycashd
+if [ -n "${X402_NODE_ARGS:-}" ]; then
+  # The wrapper lives beside (not in) the devnet dir: `up --force` wipes the dir itself. The devnet
+  # CLI finds ycash-cli next to the node binary, so it is linked in beside the wrapper.
+  bindir=$scratch/$line-$seed.bin
+  mkdir -p "$bindir"
+  ln -sf "$repo/src/ycash-cli" "$bindir/ycash-cli"
+  node_bin=$bindir/ycashd
+  { printf '#!/bin/sh\nexec %q "$@"' "$repo/src/ycashd"; for a in $X402_NODE_ARGS; do printf ' %q' "$a"; done; printf '\n'; } >"$node_bin"
+  chmod +x "$node_bin"
+  echo "node arguments: $X402_NODE_ARGS (via $node_bin)" >&2
+fi
+export "$binvar=$node_bin"
 
 case $action in
   up)

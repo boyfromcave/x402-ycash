@@ -2,15 +2,17 @@
 // voucher returns the client's remainder. Without it the remainder would go to the channel key C,
 // which lives only in the SDK's channel store and which no wallet watches.
 import { ASSET_YED, type YcashNetwork } from "../constants.js";
-import { addressToScript, decodeAddress } from "../tx/address.js";
+import { addressToScript, decodeAddress, isYedKind } from "../tx/address.js";
 import { equalBytes } from "../tx/bytes.js";
 import { BatchError, BatchSettlementError } from "./errors.js";
 
 /**
  * The output script of `returnAddress` for a channel of `asset` paying `payToScript`. YEC takes a
- * transparent P2PKH or P2SH address; YED a P2PKH one (`s…` or `ye…`), since a YED holder is a key
- * hash (plan Y-8; ycash-dd/src/yellowback/address.cpp:11-27). Never payTo's own script: the
- * voucher would then have two server outputs.
+ * transparent P2PKH, P2SH or post-quantum (`sq…`) address; YED a key-hash holder, P2PKH (`s…`,
+ * `yb…`) or TX_PQPKH (the 53-character `yb…`/`yt…`/`yr…`, or `sq…`), never P2SH (plan Y-8; quantum
+ * spec §4). After the node's Falcon height only a scheme-2 TX_PQPKH holds YED (TOK-PQ): the node's
+ * `yed_validaterawtransaction` of the first voucher refuses any other return output then. Never
+ * payTo's own script: the voucher would then have two server outputs.
  *
  * @param returnAddress - The client's return address, as sent in `open`.
  * @param network - The channel's network; the address must belong to it.
@@ -26,8 +28,8 @@ export function returnScriptOf(returnAddress: string, network: YcashNetwork, ass
   } catch (e) {
     throw new BatchSettlementError(BatchError.RETURN_ADDRESS, `${returnAddress}: ${(e as Error).message}`);
   }
-  if (asset === ASSET_YED ? kind === "p2sh" : kind === "yed") {
-    throw new BatchSettlementError(BatchError.RETURN_ADDRESS, asset === ASSET_YED ? "a YED channel returns to a P2PKH address" : "a YEC channel returns to a transparent address, not a YED one");
+  if (asset === ASSET_YED ? kind === "p2sh" : isYedKind(kind)) {
+    throw new BatchSettlementError(BatchError.RETURN_ADDRESS, asset === ASSET_YED ? "a YED channel returns to a key-hash (P2PKH or post-quantum) address" : "a YEC channel returns to a transparent address, not a YED one");
   }
   const script = addressToScript(returnAddress, network);
   if (equalBytes(script, payToScript)) throw new BatchSettlementError(BatchError.RETURN_ADDRESS, "the return address is payTo's");

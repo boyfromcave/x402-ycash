@@ -12,8 +12,24 @@ from x402.schemas import PaymentPayload, PaymentRequirements
 
 from ..constants import ASSET_YED, DUST_ZAT, chain_of_network
 from ..node import NodeCapabilities, VerifyScriptsResult
+from ..pq import pqpkh_key_id
 from ..store import SettlementStore, txid_key
-from ..tx import Tx, address_to_script, decode_address, encode_address, fee_floor, p2pkh_hash, parse_tx, tx_fee, txid
+from ..tx import (
+    FeeKind,
+    Tx,
+    address_to_script,
+    decode_address,
+    encode_address,
+    encode_pq_address,
+    fee_floor,
+    needs_high_fees,
+    network_fee_cap,
+    p2pkh_hash,
+    parse_tx,
+    read_network_fees,
+    tx_fee,
+    txid,
+)
 from ..yed import (
     Assignment,
     FindPayloadFailure,
@@ -38,6 +54,7 @@ from .constants import (
     ERR_SCRIPT,
     ERR_SIGHASH,
     ERR_TRANSACTION,
+    ERR_YED_HOLDER,
     ERR_YED_INPUT,
     ERR_YED_NODE_REQUIRED,
     ERR_YED_PAYLOAD,
@@ -63,7 +80,7 @@ class ExactFacilitatorRpc(Protocol):
     async def get_block_count(self) -> int: ...
     async def get_tx_out(self, txid: str, n: int, include_mempool: bool) -> dict[str, Any] | None: ...
     async def verify_scripts(self, hex_tx: str) -> VerifyScriptsResult: ...
-    async def send_raw_transaction(self, hex_tx: str) -> str: ...
+    async def send_raw_transaction(self, hex_tx: str, allow_high_fees: bool = False) -> str: ...
     async def capabilities(self) -> NodeCapabilities: ...
     async def yed_validate_raw_transaction(self, hex_tx: str) -> dict[str, Any]: ...
     async def yed_decode_payload(self, hex_tx: str) -> dict[str, Any]: ...
@@ -126,6 +143,8 @@ class VerifiedPayment:
     payment: ResolvedPayment
     payer: str
     fee_zat: int
+    allow_high_fees: bool = False
+    """Settle submits with ``allowhighfees``: a PQ or YED fee above -maxtxfee within the node's cap (rule 7)."""
 
 
 _HEX = re.compile(r"^(?:[0-9a-f]{2})+$")
@@ -229,9 +248,16 @@ def resolve_yed_transfer(tx: Tx, pay_to_vout: int, amount_cents: int) -> YedTran
 
 
 def payer_of(spk: bytes, s: ResolvedPayment) -> str:
-    """The response's ``payer``: input 0's address, in the ``ye…`` form for a YED payment from a P2PKH coin."""
-    pkh = p2pkh_hash(spk) if s.yed is not None else None
-    return encode_address(s.network, "yed", pkh) if pkh is not None else address_of_script(spk, s.network)
+    """The response's ``payer``: input 0's address, in the Yellowback form (``yb…``/``yt…``/``yr…``, 35 or
+    53 characters) for a YED payment from a P2PKH or TX_PQPKH coin."""
+    if s.yed is not None:
+        pkh = p2pkh_hash(spk)
+        if pkh is not None:
+            return encode_address(s.network, "yed", pkh)
+        kid = pqpkh_key_id(spk)
+        if kid is not None:
+            return encode_pq_address(s.network, "yedpq", kid.scheme, kid.hash)
+    return address_of_script(spk, s.network)
 
 
 async def check_network(rpc: ExactFacilitatorRpc, network: str) -> int | Failure:
@@ -262,12 +288,23 @@ async def verify_transparent(
     tip = await check_network(rpc, s.network)
     if isinstance(tip, Failure):
         return tip
+    # Rule 4Y, the Falcon height (TOK-PQ): from F every output the TRANSFER assigns YED to, payTo
+    # included, is a Falcon TX_PQPKH (the node refuses the transaction); below F none is scheme 2.
+    if s.yed is not None:
+        from ..channel.falcon import is_falcon_active_at, read_falcon_height, yed_holder_problem
+
+        falcon_active = is_falcon_active_at(await read_falcon_height(rpc, s.network), tip + 1)
+        for a in s.yed.assignments:
+            spk = s.tx.vout[a.vout].script_pubkey if a.vout < len(s.tx.vout) else b""
+            if holder_problem := yed_holder_problem(spk, falcon_active):
+                return Failure(ERR_YED_HOLDER, f"{'payTo' if a.vout == s.pay_to_vout else f'output {a.vout}'}: {holder_problem}")
     if await store.is_claimed(s.key):
         return Failure(ERR_DUPLICATE_SETTLEMENT, f"{s.txid} is already claimed", s.resumed_payer())
 
     # Rule 6: every input confirmed and unspent, and not spent in the mempool (plan R-6, X-F10).
     values: list[int] = []
     payer = ""
+    pq_input = False
     for i, inp in enumerate(s.tx.vin):
         prev = inp.prevout
         confirmed = await rpc.get_tx_out(prev.txid, prev.vout, False)
@@ -276,6 +313,8 @@ async def verify_transparent(
         if not await rpc.get_tx_out(prev.txid, prev.vout, True):
             return Failure(ERR_INPUT_SPENT, f"input {i} ({prev.txid}:{prev.vout}) is spent by a mempool transaction")
         values.append(int(confirmed["value_zat"]))
+        if pqpkh_key_id(bytes.fromhex(confirmed["scriptPubKey"]["hex"])) is not None:
+            pq_input = True
         if i == 0:
             payer = payer_of(bytes.fromhex(confirmed["scriptPubKey"]["hex"]), s)
 
@@ -287,13 +326,18 @@ async def verify_transparent(
         if decoded.op_return_index != s.yed.op_return_index or not same_assignments(decoded.assignments, s.yed.assignments):
             return Failure(ERR_YED_PAYLOAD, "yed_decodepayload disagrees with the transaction's TRANSFER", payer)
 
-    # Rule 7: fee floor (SDK and facilitator policy, X-F3) and sanity cap.
+    # Rule 7: fee floor (SDK and facilitator policy, X-F3) and sanity cap. A YED or post-quantum
+    # payment pays a dollar-per-KB rate (rpcversion 8, yed_getinfo.params.fees.network), far above a
+    # plain cap: its cap is the node's PQ/Yellowback cap. The floor stays S-6, what both lines mine.
     fee = tx_fee(s.tx, values)
     floor = fee_floor(s.tx)
     if fee < floor:
         return Failure(ERR_FEE_TOO_LOW, f"fee {fee} is below the floor {floor}", payer)
-    if fee > limits.fee_cap_zat:
-        return Failure(ERR_FEE_TOO_HIGH, f"fee {fee} is above the cap {limits.fee_cap_zat}", payer)
+    kind: FeeKind = "yellowback" if s.yed is not None else "pq" if pq_input else "plain"
+    fees = None if kind == "plain" else await read_network_fees(rpc)
+    cap = network_fee_cap(kind, limits.fee_cap_zat, fees)
+    if fee > cap:
+        return Failure(ERR_FEE_TOO_HIGH, f"fee {fee} is above the cap {cap}", payer)
 
     # Rule 8: expiry window, read against the tip rule 2 saw.
     lo, hi = expiry_window(tip, req.max_timeout_seconds)
@@ -322,4 +366,4 @@ async def verify_transparent(
     # Rule 10: not claimed (re-read: the claim may have landed while the lookups ran).
     if await store.is_claimed(s.key):
         return Failure(ERR_DUPLICATE_SETTLEMENT, f"{s.txid} is already claimed", payer)
-    return VerifiedPayment(s, payer, fee)
+    return VerifiedPayment(s, payer, fee, needs_high_fees(fee, kind, fees))

@@ -26,6 +26,8 @@ from ..channel import (
     commitment_id_of,
     parse_channel_script,
     parse_close_script_sig,
+    parse_pq_channel_script,
+    parse_pq_close_script_sig,
 )
 from ..constants import ASSET_YED, YCASH_CAIP_FAMILY
 from ..node import SendRawTransactionError
@@ -40,6 +42,7 @@ from ..store import (
 )
 from ..tx import Tx, address_to_script, txid
 from .errors import BatchError, BatchSettlementError, reason_of
+from .relay import send_channel_transaction
 from .return_address import return_script_of
 from .types import BATCH_SETTLEMENT_SCHEME, BatchTerms, is_batch_payload, parse_terms, required_depth, same_offer
 from .verify import (
@@ -143,7 +146,7 @@ class BatchYcashFacilitatorScheme:
             if p["type"] == "open":
                 funding_txid = txid(decode_tx(p["fundingTx"], BatchError.FUNDING))
                 channel_id = channel_id_of_parts(funding_txid, int(p["vout"]))
-                await self._relay(p["fundingTx"])
+                await self._relay(p["fundingTx"], parse_terms(requirements).asset == ASSET_YED)
                 if not await self._wait_for_depth(funding_txid, int(p["vout"]), required_depth(parse_terms(requirements).confirmations)):
                     return SettleResponse(success=False, error_reason=BatchError.SETTLEMENT_PENDING, error_message="funding below the policy depth",
                                           transaction=funding_txid, network=network, payer=channel_id)
@@ -162,7 +165,7 @@ class BatchYcashFacilitatorScheme:
                 close_txid = txid(bytes.fromhex(p["tx"]))
                 if self._settlements is not None and not await self._settlements.claim(txid_key(network, close_txid), RETAIN_FOREVER):
                     raise BatchSettlementError(BatchError.DUPLICATE_SETTLEMENT, close_txid)
-                await self._relay(p["tx"])
+                await self._relay(p["tx"], parse_terms(requirements).asset == ASSET_YED)
                 await self._record_claim(p["channelId"], cumulative)
                 return SettleResponse(success=True, transaction=close_txid, network=network, payer=p["channelId"], amount="",
                                       extra={"commitmentId": commitment_id_of(p["channelId"], cumulative)})
@@ -185,23 +188,36 @@ class BatchYcashFacilitatorScheme:
         return payload.payload, terms
 
     async def _live_channel(self, tx_hex: str, channel_id: str, terms: BatchTerms) -> tuple[Channel, Tx]:
-        """The channel a voucher spends, rebuilt from its scriptSig's redeem script and the live output."""
+        """The channel a voucher spends, rebuilt from its scriptSig's redeem script (P2SH) or the live
+        output's script (a bare TX_PQCHANNEL, D-Q-19) and the live output."""
         tx = decode_tx(tx_hex, BatchError.VOUCHER_SHAPE)
         ss = parse_close_script_sig(tx.vin[0].script_sig) if len(tx.vin) == 1 else None
-        if ss is None:
+        pqs = parse_pq_close_script_sig(tx.vin[0].script_sig) if len(tx.vin) == 1 and ss is None else None
+        if ss is None and pqs is None:
             raise BatchSettlementError(BatchError.VOUCHER_SHAPE, "inputs")
         prevout = tx.vin[0].prevout
         if channel_id_of(prevout) != channel_id:
             raise BatchSettlementError(BatchError.VOUCHER_SHAPE, "the voucher does not spend channelId")
-        script = parse_channel_script(ss.redeem_script)
-        if script is None or script.server_pubkey != terms.server_pubkey:
-            raise BatchSettlementError(BatchError.REDEEM_SCRIPT, ss.redeem_script.hex())
+        rs: bytes | None = None
+        if ss is not None:
+            script = parse_channel_script(ss.redeem_script)
+            if script is None or script.server_pubkey != terms.server_pubkey:
+                raise BatchSettlementError(BatchError.REDEEM_SCRIPT, ss.redeem_script.hex())
+            rs = ss.redeem_script
         out = await self._chain.get_tx_out(prevout.txid, prevout.vout, True)
         if not out:
             raise BatchSettlementError(BatchError.CHANNEL_CLOSING, "the channel output is spent or unknown")
-        if out["scriptPubKey"]["hex"] != channel_script_pubkey(ss.redeem_script).hex():
+        if pqs is not None:
+            spk = bytes.fromhex(out["scriptPubKey"]["hex"])
+            q = parse_pq_channel_script(spk)
+            if q is None or q.server_pubkey != terms.server_pubkey:
+                raise BatchSettlementError(BatchError.REDEEM_SCRIPT, spk.hex())
+            if terms.asset != ASSET_YED:
+                raise BatchSettlementError(BatchError.REDEEM_SCRIPT, "a YEC channel uses the P2SH channel script")
+            rs = spk
+        if rs is None or out["scriptPubKey"]["hex"] != channel_script_pubkey(rs).hex():
             raise BatchSettlementError(BatchError.REDEEM_SCRIPT, "not the channel output's script")
-        channel = Channel.from_script(prevout, ss.redeem_script, zat_of(out), terms.close_fee, address_to_script(terms.pay_to, terms.network))
+        channel = Channel.from_script(prevout, rs, zat_of(out), terms.close_fee, address_to_script(terms.pay_to, terms.network))
         return channel, tx
 
     async def _record_claim(self, channel_id: str, cumulative: int) -> None:
@@ -212,9 +228,9 @@ class BatchYcashFacilitatorScheme:
                 await self.channels.compare_and_set_cumulative(channel_id, r.cumulative, cumulative)
         await self.channels.retire([channel_id], int(time.time() * 1000) + self._retention)
 
-    async def _relay(self, hex_tx: str) -> None:
+    async def _relay(self, hex_tx: str, yed: bool = False) -> None:
         try:
-            await self._chain.send_raw_transaction(hex_tx)
+            await send_channel_transaction(self._chain, hex_tx, yed)
         except SendRawTransactionError as e:
             if e.kind != "already-in-chain":
                 raise

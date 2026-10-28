@@ -1,8 +1,10 @@
 // Dispatch: `run(argv, env)` is the whole CLI, so tests drive it without a process.
-import type { YcashRpc } from "x402-ycash-mechanism";
+import { randomBytes } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { pq, YCASH_NETWORKS, type YcashNetwork, type YcashRpc } from "x402-ycash-mechanism";
 import { buildClient } from "./client.js";
 import { channelClose, channelOpen, channelRefund, channelStatus, pay, type Out } from "./commands.js";
-import { loadCliConfig, parseCli, USAGE, UsageError, type CliConfig } from "./config.js";
+import { loadCliConfig, parseCli, USAGE, UsageError, type CliConfig, type ParsedArgs } from "./config.js";
 
 export interface RunIo {
   out: Out;
@@ -33,6 +35,7 @@ export async function run(argv: string[], env: Record<string, string | undefined
       if (!v) throw new UsageError(`missing ${what}`);
       return v;
     };
+    if (cmd === "yed-key") return yedKeyCommand(args, env, sub, a1, io);
     config = loadCliConfig(args, env, deps.node);
     const client = buildClient(config);
     const f = deps.fetch ?? fetch;
@@ -61,4 +64,35 @@ export async function run(argv: string[], env: Record<string, string | undefined
   } finally {
     config?.lwd?.close(); // an open gRPC channel would keep the process alive
   }
+}
+
+/**
+ * `yed-key new FILE`: writes a new Falcon YED key seed (`fn-dsa-512:<96 hex>`, mode 0600, never over an
+ * existing file); `yed-key address`: the address of --yed-key-file. Both print the key's YED address and
+ * its plain-YEC post-quantum address for --network; neither needs a node.
+ *
+ * @param args - The parsed arguments.
+ * @param env - The environment.
+ * @param sub - `new` or `address`.
+ * @param file - `new`'s file.
+ * @param io - Output.
+ * @returns The exit code.
+ */
+function yedKeyCommand(args: ParsedArgs, env: Record<string, string | undefined>, sub: string | undefined, file: string | undefined, io: RunIo): number {
+  const network = (args.values.network ?? env.X402_NETWORK ?? "ycash:regtest") as YcashNetwork;
+  if (!YCASH_NETWORKS.includes(network)) throw new UsageError(`--network must be one of ${YCASH_NETWORKS.join(", ")}`);
+  let seed: Uint8Array;
+  if (sub === "new") {
+    if (!file) throw new UsageError("missing <FILE>");
+    seed = randomBytes(48);
+    writeFileSync(file, pq.formatYedKeySeed(seed), { mode: 0o600, flag: "wx" });
+  } else if (sub === "address") {
+    const path = args.values["yed-key-file"] ?? env.X402_YED_KEY_FILE;
+    if (!path) throw new UsageError("yed-key address needs --yed-key-file");
+    seed = pq.parseYedKeySeed(readFileSync(path, "utf8"));
+  } else throw new UsageError(`unknown command: yed-key ${sub ?? ""}`);
+  const key = pq.yedFalconKeyFromSeed(seed);
+  seed.fill(0);
+  io.out({ msg: "yed-key", network, yedAddress: pq.yedFalconAddress(network, key), pqAddress: pq.yedFalconPlainAddress(network, key), ...(sub === "new" ? { file } : {}) });
+  return 0;
 }

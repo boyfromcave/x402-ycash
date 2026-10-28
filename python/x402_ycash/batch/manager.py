@@ -9,19 +9,22 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from x402.schemas import PaymentPayload, PaymentRequirements, SettleResponse
 
 from ..channel import Channel, channel_id_of, commitment_id_of, complete_voucher, parse_channel_id
+from ..channel.falcon import margin_height_of
 from ..constants import ASSET_YED
 from ..node import SendRawTransactionError
 from ..store import DEFAULT_CLOSED_RETENTION_MS, ChannelStore, InMemoryChannelStore
 from ..tx import OutPoint, address_to_script, parse_tx, pubkey_from_priv, txid
 from .errors import BatchError, BatchSettlementError
 from .ledger import CHANNEL_OPEN, ChannelLedger, LedgerChannel
+from .relay import send_channel_transaction
 from .types import BatchTerms, is_batch_payload, parse_terms, required_depth, same_offer
+from .upgrade import next_activation_height_of
 from .verify import (
     ChainContext,
     ChainView,
@@ -41,7 +44,8 @@ from .watcher import ChannelWatcher, WatchedChannel
 
 log = logging.getLogger("x402_ycash.batch")
 
-CloseReason = Literal["idle", "margin", "exhausted", "client", "demand"]
+CloseReason = Literal["idle", "margin", "upgrade", "exhausted", "client", "demand"]
+"""``upgrade``: inside the margin of the next network-upgrade activation height (audit 06/X-1)."""
 VoucherKind = Literal["open", "voucher", "close"]
 
 
@@ -91,6 +95,8 @@ class ChannelManager:
         self._idle = idle
         self._funding_wait = funding_wait
         self._funding_poll = funding_poll
+        self.last_context: ChainContext | None = None
+        """The node context of the latest verify (tip and Falcon height), for the server's scheme-aware close fee."""
         self._on_close = on_close
         self._last_activity: dict[str, float] = {}
 
@@ -122,6 +128,7 @@ class ChannelManager:
         if terms.asset == ASSET_YED:
             yed_chain(self.chain)  # vouchers are checked by the overlay
         ctx = await chain_context(self.chain, terms.network)
+        self.last_context = ctx
         if p["type"] == "open":
             funding_txid = txid(decode_tx(p["fundingTx"], BatchError.FUNDING))
             known = await self.ledger.get(channel_id_of(OutPoint(funding_txid, int(p["vout"]))))
@@ -131,10 +138,14 @@ class ChannelManager:
                 v = await verify_open(p, terms, self.chain, ctx)
                 channel_id = v.channel_id
                 if not v.already_broadcast:
-                    await self._relay_funding(p["fundingTx"], v.funding_txid, int(p["vout"]))
+                    await self._relay_funding(p["fundingTx"], v.funding_txid, int(p["vout"]), terms.asset == ASSET_YED)
                 await self.ledger.open({**_terms_of(v.channel, channel_id, p["fundingTx"], terms, v.deposit),
-                                        "returnScript": v.return_script.hex()})
-                log.info("open %s V=%s D=%s t=%s", channel_id, v.channel.value, v.deposit, v.channel.refund_height)
+                                        "returnScript": v.return_script.hex(),
+                                        **({"closeBy": v.falcon_close_by} if v.falcon_close_by < v.channel.refund_height else {})})
+                if v.close_bound == "upgrade":
+                    await self.ledger.lower_close_by(channel_id, v.close_by)
+                log.info("open %s V=%s D=%s t=%s%s", channel_id, v.channel.value, v.deposit, v.channel.refund_height,
+                         f" closeBy={v.close_by} ({v.close_bound})" if v.close_bound else "")
             self.track(channel_id)
             await self._wait_for_depth(channel_id)
             return await self._verify_voucher("open", channel_id, p["voucher"]["tx"], int(p["voucher"]["cumulative"]), terms, ctx)
@@ -152,14 +163,19 @@ class ChannelManager:
             raise BatchSettlementError(BatchError.CHANNEL_CLOSING, "the channel is closing or closed")
         _check_same_terms(before, terms)
         channel = _channel_of(before.terms)
-        # 2. margin: refuse and close (a client close is still welcome until t)
-        margin_height = int(before.terms["refundHeight"]) - int(before.terms["closeMarginBlocks"])
+        # 2. margin: refuse and close (a client close is still welcome until t). The bound is t, the Falcon
+        # height for a YED channel opened before it, or the next network upgrade's activation height (this
+        # request's chain context; recorded when lower, audit 06/X-1).
+        bounded = await self._bound_by_upgrade(before, ctx.next_activation_height)
+        margin_height = _margin_height(bounded.terms)
         if kind != "close" and ctx.tip >= margin_height:
+            reason = _margin_reason(bounded)
             try:
-                await self.close(channel_id, "margin")
+                await self.close(channel_id, reason)
             except Exception as e:  # noqa: BLE001  # the refusal stands whatever the close did
-                log.warning("margin close of %s failed: %s", channel_id, e)
-            raise BatchSettlementError(BatchError.CHANNEL_CLOSING, f"tip {ctx.tip} ≥ t − margin = {margin_height}")
+                log.warning("%s close of %s failed: %s", reason, channel_id, e)
+            what = f"the next network upgrade's activation height {bounded.terms['closeBy']} −" if reason == "upgrade" else "the close margin height"
+            raise BatchSettlementError(BatchError.CHANNEL_CLOSING, f"tip {ctx.tip} ≥ {what} {margin_height}")
         token = await self.ledger.acquire(channel_id)
         if token is None:
             raise BatchSettlementError(BatchError.CHANNEL_BUSY, "another voucher of this channel is in flight")
@@ -290,7 +306,8 @@ class ChannelManager:
     async def _broadcast_close(self, channel_id: str, hex_tx: str) -> str | None:
         close_txid = txid(bytes.fromhex(hex_tx))
         try:
-            await self.chain.send_raw_transaction(hex_tx)
+            ch = await self.ledger.get(channel_id)
+            await send_channel_transaction(self.chain, hex_tx, ch is not None and ch.terms["asset"] == ASSET_YED)
         except Exception as e:
             if not (isinstance(e, SendRawTransactionError) and e.kind == "already-in-chain"):
                 ch = await self.ledger.get(channel_id)
@@ -306,18 +323,23 @@ class ChannelManager:
         return close_txid
 
     async def sweep(self, tip: int | None = None, now: float | None = None) -> list[ClosedChannel]:
-        """Runs the close triggers for every tracked open channel: margin (tip ≥ t − margin) and idle."""
+        """Runs the close triggers for every tracked open channel: margin (tip ≥ min(t, closeBy) − margin),
+        the next network upgrade (its activation height re-read from the node every sweep and recorded as
+        the channel's bound when lower, audit 06/X-1) and idle."""
         height = await self.chain.get_block_count() if tip is None else tip
         now = time.monotonic() if now is None else now
         closed: list[ClosedChannel] = []
-        for cid in self.tracked():
+        ids = self.tracked()
+        activation = await self._next_activation(height) if ids else None
+        for cid in ids:
             ch = await self.ledger.get(cid)
             if ch is None or ch.state != CHANNEL_OPEN:
                 self._last_activity.pop(cid, None)
                 continue
+            ch = await self._bound_by_upgrade(ch, activation)
             reason: CloseReason | None = None
-            if height >= int(ch.terms["refundHeight"]) - int(ch.terms["closeMarginBlocks"]):
-                reason = "margin"
+            if height >= _margin_height(ch.terms):
+                reason = _margin_reason(ch)
             elif now - self._last_activity.get(cid, now) >= self._idle:
                 reason = "idle"
             if reason:
@@ -338,12 +360,14 @@ class ChannelManager:
             for cid in self.tracked():
                 ch = await self.ledger.get(cid)
                 if ch is not None and ch.state == CHANNEL_OPEN:
-                    out.append(WatchedChannel(cid, int(ch.terms["refundHeight"]), int(ch.terms["closeMarginBlocks"])))
+                    out.append(WatchedChannel(cid, int(ch.terms["refundHeight"]), int(ch.terms["closeMarginBlocks"]),
+                                              int(ch.terms["closeBy"]) if "closeBy" in ch.terms else None))
             return out
 
         async def on_margin(ch: WatchedChannel, tip: int) -> None:
             _ = tip
-            await self.close(ch.channel_id, "margin")
+            led = await self.ledger.get(ch.channel_id)
+            await self.close(ch.channel_id, _margin_reason(led) if led is not None else "margin")
 
         async def on_tick(tip: int) -> None:
             await self.sweep(tip)
@@ -361,9 +385,30 @@ class ChannelManager:
 
     # ------------------------------------------------------------------ helpers
 
-    async def _relay_funding(self, hex_tx: str, funding_txid: str, vout: int) -> None:
+    async def _next_activation(self, tip: int) -> int | None:
+        """The next activation height above ``tip`` from the node's getblockchaininfo; None when none is
+        pending or the node cannot be asked (the sweep then runs on the recorded bounds; logged)."""
         try:
-            await self.chain.send_raw_transaction(hex_tx)
+            return next_activation_height_of((await self.chain.get_blockchain_info()).get("upgrades"), tip)
+        except Exception as e:  # noqa: BLE001  # a failed read must not stop the sweep
+            log.warning("getblockchaininfo failed; the network-upgrade bound is not re-read this sweep: %s", e)
+            return None
+
+    async def _bound_by_upgrade(self, ch: LedgerChannel, activation: int | None) -> LedgerChannel:
+        """Lowers the channel's recorded close bound to ``activation`` when it is below min(t, closeBy)."""
+        t = int(ch.terms["refundHeight"])
+        current = min(t, int(ch.terms["closeBy"])) if "closeBy" in ch.terms else t
+        if activation is None or activation >= current:
+            return ch
+        cid = ch.terms["channelId"]
+        if await self.ledger.lower_close_by(cid, activation):
+            log.info("channel %s: closeBy lowered to %s, the next network upgrade's activation height (closes from %s)",
+                     cid, activation, activation - int(ch.terms["closeMarginBlocks"]))
+        return replace(ch, terms={**ch.terms, "closeBy": activation}, upgrade_close_by=activation)
+
+    async def _relay_funding(self, hex_tx: str, funding_txid: str, vout: int, yed: bool = False) -> None:
+        try:
+            await send_channel_transaction(self.chain, hex_tx, yed)
         except Exception as e:
             if isinstance(e, SendRawTransactionError) and e.kind == "already-in-chain":
                 return
@@ -392,6 +437,16 @@ def _terms_of(ch: Channel, channel_id: str, funding_tx: str, t: BatchTerms, depo
             "fundingTx": funding_tx, "redeemScript": ch.redeem_script.hex(), "value": str(ch.value), "closeFee": str(ch.close_fee),
             "deposit": str(deposit), "payTo": t.pay_to, "refundHeight": ch.refund_height, "closeMarginBlocks": t.close_margin_blocks,
             "confirmations": t.confirmations, "amount": str(t.amount)}
+
+
+def _margin_reason(ch: LedgerChannel) -> CloseReason:
+    """``upgrade`` when the network-upgrade bound is the binding one, else ``margin`` (t or the Falcon height)."""
+    u = ch.upgrade_close_by
+    return "upgrade" if u is not None and u < int(ch.terms["refundHeight"]) and u == int(ch.terms.get("closeBy", -1)) else "margin"
+
+
+def _margin_height(t: dict[str, Any]) -> int:
+    return margin_height_of(int(t["refundHeight"]), int(t["closeMarginBlocks"]), int(t["closeBy"]) if "closeBy" in t else None)
 
 
 def _channel_of(t: dict[str, Any]) -> Channel:
