@@ -3,10 +3,17 @@
 //!
 //! Layout of `--data`:
 //!   wallet.sqlite        the WalletDb (notes, nullifiers, commitment tree, created transactions)
-//!   cache/               the FsBlockDb: blockmeta.sqlite + blocks/ (compact blocks, deleted once scanned)
+//!   cache.sqlite         the compact-block cache ([`crate::cache::BlockCache`]; emptied once scanned)
+//!   wallet.lock          the advisory lock (native only)
 //! The spending key is injected (`Options::spending_key`, `register_key`); where it is kept is the
 //! embedding application's business (the x402-light binary stores it as `spending.key`, mode 0600).
+//!
+//! wasm32 (the browser wallet, yew/web plan W0.2–W0.5): the same code over the gRPC-web channel
+//! (`lwd::Channel`), both SQLite files on the OPFS sahpool VFS ([`crate::wasm::install_opfs`]
+//! must run once before the first open), the browser's clock ([`Clock`]), no directory, no lock
+//! file, and the prover from bytes ([`Wallet::set_prover_bytes`]) instead of a directory.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
@@ -25,10 +32,8 @@ use zcash_client_backend::data_api::{
 };
 use zcash_client_backend::fees::StandardFeeRule;
 use zcash_client_backend::proto::compact_formats::CompactTx;
-use zcash_client_sqlite::chain::init::init_blockmeta_db;
-use zcash_client_sqlite::util::SystemClock;
 use zcash_client_sqlite::wallet::init::init_wallet_db;
-use zcash_client_sqlite::{AccountUuid, FsBlockDb, WalletDb};
+use zcash_client_sqlite::{AccountUuid, WalletDb};
 use zcash_keys::address::Address;
 use zcash_primitives::transaction::components::sapling::zip212_enforcement;
 use zcash_primitives::transaction::fees::fixed::FeeRule as FixedFeeRule;
@@ -44,29 +49,78 @@ use sapling::note_encryption::{try_sapling_compact_note_decryption, CompactOutpu
 use sapling::zip32::ExtendedSpendingKey;
 use zip32::Scope;
 
-use tonic::transport::Channel;
-
+use crate::cache::BlockCache;
 use crate::keys;
-use crate::lwd::{self, Client};
+use crate::lwd::{self, Channel, Client};
 use crate::net::YcashNetwork;
 use crate::spend;
 
-pub type Db = WalletDb<rusqlite::Connection, YcashNetwork, SystemClock, OsRng>;
+/// The store's clock, per target: the system clock natively; in the browser
+/// `SystemTime::now()` is unavailable on wasm32-unknown-unknown, so `Date.now()` (W0.1 finding 4).
+#[cfg(not(target_arch = "wasm32"))]
+pub type Clock = zcash_client_sqlite::util::SystemClock;
+#[cfg(target_arch = "wasm32")]
+pub type Clock = JsClock;
+
+/// The browser's clock as the store's `Clock`.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct JsClock;
+#[cfg(target_arch = "wasm32")]
+impl zcash_client_sqlite::util::Clock for JsClock {
+    fn now(&self) -> std::time::SystemTime {
+        std::time::UNIX_EPOCH + std::time::Duration::from_millis(js_sys::Date::now() as u64)
+    }
+}
+
+/// The store's clock for this target.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn clock() -> Clock {
+    zcash_client_sqlite::util::SystemClock
+}
+#[cfg(target_arch = "wasm32")]
+pub fn clock() -> Clock {
+    JsClock
+}
+
+/// Milliseconds on a wall clock, for timings (`std::time::Instant` is unavailable on wasm32).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn now_ms() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64() * 1000.0)
+        .unwrap_or(0.0)
+}
+#[cfg(target_arch = "wasm32")]
+pub fn now_ms() -> f64 {
+    js_sys::Date::now()
+}
+
+/// Milliseconds elapsed since `start` (a [`now_ms`] reading), never negative.
+pub fn elapsed_ms(start: f64) -> u128 {
+    (now_ms() - start).max(0.0) as u128
+}
+
+pub type Db = WalletDb<rusqlite::Connection, YcashNetwork, Clock, OsRng>;
 
 pub struct Wallet {
     pub params: YcashNetwork,
     pub(crate) db: Db,
-    pub(crate) cache: FsBlockDb,
-    pub(crate) blocks_dir: PathBuf,
+    pub(crate) cache: BlockCache,
     pub data_dir: PathBuf,
     extsk: Option<ExtendedSpendingKey>,
+    /// Native: where `load_prover` finds the files. The browser never reads a directory.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     params_dir: Option<PathBuf>,
+    /// Loaded on first use from `params_dir` (native), or injected ([`Wallet::set_prover_bytes`]).
     prover: Option<LocalTxProver>,
     pub(crate) client: Client,
     channel: Channel,
     pub(crate) lwd_addr: String,
     max_expiry_window: u32,
-    /// Held for the wallet's lifetime: see [`lock_data_dir`].
+    /// Held for the wallet's lifetime: see [`lock_data_dir`]. Native only: the browser has one
+    /// page per store (and no file locks).
+    #[cfg(not(target_arch = "wasm32"))]
     _lock: fs::File,
 }
 
@@ -120,19 +174,17 @@ pub fn default_policy() -> ConfirmationsPolicy {
 
 impl Wallet {
     pub async fn open(opts: Options) -> Result<Self, Error> {
+        #[cfg(not(target_arch = "wasm32"))]
         fs::create_dir_all(&opts.data_dir)?;
+        #[cfg(not(target_arch = "wasm32"))]
         let lock = lock_data_dir(&opts.data_dir)?;
-        let cache_root = opts.data_dir.join("cache");
-        let blocks_dir = cache_root.join("blocks");
-        fs::create_dir_all(&blocks_dir)?;
-        let mut cache =
-            FsBlockDb::for_path(&cache_root).map_err(|e| Error::Cache(e.to_string()))?;
-        init_blockmeta_db(&mut cache).map_err(|e| Error::Cache(e.to_string()))?;
+        let cache = BlockCache::open(&path_str(&opts.data_dir.join("cache.sqlite")))
+            .map_err(|e| Error::Cache(e.to_string()))?;
 
         let mut db = WalletDb::for_path(
-            opts.data_dir.join("wallet.sqlite"),
+            path_str(&opts.data_dir.join("wallet.sqlite")),
             opts.params,
-            SystemClock,
+            clock(),
             OsRng,
         )?;
         init_wallet_db(&mut db, None).map_err(|e| Error::Init(e.to_string()))?;
@@ -147,7 +199,6 @@ impl Wallet {
             params: opts.params,
             db,
             cache,
-            blocks_dir,
             data_dir: opts.data_dir,
             extsk,
             params_dir: opts.proving_params_dir,
@@ -156,8 +207,20 @@ impl Wallet {
             channel,
             lwd_addr: opts.lwd,
             max_expiry_window: opts.max_expiry_window,
+            #[cfg(not(target_arch = "wasm32"))]
             _lock: lock,
         })
+    }
+
+    /// The note store, for a host that reads the same database (balances, history) without a
+    /// second connection — the browser's OPFS VFS allows one per file (yew/web plan W0.5).
+    pub fn db(&self) -> &Db {
+        &self.db
+    }
+
+    /// See [`Wallet::db`].
+    pub fn db_mut(&mut self) -> &mut Db {
+        &mut self.db
     }
 
     /// The lightwalletd channel every call of this wallet uses (injected or dialed), for a host
@@ -409,12 +472,34 @@ impl Wallet {
 
     // ------------------------------------------------------------------ spending
 
+    /// The Sapling prover from the parameter files' bytes (`sapling-spend.params`,
+    /// `sapling-output.params`, verified against their pins by the caller): the browser's path
+    /// (yew/web plan W0.3, the Cache API holds the bytes; no filesystem), usable natively too.
+    /// Replaces a prover loaded before.
+    pub fn set_prover_bytes(&mut self, spend: &[u8], output: &[u8]) {
+        self.prover = Some(LocalTxProver::from_bytes(spend, output));
+    }
+
+    /// A prover is loaded or injected.
+    pub fn has_prover(&self) -> bool {
+        self.prover.is_some()
+    }
+
     /// Takes the prover out of `self` (loading it on first use) so it can be used while the
     /// wallet db is borrowed mutably; `build` puts it back.
     fn take_prover(&mut self) -> Result<LocalTxProver, Error> {
         if let Some(p) = self.prover.take() {
             return Ok(p);
         }
+        #[cfg(target_arch = "wasm32")]
+        return Err(Error::NoProvingParams);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.load_prover()
+    }
+
+    /// Loads the prover from `params_dir` (native: the files on disk).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_prover(&mut self) -> Result<LocalTxProver, Error> {
         let dir = self.params_dir.clone().ok_or(Error::NoProvingParams)?;
         let spend = dir.join("sapling-spend.params");
         let output = dir.join("sapling-output.params");
@@ -656,9 +741,15 @@ pub(crate) fn check_branch(
     Ok(params.branch_id_at(target))
 }
 
+/// A path as the string SQLite opens (the OPFS VFS names files by string; natively it is the path).
+pub(crate) fn path_str(p: &std::path::Path) -> String {
+    p.to_string_lossy().into_owned()
+}
+
 /// An advisory exclusive lock on `<data>/wallet.lock`, held while the wallet is open, so two
 /// processes on one data directory (`serve` and a `once build`) cannot select the same notes.
 /// The OS releases it when the process exits, so a crash leaves no stale lock.
+#[cfg(not(target_arch = "wasm32"))]
 fn lock_data_dir(dir: &std::path::Path) -> Result<fs::File, Error> {
     let path = dir.join("wallet.lock");
     let file = fs::OpenOptions::new()
@@ -820,7 +911,9 @@ pub enum Error {
     Birthday(String),
     #[error("lightwalletd misbehaved: {0}")]
     Server(String),
-    #[error("no --params directory configured for the Sapling proving parameters")]
+    #[error(
+        "no Sapling proving parameters: no --params directory configured and no prover injected"
+    )]
     NoProvingParams,
     #[error("sapling-spend.params / sapling-output.params not found in {0}")]
     ProvingParamsMissing(PathBuf),
@@ -858,14 +951,14 @@ impl
     From<
         zcash_client_backend::data_api::chain::error::Error<
             zcash_client_sqlite::error::SqliteClientError,
-            zcash_client_sqlite::FsBlockDbError,
+            zcash_client_sqlite::error::SqliteClientError,
         >,
     > for Error
 {
     fn from(
         e: zcash_client_backend::data_api::chain::error::Error<
             zcash_client_sqlite::error::SqliteClientError,
-            zcash_client_sqlite::FsBlockDbError,
+            zcash_client_sqlite::error::SqliteClientError,
         >,
     ) -> Self {
         Error::Scan(e.to_string())

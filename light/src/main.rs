@@ -2,20 +2,33 @@
 //!
 //! `serve` runs the JSON-RPC server (schema.json) with a background sync loop; `once` runs one
 //! method and prints its result, for scripts and the integration test.
+//!
+//! Native only: the library compiles for wasm32-unknown-unknown (the browser wallet, yew/web plan
+//! W0.4) and this binary does not; on that target it is an empty program.
 
+#[cfg(not(target_arch = "wasm32"))]
 mod rpc;
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::net::SocketAddr;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
+#[cfg(not(target_arch = "wasm32"))]
 use clap::{Args, Parser, Subcommand};
+#[cfg(not(target_arch = "wasm32"))]
 use serde_json::Value;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::Mutex;
 
+#[cfg(not(target_arch = "wasm32"))]
 use x402_ycash_light::{keys, lwd, sync, Options, Wallet, YcashNetwork};
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Parser)]
 #[command(
     name = "x402-light",
@@ -27,9 +40,10 @@ struct Cli {
     command: Command,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Args, Clone)]
 struct Common {
-    /// Wallet data directory (wallet.sqlite, cache/, spending.key)
+    /// Wallet data directory (wallet.sqlite, cache.sqlite, spending.key)
     #[arg(long, env = "X402_LIGHT_DATA")]
     data: PathBuf,
     /// lightwalletd address: grpc://host:port, grpcs://host:port or host:port (TLS unless loopback)
@@ -53,6 +67,7 @@ struct Common {
     upgrades: Option<String>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Subcommand)]
 enum Command {
     /// Serve JSON-RPC 2.0 on loopback and keep syncing in the background
@@ -78,6 +93,7 @@ enum Command {
     },
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -93,6 +109,10 @@ async fn main() {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
 async fn open(common: &Common) -> Result<Wallet, String> {
     let mut network = common.network;
     if let Some(spec) = &common.upgrades {
@@ -115,6 +135,7 @@ async fn open(common: &Common) -> Result<Wallet, String> {
     .map_err(|e| e.to_string())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn run(cli: Cli) -> Result<(), String> {
     match cli.command {
         Command::Once {

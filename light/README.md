@@ -20,10 +20,11 @@ cargo test                     # unit tests; no proving parameters needed
 ```
 
 **Pinning.** The `zcash_*` crates come from `librustzcash6` as **git dependencies** on
-`https://github.com/boyfromcave/librustzcash6.git` rev `4867cf85` (branch `upgrade/vault`):
+`https://github.com/boyfromcave/librustzcash6.git` rev `cc6068ea` (`upgrade/vault` with `up/web` merged, librustzcash6#16):
 miodragpop/librustzcash @ `ec525fae` (the revision `ref/ycash6/Cargo.toml:122-133` pins for ycashd
-6.21.0) plus the Vault network upgrade (`NetworkUpgrade::Vault`, `BranchId::Vault` = `0x6d5b7a31`),
-the same revision ycashd's upgrade/vault `Cargo.toml` `[patch.crates-io]` pins:
+6.21.0) plus the Vault network upgrade (`NetworkUpgrade::Vault`, `BranchId::Vault` = `0x6d5b7a31`)
+as librustzcash6's `upgrade/vault` carries it, plus the browser wallet's changes (rusqlite 0.39,
+schemerz-rusqlite carried in `components/`, wasm32 builds):
 `zcash_client_backend` 0.22, `zcash_client_sqlite` 0.20.2, `zcash_primitives` 0.28,
 `zcash_proofs` 0.28, `zcash_keys` 0.14, `zcash_protocol` 0.9, `zip321` 0.8, `sapling-crypto` 0.7.
 A `[patch.crates-io]` block mirrors ycashd's so every transitive copy is the same source. Moving
@@ -79,7 +80,8 @@ codes are in [`schema.json`](schema.json); `once METHOD 'PARAMS_JSON'` runs any 
 | `send` | build + broadcast; the agent's `sapling-proof` payment (`LightClientShieldedPayer` in the SDK) |
 
 The key file: `<data>/spending.key` (bech32, mode 0600), written by `import_key`. The data
-directory also holds `wallet.sqlite`, `cache/` and `wallet.lock`: an open wallet holds an advisory
+directory also holds `wallet.sqlite`, `cache.sqlite` (the compact-block cache, a `BlockDb`) and
+`wallet.lock`: an open wallet holds an advisory
 exclusive lock on it (released by the OS when the process exits), so a `once` against the data
 directory of a running `serve` fails at once ("another process holds the wallet") instead of
 selecting the same notes. Use the server's `build`/`send` instead.
@@ -155,7 +157,7 @@ rescan. Unit tests: `src/sync.rs` (a forkable fake lightwalletd); devnet:
 `CompactBlock.chainMetadata` (the Sapling tree size after each block) is absent from 0.4.6, and
 the scanner needs it to place notes and derive nullifiers: `sync.rs` computes it from the
 checkpoint plus each block's outputs and attaches it before caching, which is what a newer
-lightwalletd sends. Compact blocks are cached in `cache/` only for the duration of a chunk.
+lightwalletd sends. Compact blocks are cached in `cache.sqlite` only for the duration of a chunk.
 
 **Branch id.** `GetLightdInfo.consensusBranchId` is the chaintip's (X-F71), wrong on the block
 before an upgrade. `build` asks `YellowbackStreamer.GetChainInfo` (lightwalletd-dd 0b3448e+) for

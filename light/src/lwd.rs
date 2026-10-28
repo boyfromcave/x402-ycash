@@ -3,27 +3,40 @@
 //! The server is lightwalletd-dd (zcash/lightwalletd 0.4.6 lineage, yodl fork + Yellowback). Its
 //! `CompactTxStreamer` wire format is the one `zcash_client_backend::proto::service` was generated
 //! from (same field tags; `TreeState.tree` is tag 5 like `saplingTree`, `CompactTx.hash` is tag 2
-//! like `txid`), so the generated client is used as is. The three `.proto` files are vendored under
-//! `proto/` for provenance, and `tests` checks the methods used here exist in them.
+//! like `txid`), so the backend's message types are used as is; the client stubs are generated
+//! by `build.rs` from the three `.proto` files vendored under `proto/` ([`pb`]), over those
+//! types, and `tests` checks the methods used here exist in them.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 use futures_util::TryStreamExt;
-use tonic::transport::{Channel, Endpoint};
+#[cfg(not(target_arch = "wasm32"))]
+use tonic::transport::Endpoint;
 use zcash_client_backend::proto::compact_formats::{CompactBlock, CompactTx};
-use zcash_client_backend::proto::service::compact_tx_streamer_client::CompactTxStreamerClient;
 use zcash_client_backend::proto::service::{
     BlockId, BlockRange, ChainSpec, Empty, GetMempoolTxRequest, LightdInfo, RawTransaction,
     SendResponse, TreeState,
 };
 use zcash_protocol::consensus::BlockHeight;
 
+/// The channel every lightwalletd call runs over, per target (yew/web plan W0.4): tonic's
+/// HTTP/2 channel natively; in the browser `tonic-web-wasm-client` (gRPC-web over `fetch`,
+/// TLS and roots are the browser's; the host builds it with [`connect`] or injects its own).
+#[cfg(not(target_arch = "wasm32"))]
+pub type Channel = tonic::transport::Channel;
+#[cfg(target_arch = "wasm32")]
+pub type Channel = tonic_web_wasm_client::Client;
+
 pub type Client = CompactTxStreamerClient<Channel>;
 
-/// `YellowbackStreamer` from the vendored yellowback.proto (lightwalletd-dd), for `GetChainInfo`.
-pub mod yb {
+/// The generated clients (`build.rs`): `CompactTxStreamer` and `YellowbackStreamer` (for
+/// `GetChainInfo`), plus the Yellowback messages; every `CompactTxStreamer` message is the
+/// backend's.
+pub mod pb {
     tonic::include_proto!("cash.z.wallet.sdk.rpc");
 }
+pub use pb::compact_tx_streamer_client::CompactTxStreamerClient;
 
 /// What a transaction must be signed with: the NEXT block's branch id, from
 /// `YellowbackStreamer.GetChainInfo` (lightwalletd-dd 0b3448e+). Older servers answer
@@ -37,8 +50,8 @@ pub struct BranchInfo {
 }
 
 pub async fn branch_info(client: &mut Client, channel: &Channel) -> Result<BranchInfo, Error> {
-    let mut yb = yb::yellowback_streamer_client::YellowbackStreamerClient::new(channel.clone());
-    match yb.get_chain_info(yb::Empty {}).await {
+    let mut yb = pb::yellowback_streamer_client::YellowbackStreamerClient::new(channel.clone());
+    match yb.get_chain_info(Empty {}).await {
         Ok(resp) => {
             let info = resp.into_inner();
             Ok(BranchInfo {
@@ -116,6 +129,7 @@ impl std::str::FromStr for TlsRoots {
 
 /// The endpoint for an address in the SDK's forms, with TLS from `roots` when the scheme asks
 /// for it. Not connected.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn endpoint(addr: &str, roots: TlsRoots) -> Result<Endpoint, Error> {
     let url = endpoint_url(addr);
     let mut endpoint = Endpoint::from_shared(url.clone())
@@ -136,11 +150,21 @@ pub fn endpoint(addr: &str, roots: TlsRoots) -> Result<Endpoint, Error> {
 }
 
 /// Dials `addr` (the URL path, used by the `x402-light` binary).
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn connect(addr: &str, roots: TlsRoots) -> Result<(Client, Channel), Error> {
     let channel = endpoint(addr, roots)?
         .connect()
         .await
         .map_err(|e| Error::Connect(endpoint_url(addr), e.to_string()))?;
+    Ok((client(channel.clone()), channel))
+}
+
+/// The browser: a gRPC-web client for `addr` (same address forms). Nothing is dialed here, the
+/// first call is; `roots` is ignored, the browser verifies TLS. The server (or the gateway in
+/// front of lightwalletd) must speak gRPC-web and allow the page's origin.
+#[cfg(target_arch = "wasm32")]
+pub async fn connect(addr: &str, _roots: TlsRoots) -> Result<(Client, Channel), Error> {
+    let channel = tonic_web_wasm_client::Client::new(endpoint_url(addr));
     Ok((client(channel.clone()), channel))
 }
 

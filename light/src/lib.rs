@@ -1,6 +1,7 @@
 //! `x402-ycash-light`: a Sapling light client core for agents on Ycash, on librustzcash6
 //! (`zcash_client_backend` 0.22 / `zcash_client_sqlite` 0.20 with Ycash's branch ids and HRPs).
 //!
+//! - [`cache`]: the compact-block cache (`BlockDb` in one SQLite file, on disk or on OPFS).
 //! - [`net`]: Ycash mainnet/testnet/regtest parameters.
 //! - [`keys`]: Sapling key import (extended spending key or seed phrase), encodings, the USK wrapper.
 //! - [`lwd`]: the lightwalletd-dd connection (`CompactTxStreamer` + `YellowbackStreamer.GetChainInfo`).
@@ -13,12 +14,15 @@
 //! host with its own TLS: a pinned certificate, webpki roots on iOS). The `x402-light` binary adds
 //! the JSON-RPC server and key file on top.
 
+pub mod cache;
 pub mod keys;
 pub mod lwd;
 pub mod net;
 pub mod spend;
 pub mod sync;
 pub mod wallet;
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
 
 #[cfg(test)]
 mod fake_lwd;
