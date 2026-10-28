@@ -79,7 +79,10 @@ pub async fn delete_store(dir: &str) -> Result<u32, String> {
 
 /// Deletes one file from the pool (closed first); `false` when it was not there.
 pub async fn delete_file(name: &str) -> Result<bool, String> {
-    pool().await?.delete_db(name).map_err(|e| format!("{name}: {e:?}"))
+    pool()
+        .await?
+        .delete_db(name)
+        .map_err(|e| format!("{name}: {e:?}"))
 }
 
 /// The light library's own store directories: those holding a `wallet.sqlite`.
