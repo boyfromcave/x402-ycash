@@ -20,10 +20,11 @@ cargo test                     # unit tests; no proving parameters needed
 ```
 
 **Pinning.** The `zcash_*` crates come from `librustzcash6` as **git dependencies** on
-`https://github.com/boyfromcave/librustzcash6.git` rev `4867cf85` (branch `upgrade/vault`):
+`https://github.com/boyfromcave/librustzcash6.git` rev `774de4e5` (branch `up/web`):
 miodragpop/librustzcash @ `ec525fae` (the revision `ref/ycash6/Cargo.toml:122-133` pins for ycashd
-6.21.0) plus the Vault network upgrade (`NetworkUpgrade::Vault`, `BranchId::Vault` = `0x6d5b7a31`),
-the same revision ycashd's upgrade/vault `Cargo.toml` `[patch.crates-io]` pins:
+6.21.0) plus the Vault network upgrade (`NetworkUpgrade::Vault`, `BranchId::Vault` = `0x6d5b7a31`)
+as librustzcash6's `upgrade/vault` carries it, plus the browser wallet's changes (rusqlite 0.39,
+schemerz-rusqlite carried in `components/`, wasm32 builds):
 `zcash_client_backend` 0.22, `zcash_client_sqlite` 0.20.2, `zcash_primitives` 0.28,
 `zcash_proofs` 0.28, `zcash_keys` 0.14, `zcash_protocol` 0.9, `zip321` 0.8, `sapling-crypto` 0.7.
 A `[patch.crates-io]` block mirrors ycashd's so every transitive copy is the same source. Moving
