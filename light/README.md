@@ -20,7 +20,7 @@ cargo test                     # unit tests; no proving parameters needed
 ```
 
 **Pinning.** The `zcash_*` crates come from `librustzcash6` as **git dependencies** on
-`https://github.com/boyfromcave/librustzcash6.git` rev `774de4e5` (branch `up/web`):
+`https://github.com/boyfromcave/librustzcash6.git` rev `cc6068ea` (`upgrade/vault` with `up/web` merged, librustzcash6#16):
 miodragpop/librustzcash @ `ec525fae` (the revision `ref/ycash6/Cargo.toml:122-133` pins for ycashd
 6.21.0) plus the Vault network upgrade (`NetworkUpgrade::Vault`, `BranchId::Vault` = `0x6d5b7a31`)
 as librustzcash6's `upgrade/vault` carries it, plus the browser wallet's changes (rusqlite 0.39,
