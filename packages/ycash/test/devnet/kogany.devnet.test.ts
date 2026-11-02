@@ -1,5 +1,5 @@
 // The kogany leg (workspace kogany plan W9-c, report-only): the `exact` facilitator (the verifier)
-// reading a regtest kogany node (zakurad --features ycash, the third node line), and the RPC
+// reading a regtest kogany node (koganyd --features ycash, the third node line), and the RPC
 // wallet signer against kogany and its ycash6 test rig. Run by scripts/kogany-leg.sh, which starts
 // the rig (scripts/kogany-rig.py: kogany, and a ycash6 sidecar `connect=` kogany that holds the
 // wallet and mines) and sets X402_KOGANY_JSON to the rig's devnet.json: rpc.0 the sidecar, rpc.1
@@ -170,7 +170,7 @@ describeKogany("x402 exact against kogany and its ycash6 test rig", () => {
   it("kogany: a Yellowback node on regtest, with no script verifier of its own", async () => {
     const caps = await kogany.capabilities();
     expect(caps).toMatchObject({ yellowback: true, chain: "regtest" });
-    expect(caps.subversion).toMatch(/^\/kogany:/);
+    expect(caps.subversion).toMatch(/^\/koganyd:/);
     record(LINE, "kogany capabilities", caps);
     const raw = await sidecar.call<string>("createrawtransaction", [[], {}]);
     const err = await kogany.verifyScripts(raw).then(() => undefined, (e: unknown) => e);
