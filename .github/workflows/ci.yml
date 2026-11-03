@@ -271,7 +271,8 @@ jobs:
   # The kogany leg (report-only until the lead architect flips it: drop continue-on-error). No cache:
   # koganyd, ycashd and fetch-params.sh are other repositories' code; setup-node runs uncached.
   kogany:
-    if: (github.event_name == 'push' && github.ref_name == 'vaults/kogany-compat') || (github.event_name == 'workflow_dispatch' && inputs.tier == 'kogany')
+    # Cache poisoning (code scanning): a downloaded artifact runs here, so only the repository owner starts it.
+    if: ((github.event_name == 'push' && github.ref_name == 'vaults/kogany-compat') || (github.event_name == 'workflow_dispatch' && inputs.tier == 'kogany')) && github.actor == github.repository_owner
     name: kogany (report-only)
     needs: unit
     continue-on-error: true
