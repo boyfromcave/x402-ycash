@@ -8,8 +8,8 @@
 # versions (contrib/semgrep/security-overrides.txt), so it needs no entry here.
 
 # --- package-lock.json: the test runner (dev dependencies only; `npm audit --omit=dev` is clean). The fixes
-# are in vitest 4 (a major version, a test-suite migration of its own); vite 7.3.7 and minimatch 10.2.6 are
-# fixed in this lock.
+# are in vitest 4 (a major version, a test-suite migration of its own); vite 7.3.7 is fixed in this lock, and
+# minimatch is 11.0.3 under @typescript-eslint/typescript-estree and eslint-plugin-sonarjs (package.json overrides).
 
 [[IgnoredVulns]]
 id = "GHSA-82fw-gwwq-j7x9"  # vitest / @vitest/mocker 3.2.7, fixed in 4.1.11
@@ -30,6 +30,11 @@ reason = "A prototype-pollution gadget in worker options: it needs an attacker w
 id = "GHSA-85c8-ppgw-ccpr"  # tinypool 1.1.1, fixed in 2.1.2
 ignoreUntil = 2026-12-22T00:00:00Z
 reason = "Same class as GHSA-5gmw-xhrv-c9v3 (prototype-pollution gadget in run() options). Dev-only; fix with vitest 4."
+
+[[IgnoredVulns]]
+id = "GHSA-g3hv-75wg-m249"  # minimatch 3.1.5 (eslint 9's own line), "fixed" only in 11.0.1; accepted 2026-11-01
+ignoreUntil = 2027-01-29T00:00:00Z
+reason = "The advisory (globParts amplification in firstPhasePreProcess() at optimizationLevel >= 2) is about code that minimatch 3.x does not contain: 3.1.5 has neither firstPhasePreProcess nor optimizationLevel, and OSV's range (introduced 0) is wider than the bug. The 10.x copies, which do have it, are overridden to 11.0.3 in package.json, so 3.1.5 is the only minimatch this entry still matches. 3.1.5 is nested under @eslint/config-array 0.21.2, @eslint/eslintrc 3.3.7 and eslint-plugin-import 2.32.0 (eslint 9's line; the newest eslint-plugin-import and @eslint/eslintrc still require ^3.1.x), which call the module as minimatch 3's default-export function, so 11.x is not a drop-in there and no 3.x release has a fix. Dev-only lint tooling run on this repository's own eslint.config.js patterns. Remove when eslint and eslint-plugin-import move off minimatch 3."
 
 # --- package-lock.json, production: zod 3 under @x402/core (also in contrib/secops/npm-audit-exceptions.json).
 
