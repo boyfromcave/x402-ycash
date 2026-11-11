@@ -56,6 +56,11 @@ ignoreUntil = 2027-01-20T00:00:00Z
 reason = "Alias of RUSTSEC-2026-0009 above; same reason."
 
 [[IgnoredVulns]]
+id = "RUSTSEC-2026-0459"  # libsqlite3-sys 0.37.0 (light/Cargo.lock), fixed in 0.39.0
+ignoreUntil = 2026-12-11T00:00:00Z
+reason = "Triaged 2026-11-11. The bundled SQLite < 3.54.0 (CVE-2026-119375) can return uninitialised page-cache memory when a database is opened with a crafted -wal of a different page size. The fix (libsqlite3-sys 0.39) needs rusqlite 0.41; light/ is on rusqlite 0.39 with zcash_client_sqlite and schemerz-rusqlite from librustzcash6 @ cc6068ea, so it moves with that coordinated upgrade (as YEW, whose same entry expires the same day). light/ opens only the wallet and block-cache databases it creates at the operator's configured paths, never a database or -wal from another party."
+
+[[IgnoredVulns]]
 id = "RUSTSEC-2023-0089"  # atomic-polyfill 1.0.3 (light/Cargo.lock), unmaintained, no fix
 ignoreUntil = 2027-01-20T00:00:00Z
 reason = "An unmaintained notice, not a vulnerability: pulled in through heapless 0.7 in the librustzcash6 graph, for a target light/ does not build (cargo-deny's graph never reaches it). Goes when librustzcash6 drops heapless 0.7."
