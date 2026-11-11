@@ -19,14 +19,19 @@ describe("addresses", () => {
     expect(versions).toEqual([["1c28", "1c2c", "1fdd"], ["1c95", "1c2a", "2007"], ["1c95", "1c2a", "2002"]]);
   });
 
-  it("post-quantum forms: 53 characters, yb/yt/yr for YED (quantum spec §4, D-Q-21) and sq/tq/rq for plain YEC (D-Q-20)", () => {
+  it("post-quantum forms (D-9): 53 characters, ybf/ybs, ytf/yts, yrf/yrs for YED and sqf/sqs, tqf/tqs, rqf/rqs for plain YEC", () => {
     const pqh = new Uint8Array(32).fill(0x22);
+    const want: Record<number, string[][]> = {
+      1: [["56b044", "4dde6a"], ["572330", "4f667f"], ["5715aa", "4c5655"]],
+      2: [["56aede", "4ddd04"], ["5721c9", "4f6519"], ["571444", "4c54ef"]],
+    };
     for (const scheme of [1, 2] as const) {
+      const f = scheme === 2 ? "f" : "s";
       const prefixes = YCASH_NETWORKS.map((n) => (["yedpq", "pq"] as const).map((k) => encodePQAddress(n, k, { scheme, hash: pqh })));
-      expect(prefixes.map((r) => r.map((a) => a.slice(0, 2)))).toEqual([["yb", "sq"], ["yt", "tq"], ["yr", "rq"]]);
+      expect(prefixes.map((r) => r.map((a) => a.slice(0, 3)))).toEqual([[`yb${f}`, `sq${f}`], [`yt${f}`, `tq${f}`], [`yr${f}`, `rq${f}`]]);
       expect(prefixes.flat().every((a) => a.length === 53)).toBe(true);
       const versions = YCASH_NETWORKS.map((n) => (["yedpq", "pq"] as const).map((k) => bytesToHex(base58CheckDecode(encodePQAddress(n, k, { scheme, hash: pqh })).slice(0, 3))));
-      expect(versions).toEqual([[`56ab0${scheme}`, `4dd90${scheme}`], [`571e0${scheme}`, `4f610${scheme}`], [`57100${scheme}`, `4c510${scheme}`]]);
+      expect(versions).toEqual(want[scheme]);
       for (const n of YCASH_NETWORKS) {
         for (const k of ["yedpq", "pq"] as const) {
           const a = encodePQAddress(n, k, { scheme, hash: pqh });
@@ -39,14 +44,16 @@ describe("addresses", () => {
     expect(isYedKind("yedpq") && isYedKind("yed") && !isYedKind("pq") && isPQKind("pq") && !isPQKind("yed")).toBe(true);
   });
 
-  it("refuses a post-quantum address with an unknown scheme, and a 20-byte YED payload of 33 bytes", () => {
-    const bad = base58CheckEncode(Uint8Array.from([0x57, 0x10, 0x03, ...new Uint8Array(32)]));
-    expect(() => decodeAddress(bad)).toThrow(/scheme 3/);
+  it("refuses the pre-D-9 post-quantum form, an unknown scheme, and a 20-byte YED payload of 33 bytes", () => {
+    for (const old of [[0x57, 0x10, 0x01], [0x57, 0x10, 0x03], [0x4d, 0xd9, 0x02]]) {
+      const bad = base58CheckEncode(Uint8Array.from([...old, ...new Uint8Array(32)]));
+      expect(() => decodeAddress(bad)).toThrow(/unknown post-quantum version/);
+    }
     expect(() => encodeAddress("ycash:regtest", "yedpq", Uint8Array.from([3, ...new Uint8Array(32)]))).toThrow(/scheme 3/);
     expect(() => encodeAddress("ycash:regtest", "yed", new Uint8Array(33))).toThrow(/20 bytes/);
     expect(() => encodeAddress("ycash:regtest", "pq", new Uint8Array(20))).toThrow(/scheme/);
     // a 35-byte payload under a 20-byte version is not an address
-    expect(() => decodeAddress(base58CheckEncode(Uint8Array.from([0x20, 0x02, 0x01, ...new Uint8Array(32)])))).toThrow(/unknown version/);
+    expect(() => decodeAddress(base58CheckEncode(Uint8Array.from([0x20, 0x02, 0x01, ...new Uint8Array(32)])))).toThrow(/unknown post-quantum version/);
   });
 
   it("decode a mainnet Ycash founders' address (ycash-dd/src/chainparams.cpp:316)", () => {

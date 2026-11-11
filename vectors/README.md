@@ -29,6 +29,14 @@ Copied byte for byte from the node, never regenerated here: `pq_vectors.json` fr
   refund; re-pinned at `076a3251c`: again only `chain`, `SCHEMA_VERSION` 14 — the per-vault cancel
   limit, state hash `02f3ce11…`; `scripts` is unchanged).
 
+- `pq_address_vectors.json` = `src/test/data/pq_address_vectors.json` of ycash-dd / ycash6 `up/b2-pq-prefix`
+  (decision D-9, the scheme-visible post-quantum prefixes; sha256
+  `dbbd1da05d995d659e1e9f8a671197e141c272998722d6cca85cdbdb52b61797`): 72 valid addresses (every network,
+  coin `yec`/`yed` and scheme, `version` the 3-byte version) and 60 invalid ones (the pre-D-9 form, truncated,
+  extended, bad checksum, unknown version). Both SDKs' address codecs reproduce every valid one and refuse
+  every invalid one (`packages/ycash/test/unit/pq.address.vectors.test.ts`, `python/tests/unit/test_pq_address_vectors.py`,
+  which also pin the hash).
+
 `yed/transfer_v3.json` is generated from the node tree's test framework (`gen_transfer_v3.py`), last
 at ycash-dd `upgrade/vault` `8af82551b` (identical to the `aa0fd3812` output but for its `source`): the
 MINT is payload version 4 there (its owner scheme ‖ keyHash), every other type stays version 3 (C-1).

@@ -29,7 +29,9 @@ YEC in a vault to mint YED (`1 YED = $1`); burn the YED to get the YEC back.
 - **Node it needs:** any `ycashd` for YEC; for YED, a `ycashd` built from the
   `upgrade/quantum-vaults` branch of [ycash-dd](https://github.com/boyfromcave/ycash-dd) or
   [ycash6](https://github.com/boyfromcave/ycash6) (this line joins `upgrade/vault` at release),
-  speaking Yellowback `rpcversion` 8.
+  speaking Yellowback `rpcversion` 9 (the scheme-visible post-quantum prefixes, decision D-9: ycash-dd and
+  ycash6 6.22.x from that change on; an older node prints and takes the pre-D-9 post-quantum form, which
+  these SDKs refuse).
 - **Try it:** [Quick start on the devnet](#quick-start-on-the-devnet) below.
 
 The binding specs are in [`specs/`](specs/), language-neutral test vectors in
@@ -45,7 +47,9 @@ it later (`-pqfalconheight`) to test both regimes. The SDKs follow the node's re
 
 - **Addresses:** YED addresses are 53 characters in their post-quantum form (mainnet `yb…`,
   testnet `yt…`, regtest `yr…`), beside the 35-character ordinary form used before F. Plain YEC has
-  a post-quantum form too (`sq…` / `tq…` / `rq…`).
+  a post-quantum form too (`sq…` / `tq…` / `rq…`). The third character names the scheme (decision
+  D-9, one 3-byte version per network, coin and scheme): `ybf…`/`sqf…` Falcon (FN-DSA-512),
+  `ybs…`/`sqs…` SLH-DSA. The earlier form (`yb5…`, `sq4…`) is refused.
 - **A key-held Falcon YED signer.** An agent that holds its own keys keeps a Falcon YED key beside
   its WIF key: `AGENT_YED_KEY` / `AGENT_YED_KEY_FILE` for the agent, `--yed-key-file` /
   `X402_YED_KEY_FILE` for the CLI (`x402-ycash yed-key new FILE` writes one, mode 0600). YED is paid
