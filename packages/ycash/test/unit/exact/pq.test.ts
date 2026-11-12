@@ -50,7 +50,7 @@ describe("paying a post-quantum YED holder", () => {
   it("policy: a YED payTo is either Yellowback form, never sq…; a YEC payTo may be sq… above its dust", () => {
     expect(exact.checkTransparentYedRequirements(yedReq(merchantYrPQ))).toBeNull();
     const sq = encodePQAddress(NETWORK, "pq", pqId);
-    expect(sq.startsWith("rq")).toBe(true);
+    expect(sq.startsWith(pqId.scheme === 2 ? "rqf" : "rqs")).toBe(true); // D-9: the scheme in the prefix
     expect(exact.checkTransparentYedRequirements(yedReq(sq))).toMatch(/Yellowback/);
     expect(exact.checkTransparentYecRequirements(requirements(sq, "250000"))).toBeNull();
     expect(exact.checkTransparentYecRequirements(requirements(sq, "2405"))).toMatch(/post-quantum dust threshold of 2406/);
@@ -138,7 +138,7 @@ describe("a key-held Falcon YED signer (LocalKeySigner yedKey)", () => {
   const key = pq.yedFalconKeyFromSeed(seed);
   const merchant = encodePQAddress(NETWORK, "yedpq", { scheme: 2, hash: new Uint8Array(32).fill(0x5a) });
 
-  it("derives the TX_PQPKH holder 20 <SHA256(02 ‖ pk)> 52 c2 and its 53-character yr… / rq… addresses; the seed text round-trips", () => {
+  it("derives the TX_PQPKH holder 20 <SHA256(02 ‖ pk)> 52 c2 and its 53-character yrf… / rqf… addresses; the seed text round-trips", () => {
     expect(key.keyPair.publicKey).toHaveLength(897);
     expect(key.script).toHaveLength(35);
     expect(key.script[0]).toBe(0x20);
@@ -146,8 +146,8 @@ describe("a key-held Falcon YED signer (LocalKeySigner yedKey)", () => {
     expect(key.id.hash).toEqual(pq.keyHash(2, key.keyPair.publicKey));
     const yr = pq.yedFalconAddress(NETWORK, key);
     expect(yr).toHaveLength(53);
-    expect(yr.startsWith("yr")).toBe(true);
-    expect(pq.yedFalconPlainAddress(NETWORK, key).startsWith("rq")).toBe(true);
+    expect(yr.startsWith("yrf")).toBe(true); // D-9: FN-DSA-512
+    expect(pq.yedFalconPlainAddress(NETWORK, key).startsWith("rqf")).toBe(true);
     const text = pq.formatYedKeySeed(seed);
     expect(text).toMatch(/^fn-dsa-512:[0-9a-f]{96}\n$/);
     expect(pq.parseYedKeySeed(text)).toEqual(seed);

@@ -29,22 +29,29 @@ def test_pq_address_forms() -> None:
     h = bytes([0x22]) * 32
     for scheme in (1, 2):
         got = [[encode_pq_address(n, k, scheme, h) for k in ("yedpq", "pq")] for n in YCASH_NETWORKS]
-        assert [[a[:2] for a in r] for r in got] == [["yb", "sq"], ["yt", "tq"], ["yr", "rq"]]
+        f = "f" if scheme == 2 else "s"
+        assert [[a[:3] for a in r] for r in got] == [[f"yb{f}", f"sq{f}"], [f"yt{f}", f"tq{f}"], [f"yr{f}", f"rq{f}"]]
         assert all(len(a) == 53 for r in got for a in r)
         versions = [[base58check_decode(a)[:3].hex() for a in r] for r in got]
-        assert versions == [[f"56ab0{scheme}", f"4dd90{scheme}"], [f"571e0{scheme}", f"4f610{scheme}"], [f"57100{scheme}", f"4c510{scheme}"]]
+        want = {
+            1: [["56b044", "4dde6a"], ["572330", "4f667f"], ["5715aa", "4c5655"]],
+            2: [["56aede", "4ddd04"], ["5721c9", "4f6519"], ["571444", "4c54ef"]],
+        }
+        assert versions == want[scheme]
         for n, row in zip(YCASH_NETWORKS, got, strict=True):
             for k, a in zip(("yedpq", "pq"), row, strict=True):
                 d = decode_address(a)
                 assert (d.network, d.kind, d.hash, d.scheme) == (n, k, h, scheme)
                 assert address_to_script(a, n) == pq.pqpkh_script(pq.PQKeyId(scheme, h))
     assert encode_address("ycash:mainnet", "yed", bytes(20)).startswith("yb")
-    bad = base58check_encode(bytes([0x57, 0x10, 0x03]) + bytes(32))
-    try:
-        decode_address(bad)
-        raise AssertionError("scheme 3 decoded")
-    except ValueError as e:
-        assert "scheme 3" in str(e)
+    # the pre-D-9 form (2-byte version ‖ scheme ‖ keyHash), and an unknown scheme under it, are refused
+    for old in (bytes([0x57, 0x10, 0x01]), bytes([0x57, 0x10, 0x03]), bytes([0x4D, 0xD9, 0x02])):
+        bad = base58check_encode(old + bytes(32))
+        try:
+            decode_address(bad)
+            raise AssertionError(f"{old.hex()} decoded")
+        except ValueError as e:
+            assert "unknown post-quantum version" in str(e)
 
 
 def test_policy() -> None:

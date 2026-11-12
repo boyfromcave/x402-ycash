@@ -9,8 +9,8 @@
 //   it), written as text `fn-dsa-512:<96 hex>` (a bare 96-hex line is accepted too). The key pair is
 //   pqKeygen(FN-DSA-512, seed), so a seed restores the same key here and in any PQClean-based signer.
 // - The holder script is TX_PQPKH `20 <SHA256(0x02 ‖ pk)> 52 c2` (quantum spec §2), its YED address the
-//   33-byte scheme ‖ key-hash payload under the network's PQ YED version (mainnet `yb…` 56 AB, testnet
-//   `yt…` 57 1E, regtest `yr…` 57 10; 53 characters), and its plain-YEC form `sq…`/`tq…`/`rq…`.
+//   key hash under the network's Falcon YED version (D-9: mainnet `ybf…` 56 AE DE, testnet `ytf…` 57 21 C9,
+//   regtest `yrf…` 57 14 44; 53 characters), and its plain-YEC form `sqf…`/`tqf…`/`rqf…`.
 // - A spend is the chunked `<sig_1> <sig_2> OP_2 <pk_1> <pk_2> OP_2` (520 + 147, 520 + 377), the hash type
 //   ALL on the signature's last byte, over the ZIP-243 sighash with the TX_PQPKH as script code.
 import type { YcashNetwork } from "../constants.js";
@@ -75,7 +75,7 @@ export function formatYedKeySeed(seed: Uint8Array): string {
 }
 
 /**
- * The key's YED address (`yb…`/`yt…`/`yr…`, the 53-character post-quantum form).
+ * The key's YED address (`ybf…`/`ytf…`/`yrf…`, the 53-character post-quantum form).
  *
  * @param network - The network.
  * @param key - The key.
@@ -86,7 +86,7 @@ export function yedFalconAddress(network: YcashNetwork, key: YedFalconKey): stri
 }
 
 /**
- * The key's plain-YEC post-quantum address (`sq…`/`tq…`/`rq…`): the same TX_PQPKH script.
+ * The key's plain-YEC post-quantum address (`sqf…`/`tqf…`/`rqf…`): the same TX_PQPKH script.
  *
  * @param network - The network.
  * @param key - The key.

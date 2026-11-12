@@ -6,10 +6,14 @@ Transparent prefixes (identical on both lines):
 YED addresses, one version per network and form (ycash-dd/src/yellowback/params.cpp, address.cpp):
   20-byte key hash (P2PKH holder): mainnet 1F DD "yb…" (D-Q-21; 1F E4 "ye…" before the quantum line),
   testnet 20 07 "yt…", regtest 20 02 "yr…"; 35 characters.
-  33-byte scheme ‖ key hash (TX_PQPKH holder or vault owner; quantum spec §4): mainnet 56 AB "yb…",
-  testnet 57 1E "yt…", regtest 57 10 "yr…"; 53 characters.
-Plain-YEC post-quantum addresses (D-Q-20; the same TX_PQPKH script): mainnet 4D D9 "sq…", testnet
-4F 61 "tq…", regtest 4C 51 "rq…"; 53 characters.
+Post-quantum addresses (decision D-9, quantum spec §4.1, rpcversion 9): base58check(version(3) ‖ keyHash(32)),
+53 characters, one 3-byte version per network, form and scheme, so the prefix names the scheme (f FN-DSA-512 =
+scheme 2, s SLH-DSA-SHA2-128s = scheme 1); the node's key_io PlainPQAddressVersions / Yellowback pqAddressVersions:
+  yedpq (TX_PQPKH YED holder or vault owner): mainnet 56 AE DE "ybf…" / 56 B0 44 "ybs…", testnet 57 21 C9 "ytf…" /
+  57 23 30 "yts…", regtest 57 14 44 "yrf…" / 57 15 AA "yrs…".
+  pq (plain YEC, the same TX_PQPKH script, D-Q-20): mainnet 4D DD 04 "sqf…" / 4D DE 6A "sqs…", testnet 4F 65 19
+  "tqf…" / 4F 66 7F "tqs…", regtest 4C 54 EF "rqf…" / 4C 56 55 "rqs…".
+  The pre-D-9 form (2-byte version ‖ scheme ‖ keyHash) is neither produced nor accepted.
 Testnet and regtest share transparent prefixes, so the network always comes from the requirements
 (plan X-F1), never from the address.
 """
@@ -29,10 +33,26 @@ AddressKind = Literal["p2pkh", "p2sh", "yed", "yedpq", "pq"]
 """``yed``: a YED P2PKH holder; ``yedpq``: a YED post-quantum key; ``pq``: a plain-YEC post-quantum key."""
 
 _VERSIONS: dict[str, dict[str, bytes]] = {
-    YCASH_MAINNET: {"p2pkh": b"\x1c\x28", "p2sh": b"\x1c\x2c", "yed": b"\x1f\xdd", "yedpq": b"\x56\xab", "pq": b"\x4d\xd9"},
-    YCASH_TESTNET: {"p2pkh": b"\x1c\x95", "p2sh": b"\x1c\x2a", "yed": b"\x20\x07", "yedpq": b"\x57\x1e", "pq": b"\x4f\x61"},
-    YCASH_REGTEST: {"p2pkh": b"\x1c\x95", "p2sh": b"\x1c\x2a", "yed": b"\x20\x02", "yedpq": b"\x57\x10", "pq": b"\x4c\x51"},
+    YCASH_MAINNET: {"p2pkh": b"\x1c\x28", "p2sh": b"\x1c\x2c", "yed": b"\x1f\xdd"},
+    YCASH_TESTNET: {"p2pkh": b"\x1c\x95", "p2sh": b"\x1c\x2a", "yed": b"\x20\x07"},
+    YCASH_REGTEST: {"p2pkh": b"\x1c\x95", "p2sh": b"\x1c\x2a", "yed": b"\x20\x02"},
 }
+# Every post-quantum version (D-9) -> (network, kind, scheme): the one table both directions read.
+PQ_VERSIONS: dict[bytes, tuple[str, str, int]] = {
+    bytes.fromhex("4ddd04"): (YCASH_MAINNET, "pq", 2),  # sqf…
+    bytes.fromhex("4dde6a"): (YCASH_MAINNET, "pq", 1),  # sqs…
+    bytes.fromhex("4f6519"): (YCASH_TESTNET, "pq", 2),  # tqf…
+    bytes.fromhex("4f667f"): (YCASH_TESTNET, "pq", 1),  # tqs…
+    bytes.fromhex("4c54ef"): (YCASH_REGTEST, "pq", 2),  # rqf…
+    bytes.fromhex("4c5655"): (YCASH_REGTEST, "pq", 1),  # rqs…
+    bytes.fromhex("56aede"): (YCASH_MAINNET, "yedpq", 2),  # ybf…
+    bytes.fromhex("56b044"): (YCASH_MAINNET, "yedpq", 1),  # ybs…
+    bytes.fromhex("5721c9"): (YCASH_TESTNET, "yedpq", 2),  # ytf…
+    bytes.fromhex("572330"): (YCASH_TESTNET, "yedpq", 1),  # yts…
+    bytes.fromhex("571444"): (YCASH_REGTEST, "yedpq", 2),  # yrf…
+    bytes.fromhex("5715aa"): (YCASH_REGTEST, "yedpq", 1),  # yrs…
+}
+_PQ_VERSION_OF = {row: v for v, row in PQ_VERSIONS.items()}
 _PQ_KINDS = ("yedpq", "pq")
 _KNOWN_SCHEMES = (1, 2)
 
@@ -91,13 +111,15 @@ class DecodedAddress:
 
 
 def encode_address(network: str, kind: AddressKind, h: bytes) -> str:
-    """``h``: the 20-byte hash, or for yedpq/pq the 33 bytes scheme ‖ key hash."""
+    """``h``: the 20-byte hash, or for yedpq/pq the 33 bytes scheme ‖ key hash (encoded as the scheme's 3-byte
+    version ‖ key hash, D-9)."""
     if is_pq_kind(kind):
         if len(h) != 33:
             raise ValueError("a post-quantum address payload is scheme ‖ 32-byte key hash")
         if h[0] not in _KNOWN_SCHEMES:
             raise ValueError(f"unknown post-quantum scheme {h[0]}")
-    elif len(h) != 20:
+        return base58check_encode(_PQ_VERSION_OF[(network, kind, h[0])] + h[1:])
+    if len(h) != 20:
         raise ValueError("address hash must be 20 bytes")
     return base58check_encode(_VERSIONS[network][kind] + h)
 
@@ -108,22 +130,24 @@ def encode_pq_address(network: str, kind: AddressKind, scheme: int, key_hash: by
 
 def decode_address(addr: str, network: str | None = None) -> DecodedAddress:
     """Decode an address. A ``sm…``/``s2…`` address decodes as ycash:testnet unless ``network`` says
-    which is meant; with ``network``, an address of another network is refused."""
+    which is meant; with ``network``, an address of another network is refused. A post-quantum address
+    is 35 bytes under one of PQ_VERSIONS; the pre-D-9 form is refused."""
     b = base58check_decode(addr)
     if len(b) not in (22, 35):
         raise ValueError("not a Ycash address (bad length)")
     if network is not None and network not in _VERSIONS:
         raise ValueError(f"unsupported network {network}")
-    pq = len(b) == 35
+    if len(b) == 35:
+        row = PQ_VERSIONS.get(b[:3])
+        if row is None:
+            raise ValueError("not a Ycash address (unknown post-quantum version)")
+        if network is not None and row[0] != network:
+            raise ValueError(f"not a {network} address")
+        return DecodedAddress(row[0], row[1], b[3:], row[2])  # type: ignore[arg-type]  # row[1] is "yedpq" or "pq"
     for net in [network] if network is not None else YCASH_NETWORKS:
         for kind, v in _VERSIONS[net].items():
-            if is_pq_kind(kind) != pq or b[:2] != v:
-                continue
-            if not pq:
+            if b[:2] == v:
                 return DecodedAddress(net, kind, b[2:])  # type: ignore[arg-type]  # kind is an AddressKind key
-            if b[2] not in _KNOWN_SCHEMES:
-                raise ValueError(f"not a Ycash address (unknown post-quantum scheme {b[2]})")
-            return DecodedAddress(net, kind, b[3:], b[2])  # type: ignore[arg-type]
     raise ValueError(f"not a {network} address" if network else "not a Ycash address (unknown version)")
 
 

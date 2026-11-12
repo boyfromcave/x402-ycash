@@ -16,7 +16,7 @@ export {
   p2pkhScript, p2shScript, opReturnScript, p2pkhHash, p2shHash, p2pkhScriptSig, p2shScriptSig,
   type ScriptItem, type ScriptChunk,
 } from "./script.js";
-export { encodeAddress, encodePQAddress, decodeAddress, addressToScript, isPQKind, isYedKind, type AddressKind, type DecodedAddress } from "./address.js";
+export { encodeAddress, encodePQAddress, decodeAddress, addressToScript, isPQKind, isYedKind, pqVersion, PQ_VERSIONS, type AddressKind, type DecodedAddress } from "./address.js";
 export { logicalActions, feeFloor, txFee, MARGINAL_FEE, GRACE_ACTIONS, MIN_FEE } from "./fee.js";
 export { networkFeesOf, readNetworkFees, networkFee, networkFeeCap, needsHighFees, sizeFee, FEES_RPC_VERSION, type FeeKind, type NetworkFees } from "./networkFee.js";
 export { hexToBytes, bytesToHex, concatBytes, equalBytes } from "./bytes.js";
