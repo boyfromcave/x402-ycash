@@ -20,11 +20,12 @@ cargo test                     # unit tests; no proving parameters needed
 ```
 
 **Pinning.** The `zcash_*` crates come from `librustzcash6` as **git dependencies** on
-`https://github.com/boyfromcave/librustzcash6.git` rev `cc6068ea` (`upgrade/vault` with `up/web` merged, librustzcash6#16):
+`https://github.com/boyfromcave/librustzcash6.git` rev `6ff87bc9` (`upgrade/vault` after librustzcash6#24):
 miodragpop/librustzcash @ `ec525fae` (the revision `ref/ycash6/Cargo.toml:122-133` pins for ycashd
 6.21.0) plus the Vault network upgrade (`NetworkUpgrade::Vault`, `BranchId::Vault` = `0x6d5b7a31`)
-as librustzcash6's `upgrade/vault` carries it, plus the browser wallet's changes (rusqlite 0.39,
-schemerz-rusqlite carried in `components/`, wasm32 builds):
+as librustzcash6's `upgrade/vault` carries it, plus the browser wallet's changes (rusqlite
+>=0.39, <0.42, locked here at 0.41 with bundled SQLite 3.54; schemerz-rusqlite carried in
+`components/`; wasm32 builds on `sqlite-wasm-rs` 0.6.3, SQLite 3.54.1):
 `zcash_client_backend` 0.22, `zcash_client_sqlite` 0.20.2, `zcash_primitives` 0.28,
 `zcash_proofs` 0.28, `zcash_keys` 0.14, `zcash_protocol` 0.9, `zip321` 0.8, `sapling-crypto` 0.7.
 A `[patch.crates-io]` block mirrors ycashd's so every transitive copy is the same source. Moving
