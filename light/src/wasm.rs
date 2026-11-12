@@ -10,6 +10,7 @@
 
 use std::cell::Cell;
 
+use sqlite_wasm_rs::vfs::VfsFilesManager;
 use sqlite_wasm_vfs::sahpool::{install, OpfsSAHPoolCfg, OpfsSAHPoolUtil};
 
 /// The pool capacity [`install_opfs`] reserves: eight three-file stores (several wallets per
@@ -35,7 +36,7 @@ pub async fn install_opfs() -> Result<(), String> {
         return Ok(());
     }
     let p = pool().await?;
-    p.reserve_minimum_capacity(POOL_CAPACITY)
+    p.ensure_capacity(POOL_CAPACITY as usize)
         .await
         .map_err(|e| format!("sahpool: capacity: {e:?}"))?;
     INSTALLED.with(|i| i.set(true));
@@ -45,7 +46,8 @@ pub async fn install_opfs() -> Result<(), String> {
 /// Grows the pool so that at least `free` files are unused (a restore beside full stores).
 pub async fn ensure_free_files(free: u32) -> Result<(), String> {
     let p = pool().await?;
-    p.reserve_minimum_capacity(p.count() + free)
+    let in_use = p.len().map_err(|e| format!("sahpool: {e:?}"))?;
+    p.ensure_capacity(in_use + free as usize)
         .await
         .map_err(|e| format!("sahpool: capacity: {e:?}"))
 }
@@ -53,12 +55,16 @@ pub async fn ensure_free_files(free: u32) -> Result<(), String> {
 /// `(capacity, in use)` of the pool.
 pub async fn capacity() -> Result<(u32, u32), String> {
     let p = pool().await?;
-    Ok((p.get_capacity(), p.count()))
+    let in_use = p.len().map_err(|e| format!("sahpool: {e:?}"))?;
+    Ok((p.capacity() as u32, in_use as u32))
 }
 
 /// Every file name in the pool (the path strings the databases were opened with).
 pub async fn list_files() -> Result<Vec<String>, String> {
-    let mut v = pool().await?.list();
+    let mut v = pool()
+        .await?
+        .names()
+        .map_err(|e| format!("sahpool: {e:?}"))?;
     v.sort();
     Ok(v)
 }
@@ -69,8 +75,8 @@ pub async fn delete_store(dir: &str) -> Result<u32, String> {
     let p = pool().await?;
     let prefix = format!("{}/", dir.trim_end_matches('/'));
     let mut n = 0;
-    for f in p.list() {
-        if f.starts_with(&prefix) && p.delete_db(&f).map_err(|e| format!("{f}: {e:?}"))? {
+    for f in p.names().map_err(|e| format!("sahpool: {e:?}"))? {
+        if f.starts_with(&prefix) && p.remove(&f).map_err(|e| format!("{f}: {e:?}"))? {
             n += 1;
         }
     }
@@ -81,7 +87,7 @@ pub async fn delete_store(dir: &str) -> Result<u32, String> {
 pub async fn delete_file(name: &str) -> Result<bool, String> {
     pool()
         .await?
-        .delete_db(name)
+        .remove(name)
         .map_err(|e| format!("{name}: {e:?}"))
 }
 
