@@ -86,7 +86,7 @@ jobs:
         with:
           persist-credentials: false
       # light/Cargo.toml: the librustzcash6 crates are git dependencies (boyfromcave/librustzcash6 @
-      # 6ff87bc9, upgrade/vault after #24, with a [patch.crates-io] mirror of ycash6's); cargo
+      # a4935c51, librustzcash6#25: TEST_NETWORK = testnet-yb-fast, with a [patch.crates-io] mirror of ycash6's); cargo
       # fetches them, and rust-cache keeps ~/.cargo/git keyed on light/Cargo.lock.
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1 (master, 2026-10-01)
