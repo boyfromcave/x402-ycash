@@ -12,15 +12,16 @@ name = "x402-light"
 path = "src/main.rs"
 
 [dependencies]
-# librustzcash, Ycash-aware fork: boyfromcave/librustzcash6 @ 6ff87bc9 = its upgrade/vault after #24 (the
+# librustzcash, Ycash-aware fork: boyfromcave/librustzcash6 @ a4935c51 = librustzcash6#25 on its upgrade/vault
+# after #24 (TEST_NETWORK = testnet-yb-fast: Blossom/Heartwood/Canopy 510,250/510,252/510,254, Vault 510,400; the
 # Vault network upgrade, BranchId::Vault = 0x6d5b7a31, as ycashd's upgrade/vault pins, plus the
 # wasm32 builds the browser wallet needs and client crates that accept rusqlite >=0.39, <0.42).
 # See README "Pinning".
-zcash_client_backend = { version = "0.22", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2", features = ["unstable", "non-standard-fees"] }
-zcash_keys = { version = "0.14", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2", features = ["sapling", "unstable"] }
-zcash_protocol = { version = "0.9", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2", features = ["local-consensus"] }
-zcash_address = { version = "0.12", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2" }
-zip321 = { version = "0.8", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2" }
+zcash_client_backend = { version = "0.22", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733", features = ["unstable", "non-standard-fees"] }
+zcash_keys = { version = "0.14", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733", features = ["sapling", "unstable"] }
+zcash_protocol = { version = "0.9", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733", features = ["local-consensus"] }
+zcash_address = { version = "0.12", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733" }
+zip321 = { version = "0.8", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733" }
 sapling = { package = "sapling-crypto", version = "0.7", default-features = false, features = ["std"] }
 zip32 = "0.2"
 bip0039 = "0.12"
@@ -47,10 +48,10 @@ tracing = "0.1"
 # `multicore` (rayon in the Sapling and Orchard circuits) is native-only: halo2_proofs refuses it
 # on wasm32 without atomics, and maybe-rayon is serial there anyway. One line per target so the
 # feature set is explicit on both; everything else about these two crates is the same.
-zcash_client_sqlite = { version = "0.20", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2", features = ["unstable"] }
-zcash_primitives = { version = "0.28", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2", features = ["non-standard-fees"] }
+zcash_client_sqlite = { version = "0.20", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733", features = ["unstable"] }
+zcash_primitives = { version = "0.28", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733", features = ["non-standard-fees"] }
 # `multicore` (rayon) natively; the browser builds the same prover serially (its table below).
-zcash_proofs = { version = "0.28", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2", features = ["local-prover", "multicore"] }
+zcash_proofs = { version = "0.28", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733", features = ["local-prover", "multicore"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
 tonic = { version = "0.14", default-features = false, features = ["transport", "codegen", "tls-ring", "tls-native-roots", "tls-webpki-roots"] }
 # The `x402-light` binary only (src/main.rs, src/rpc.rs): the JSON-RPC server and the CLI.
@@ -62,12 +63,12 @@ clap = { version = "4", features = ["derive", "env"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-zcash_client_sqlite = { version = "0.20", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2", default-features = false, features = ["unstable"] }
-zcash_primitives = { version = "0.28", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2", default-features = false, features = ["std", "non-standard-fees"] }
+zcash_client_sqlite = { version = "0.20", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733", default-features = false, features = ["unstable"] }
+zcash_primitives = { version = "0.28", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733", default-features = false, features = ["std", "non-standard-fees"] }
 # The browser prover (yew/web plan W0.3): `local-prover` for `LocalTxProver::from_bytes` (the
 # module is gated on it; its default-location lookup is native-only in librustzcash6 up/web),
 # no `multicore` (no threads).
-zcash_proofs = { version = "0.28", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2", default-features = false, features = ["local-prover"] }
+zcash_proofs = { version = "0.28", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733", default-features = false, features = ["local-prover"] }
 tokio = { version = "1", default-features = false, features = ["sync", "macros"] }
 tonic = { version = "0.14", default-features = false, features = ["codegen"] }
 tonic-web-wasm-client = "0.9"
@@ -88,7 +89,7 @@ rayon = "1"
 # `router` for the unit tests' in-process fake lightwalletd (src/fake_lwd.rs); test builds only.
 tonic = { version = "0.14", default-features = false, features = ["router"] }
 # spend_diff_tests: an authorization type with no transparent inputs, to recompute a signed tx's sighash.
-zcash_transparent = { version = "0.8", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2" }
+zcash_transparent = { version = "0.8", git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733" }
 
 # Mirror of ycash6 upgrade/vault Cargo.toml:130-136 (ref/ycash6/Cargo.toml:122-133 before Vault) so every transitive zcash_* crate resolves to the same
 # Ycash-aware source as ycashd 6.21.0 (one revision, one set of branch ids and HRPs).
@@ -99,18 +100,18 @@ tonic-prost-build = "0.14"
 # rusqlite 0.39 and later (the browser wallet, yew/web plan §2; 0.41 since RUSTSEC-2026-0459):
 # schemerz-rusqlite has no release for them; the 0.370 source with its requirement raised
 # (>=0.39, <0.42) is carried in librustzcash6 (components/).
-schemerz-rusqlite = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2" }
-zcash_protocol = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2" }
-zcash_primitives = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2" }
-f4jumble = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2" }
-zcash_address = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2" }
-zcash_encoding = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2" }
-zcash_transparent = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2" }
+schemerz-rusqlite = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733" }
+zcash_protocol = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733" }
+zcash_primitives = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733" }
+f4jumble = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733" }
+zcash_address = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733" }
+zcash_encoding = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733" }
+zcash_transparent = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733" }
 # Not in ycashd's list (it does not use them) but needed here so the path crates above see one copy:
-zcash_client_backend = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2" }
-zcash_keys = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2" }
-zip321 = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2" }
-zcash_proofs = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "6ff87bc9f564fcb7891e1f32698c7ad91ba85ca2" }
+zcash_client_backend = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733" }
+zcash_keys = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733" }
+zip321 = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733" }
+zcash_proofs = { git = "https://github.com/boyfromcave/librustzcash6.git", rev = "a4935c512d01fb81969445e934b6fc00a615d733" }
 
 [profile.release]
 lto = "thin"

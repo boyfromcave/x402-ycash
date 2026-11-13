@@ -171,6 +171,26 @@ mod tests {
         );
     }
 
+    /// testnet is testnet-yb-fast (ycashd `CTestNetParams` + `CTestNetFastParams`): the branch a
+    /// Sapling transaction signs under at each boundary, Vault from 510,400.
+    #[test]
+    fn testnet_is_the_fast_profile() {
+        let net = YcashNetwork::Test;
+        for (h, want) in [
+            (510_247u32, BranchId::Sapling),
+            (510_248, BranchId::Ycash),
+            (510_250, BranchId::Blossom),
+            (510_252, BranchId::Heartwood),
+            (510_254, BranchId::Canopy),
+            (510_399, BranchId::Canopy),
+            (510_400, BranchId::Vault),
+            (510_421, BranchId::Vault),
+        ] {
+            assert_eq!(net.branch_id_at(BlockHeight::from_u32(h)), want, "{h}");
+        }
+        assert_eq!(u32::from(BranchId::Vault), 0x6d5b_7a31);
+    }
+
     #[test]
     fn devnet_regtest_is_canopy_from_height_one() {
         let net = YcashNetwork::devnet_regtest();
@@ -207,14 +227,19 @@ mod tests {
     }
 
     #[test]
-    fn vault_follows_canopy_and_is_unset_on_mainnet_and_testnet() {
-        // The Vault upgrade (upgrade plan U-9): branch 6d5b7a31, after Canopy, no height on the
-        // public networks yet (P8 sets it).
+    fn vault_follows_canopy_and_is_unset_on_mainnet() {
+        // The Vault upgrade (upgrade plan U-9): branch 6d5b7a31, after Canopy, no height on
+        // mainnet yet (P8 sets it); testnet-yb-fast's is 510,400 (ycashd CTestNetFastParams).
         assert_eq!(u32::from(BranchId::Vault), 0x6d5b_7a31);
         assert!(BranchId::Vault.height_range(&YcashNetwork::Main).is_none());
-        for net in [YcashNetwork::Main, YcashNetwork::Test] {
-            assert_eq!(net.activation_height(NetworkUpgrade::Vault), None);
-        }
+        assert_eq!(
+            YcashNetwork::Main.activation_height(NetworkUpgrade::Vault),
+            None
+        );
+        assert_eq!(
+            YcashNetwork::Test.activation_height(NetworkUpgrade::Vault),
+            Some(BlockHeight::from_u32(510_400))
+        );
         assert_eq!(
             YcashNetwork::devnet_regtest().activation_height(NetworkUpgrade::Vault),
             None
