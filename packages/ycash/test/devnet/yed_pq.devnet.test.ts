@@ -1,7 +1,7 @@
 // Copyright (c) 2026 The Ycash developers
 // Distributed under the MIT software license.
 //
-// The quantum line on a live devnet (ycash-dd upgrade/quantum-vaults, rpcversion 7): the 53-character
+// The quantum line on a live devnet (ycash-dd / ycash6 upgrade/vault, rpcversion 9): the 53-character
 // YED post-quantum address against the node's own encoder; YED `exact` paid to a TX_PQPKH holder; YED
 // payment channels on the hybrid TX_PQCHANNEL (D-Q-19): open → pay → cooperative close, and the
 // client's refund after t; and the deprecated P2SH YED channel, still valid before the Falcon height.
@@ -72,7 +72,7 @@ describeDevnet("the quantum line: post-quantum YED addresses, exact payees and T
 
   it("the 53-character yr… form is the node's: vault_getnewowner's address re-encodes byte for byte", async () => {
     const info = await d.wallet.call<{ rpcversion: number; params: { pq: { schemes: number[]; falconActive: boolean } } }>("yed_getinfo");
-    expect(info.rpcversion).toBe(8); // the fee structure (rpcversion 8) on upgrade/quantum-vaults
+    expect(info.rpcversion).toBe(9); // the scheme-visible post-quantum prefixes (rpcversion 9, D-9)
     expect(info.params.pq.falconActive).toBe(falcon);
     const o = await d.wallet.call<{ scheme: 1 | 2; keyhash: string; owner: string; address: string }>("vault_getnewowner");
     expect(o.address).toHaveLength(53);
