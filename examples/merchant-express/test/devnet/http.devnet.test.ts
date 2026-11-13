@@ -181,7 +181,7 @@ describeDevnet("HTTP end to end: facilitator, merchant and agent as processes", 
     const repo = (d.line === "v6" ? process.env.YCASH6 : process.env.YCASH_DD) ?? join(WORKSPACE, d.line === "v6" ? "ycash6" : "ycash-dd");
     const cli = join(repo, "contrib/yellowback/devnet/yellowback-devnet");
     const env = { ...process.env, YELLOWBACK_DEVNET_DIR: state.dir, YELLOWBACK_DEVNET_PORTSEED: String(state.portseed), [d.line === "v6" ? "ZCASHD" : "BITCOIND"]: state.bitcoind };
-    const devnetCli = (...args: string[]) => promisify(execFile)(join(WORKSPACE, ".venv/bin/python"), [cli, ...args], { env, timeout: 300_000 });
+    const devnetCli = (...args: string[]) => promisify(execFile)(process.env.PYTHON ?? join(WORKSPACE, ".venv/bin/python"), [cli, ...args], { env, timeout: 300_000 });
     const POOL = 3;
     await devnetCli("pool", String(POOL), "stratum", "start");
     let stratumBlocks = 0;
