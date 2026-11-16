@@ -1,7 +1,7 @@
 // The CLI's configuration: flags first, then the environment, then defaults. The chain is read from
 // a node (a yellowback-devnet devnet.json entry or an RPC URL with credentials) or from a
 // lightwalletd server (--lwd); the payer is a WIF key or the node's own wallet.
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
@@ -72,6 +72,8 @@ export const USAGE = `usage:
   x402-ycash channel status [channelId]
   x402-ycash channel close <url> [channelId] [--asset YEC|YED]
   x402-ycash channel refund <channelId> [--to ADDRESS]
+  x402-ycash key new <FILE>            (writes a new transparent WIF key, mode 0600; prints its address, never the key)
+  x402-ycash key address               (the address of --wif-file)
   x402-ycash yed-key new <FILE>        (writes a new Falcon YED key, mode 0600; prints its address)
   x402-ycash yed-key address           (the address of --yed-key-file)
 
@@ -80,7 +82,9 @@ node (flag / env):   --devnet FILE / X402_DEVNET_JSON, --node N / X402_DEVNET_NO
                      or --rpc-cookie / X402_RPC_COOKIE_FILE
                      or --lwd HOST:PORT / X402_LWD_URL: a lightwalletd server instead of a node (needs --wif;
                      grpc://… plaintext, grpcs://… TLS, a bare host:port is TLS unless loopback)
-payer:               --wif / X402_WIF (a local key; default: the node's wallet signs)
+payer:               --wif-file FILE / X402_WIF_FILE (a local WIF key in a file only its owner can read, mode 0600
+                     or stricter; \`key new\` writes one) or --wif / X402_WIF (the key itself: visible to other
+                     users in the process list; prefer --wif-file); default: the node's wallet signs
                      --yed-key-file FILE / X402_YED_KEY_FILE (or X402_YED_KEY): with --wif, a Falcon YED key
                      (fn-dsa-512:<96 hex>) that holds and pays YED; from the Falcon height (mainnet: the vault
                      activation) a WIF key alone holds no YED (TOK-PQ)
@@ -116,6 +120,7 @@ const OPTIONS = {
   "rpc-cookie": { type: "string" },
   lwd: { type: "string" },
   wif: { type: "string" },
+  "wif-file": { type: "string" },
   "yed-key-file": { type: "string" },
   "shielded-from": { type: "string" },
   "sapling-builder": { type: "string" },
@@ -219,19 +224,64 @@ function yedKeyOf(f: Record<string, string | undefined>, env: Env): pq.YedFalcon
   }
 }
 
-export function loadCliConfig(args: ParsedArgs, env: Env = process.env, node?: YcashRpc): CliConfig {
-  const f = args.values;
-  const network = (f.network ?? env.X402_NETWORK ?? "ycash:regtest") as YcashNetwork;
-  if (!YCASH_NETWORKS.includes(network)) throw new UsageError(`--network must be one of ${YCASH_NETWORKS.join(", ")}`);
-  const wif = f.wif ?? env.X402_WIF;
+/**
+ * Reads a WIF key from a file that only its owner can read: a key file readable or writable by the
+ * group or others is refused, as ssh refuses a loose private key. The key is never echoed: an
+ * error names the file and the problem, not the content.
+ *
+ * @param path - The key file.
+ * @param network - The network the key must belong to.
+ * @returns The WIF string, trimmed.
+ * @throws UsageError when the file is missing, too open, or holds no valid key for `network`.
+ */
+export function readWifFile(path: string, network: YcashNetwork): string {
+  let mode: number;
+  try {
+    mode = statSync(path).mode;
+  } catch (e) {
+    throw new UsageError(`--wif-file: cannot read ${path}: ${(e as NodeJS.ErrnoException).code ?? "error"}`);
+  }
+  if (process.platform !== "win32" && (mode & 0o077) !== 0) {
+    throw new UsageError(`--wif-file: ${path} is accessible by group or others (mode ${(mode & 0o777).toString(8).padStart(4, "0")}); run chmod 600 ${path}`);
+  }
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (e) {
+    throw new UsageError(`--wif-file: cannot read ${path}: ${(e as NodeJS.ErrnoException).code ?? "error"}`);
+  }
+  const wif = text.trim();
+  if (wif.length === 0 || wif.length > 64 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(wif)) throw new UsageError(`--wif-file: ${path} does not hold one WIF key`);
+  try {
+    tx.decodeWif(wif, network);
+  } catch {
+    throw new UsageError(`--wif-file: ${path} does not hold a valid WIF key for ${network}`);
+  }
+  return wif;
+}
+
+/** The WIF key of --wif-file / X402_WIF_FILE or --wif / X402_WIF; never both. */
+function wifOf(f: Record<string, string | undefined>, env: Env, network: YcashNetwork): string | undefined {
+  const file = f["wif-file"] ?? env.X402_WIF_FILE;
+  const inline = f.wif ?? env.X402_WIF;
+  if (file && inline) throw new UsageError("set --wif-file (X402_WIF_FILE) or --wif (X402_WIF), not both");
+  if (file) return readWifFile(file, network);
   // The WIF prefix is shared by testnet and regtest; decodeWif with the network still refuses mainnet keys elsewhere.
-  if (wif) {
+  if (inline) {
     try {
-      tx.decodeWif(wif, network);
+      tx.decodeWif(inline, network);
     } catch (e) {
       throw new UsageError(`--wif: ${(e as Error).message}`);
     }
   }
+  return inline;
+}
+
+export function loadCliConfig(args: ParsedArgs, env: Env = process.env, node?: YcashRpc): CliConfig {
+  const f = args.values;
+  const network = (f.network ?? env.X402_NETWORK ?? "ycash:regtest") as YcashNetwork;
+  if (!YCASH_NETWORKS.includes(network)) throw new UsageError(`--network must be one of ${YCASH_NETWORKS.join(", ")}`);
+  const wif = wifOf(f, env, network);
   const yedKey = yedKeyOf(f, env);
   if (yedKey && !wif) throw new UsageError("--yed-key-file needs --wif: the WIF key pays the YEC fees of a YED payment");
   const count = f.count ?? "1";

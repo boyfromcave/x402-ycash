@@ -13,6 +13,7 @@ COPY packages/facilitator/package.json packages/facilitator/
 COPY packages/cli/package.json packages/cli/
 COPY examples/merchant-express/package.json examples/merchant-express/
 COPY examples/agent-client/package.json examples/agent-client/
+COPY examples/chain-api/package.json examples/chain-api/
 
 FROM manifests AS build
 RUN npm ci --workspace x402-ycash-mechanism --workspace x402-ycash-facilitator

@@ -31,8 +31,8 @@ export async function startFacilitator(config: FacilitatorConfig, opts: StartOpt
   logger.info("starting", { config: redactConfig(config) });
 
   const rpc = createRpc(config.rpc);
-  const capabilities = await waitForNode(rpc, config.network, config.nodeWaitMs, logger);
-  logger.info("node ready", { line: capabilities.line, chain: capabilities.chain, subversion: capabilities.subversion, yellowback: capabilities.yellowback });
+  const capabilities = await waitForNode(rpc, config.network, config.nodeWaitMs, logger, undefined, config.testnetProfile);
+  logger.info("node ready", { line: capabilities.line, chain: capabilities.chain, ...(capabilities.testnetProfile ? { testnetProfile: capabilities.testnetProfile } : {}), subversion: capabilities.subversion, yellowback: capabilities.yellowback });
 
   const settlementStore = new FileSettlementStore(config.settlementStorePath);
   const facilitator = new x402Facilitator();

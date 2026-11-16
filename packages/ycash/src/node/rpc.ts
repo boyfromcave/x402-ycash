@@ -424,7 +424,14 @@ export class YcashRpc {
       if (e instanceof RpcError && e.code === RPC_METHOD_NOT_FOUND) yellowback = false;
       else if (!(e instanceof RpcError) || e.transport) throw e;
     }
-    return { line: lineOf(net.subversion), subversion: net.subversion, version: net.version, yellowback, chain: chain.chain };
+    return {
+      line: lineOf(net.subversion),
+      subversion: net.subversion,
+      version: net.version,
+      yellowback,
+      chain: chain.chain,
+      ...(typeof chain.testnetprofile === "string" ? { testnetProfile: chain.testnetprofile } : {}),
+    };
   }
 }
 

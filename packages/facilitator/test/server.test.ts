@@ -6,7 +6,7 @@ import { x402Facilitator } from "@x402/core/facilitator";
 import { InMemoryIssuedAddressRegistry, InMemorySettlementStore, SaplingProofHandler, type NodeCapabilities } from "x402-ycash-mechanism";
 import { resolveConfig, type FacilitatorConfig } from "../src/config.js";
 import { createLogger } from "../src/logger.js";
-import { ChainMismatchError, waitForNode } from "../src/node.js";
+import { ChainMismatchError, TestnetProfileMismatchError, waitForNode } from "../src/node.js";
 import { facilitatorHalf, registerSchemes, type SchemeDeps } from "../src/schemes.js";
 import { startFacilitator, type RunningFacilitator } from "../src/server.js";
 import { body, FakeFacilitatorScheme } from "./fakeScheme.js";
@@ -130,6 +130,18 @@ describe("waitForNode", () => {
     const probe = { capabilities: async () => (calls++, { ...caps, chain: "test" }), getBlockCount: async () => 0 };
     await expect(waitForNode(probe, "ycash:regtest", 60_000, logger, async () => {})).rejects.toBeInstanceOf(ChainMismatchError);
     expect(calls).toBe(1);
+  });
+  it("fails at once on another testnet profile, and passes the configured one (D-6)", async () => {
+    let calls = 0;
+    const test = { ...caps, chain: "test" };
+    const slow = { capabilities: async () => (calls++, { ...test, testnetProfile: "slow" }), getBlockCount: async () => 0 };
+    await expect(waitForNode(slow, "ycash:testnet", 60_000, logger, async () => {}, "fast")).rejects.toBeInstanceOf(TestnetProfileMismatchError);
+    expect(calls).toBe(1);
+    const none = { capabilities: async () => test, getBlockCount: async () => 0 };
+    await expect(waitForNode(none, "ycash:testnet", 60_000, logger, async () => {}, "fast")).rejects.toThrow(/reports none/);
+    const fast = { capabilities: async () => ({ ...test, testnetProfile: "fast" }), getBlockCount: async () => 0 };
+    await expect(waitForNode(fast, "ycash:testnet", 0, logger, async () => {}, "fast")).resolves.toMatchObject({ testnetProfile: "fast" });
+    await expect(waitForNode(slow, "ycash:testnet", 0, logger, async () => {})).resolves.toMatchObject({ testnetProfile: "slow" });
   });
 });
 

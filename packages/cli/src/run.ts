@@ -1,10 +1,10 @@
 // Dispatch: `run(argv, env)` is the whole CLI, so tests drive it without a process.
 import { randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import { pq, YCASH_NETWORKS, type YcashNetwork, type YcashRpc } from "x402-ycash-mechanism";
+import { pq, tx, YCASH_NETWORKS, type YcashNetwork, type YcashRpc } from "x402-ycash-mechanism";
 import { buildClient } from "./client.js";
 import { channelClose, channelOpen, channelRefund, channelStatus, pay, type Out } from "./commands.js";
-import { loadCliConfig, parseCli, USAGE, UsageError, type CliConfig, type ParsedArgs } from "./config.js";
+import { loadCliConfig, parseCli, readWifFile, USAGE, UsageError, type CliConfig, type ParsedArgs } from "./config.js";
 
 export interface RunIo {
   out: Out;
@@ -36,6 +36,7 @@ export async function run(argv: string[], env: Record<string, string | undefined
       return v;
     };
     if (cmd === "yed-key") return yedKeyCommand(args, env, sub, a1, io);
+    if (cmd === "key") return keyCommand(args, env, sub, a1, io);
     config = loadCliConfig(args, env, deps.node);
     const client = buildClient(config);
     const f = deps.fetch ?? fetch;
@@ -64,6 +65,54 @@ export async function run(argv: string[], env: Record<string, string | undefined
   } finally {
     config?.lwd?.close(); // an open gRPC channel would keep the process alive
   }
+}
+
+function networkOf(args: ParsedArgs, env: Record<string, string | undefined>): YcashNetwork {
+  const network = (args.values.network ?? env.X402_NETWORK ?? "ycash:regtest") as YcashNetwork;
+  if (!YCASH_NETWORKS.includes(network)) throw new UsageError(`--network must be one of ${YCASH_NETWORKS.join(", ")}`);
+  return network;
+}
+
+/** The transparent (P2PKH) address of a private key, compressed public key. */
+export function wifAddress(wif: string, network: YcashNetwork): string {
+  const { privKey, compressed } = tx.decodeWif(wif, network);
+  const address = tx.encodeAddress(network, "p2pkh", tx.hash160(tx.pubkeyFromPriv(privKey, compressed)));
+  privKey.fill(0);
+  return address;
+}
+
+/**
+ * `key new FILE`: writes a new transparent key as WIF (mode 0600, never over an existing file) and
+ * prints its address; `key address`: the address of --wif-file. The key itself is never printed.
+ * Testnet and regtest share the WIF prefix; mainnet keys have their own.
+ *
+ * @param args - The parsed arguments.
+ * @param env - The environment.
+ * @param sub - `new` or `address`.
+ * @param file - `new`'s file.
+ * @param io - Output.
+ * @returns The exit code.
+ */
+function keyCommand(args: ParsedArgs, env: Record<string, string | undefined>, sub: string | undefined, file: string | undefined, io: RunIo): number {
+  const network = networkOf(args, env);
+  let wif: string;
+  if (sub === "new") {
+    if (!file) throw new UsageError("missing <FILE>");
+    const priv = tx.randomPrivKey();
+    wif = tx.encodeWif(priv, network);
+    priv.fill(0);
+    try {
+      writeFileSync(file, wif + "\n", { mode: 0o600, flag: "wx" });
+    } catch (e) {
+      throw new UsageError(`key new: cannot create ${file}: ${(e as NodeJS.ErrnoException).code === "EEXIST" ? "it exists (a key is never overwritten)" : ((e as NodeJS.ErrnoException).code ?? "error")}`);
+    }
+  } else if (sub === "address") {
+    const path = args.values["wif-file"] ?? env.X402_WIF_FILE;
+    if (!path) throw new UsageError("key address needs --wif-file");
+    wif = readWifFile(path, network);
+  } else throw new UsageError(`unknown command: key ${sub ?? ""}`);
+  io.out({ msg: "key", network, address: wifAddress(wif, network), ...(sub === "new" ? { file } : {}) });
+  return 0;
 }
 
 /**
