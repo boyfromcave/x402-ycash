@@ -18,6 +18,8 @@ export interface RateLimits {
   paidPerMinute: number;
   /** `/`, `/pricing`, `/healthz` per client address per minute. */
   freePerMinute: number;
+  /** Paid relay attempts (`/v1/broadcast`) per client address per minute, within the paid limit. */
+  relayPerMinute: number;
 }
 
 /** Links shown in /pricing for people and agents (never fetched by the service). */
@@ -49,6 +51,12 @@ export interface ChainApiConfig {
   priceBroadcastZat: bigint;
   /** exact payments up to this many zatoshis settle on mempool acceptance (D-10: 0.001 YEC). */
   zeroConfCapZat: bigint;
+  /** Paid requests in progress at once, over all clients; more get 503 before any verify (S1). */
+  maxInflight: number;
+  /** How long a used payment stays refused, ms (longer than a payment transaction's validity). */
+  claimTtlMs: number;
+  /** The most payments remembered at once (fail closed when full). */
+  maxClaims: number;
   /** How many blocks back the address history looks (bounds the node's work per paid request). */
   historyWindowBlocks: number;
   limits: RateLimits;
@@ -179,7 +187,11 @@ export function loadChainApiConfig(env: Env = process.env): ChainApiConfig {
       unpaidPerMinute: int(env, "API_UNPAID_PER_MINUTE", 30, 1, 100_000),
       paidPerMinute: int(env, "API_PAID_PER_MINUTE", 120, 1, 100_000),
       freePerMinute: int(env, "API_FREE_PER_MINUTE", 120, 1, 100_000),
+      relayPerMinute: int(env, "API_RELAY_PER_MINUTE", 10, 1, 100_000),
     },
+    maxInflight: int(env, "API_MAX_INFLIGHT", 16, 1, 10_000),
+    claimTtlMs: int(env, "API_CLAIM_TTL_SECONDS", 7_200, 60, 604_800) * 1000,
+    maxClaims: int(env, "API_MAX_CLAIMS", 100_000, 10, 10_000_000),
     trustProxy: int(env, "API_TRUST_PROXY", 0, 0, 10),
     links: linksOf(env),
   };

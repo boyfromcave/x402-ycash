@@ -126,7 +126,7 @@ describeDevnet("chain-data API: an agent pays, the API answers from the node", (
       API_PAY_TO: payTo,
       FACILITATOR_URL: fac.url,
       PORT: "0",
-      API_UNPAID_PER_MINUTE: "12",
+      API_UNPAID_PER_MINUTE: "30",
     }, "chain api listening");
     procs.push(api);
 
@@ -137,7 +137,7 @@ describeDevnet("chain-data API: an agent pays, the API answers from the node", (
     agentAddress = String(k.lines[0]?.address);
     expect(JSON.stringify(k.lines)).not.toContain(readFileSync(keyFile, "utf8").trim());
     await d.wallet.call("importaddress", [agentAddress, "", false]);
-    for (let i = 0; i < 10; i++) await d.fund(agentAddress, 1_000_000n);
+    for (let i = 0; i < 14; i++) await d.fund(agentAddress, 1_000_000n);
     await d.mine(1);
     record(d.line, "chain-api stack", { facilitator: fac.url, api: api.url, payTo, agent: agentAddress });
   });
@@ -189,6 +189,42 @@ describeDevnet("chain-data API: an agent pays, the API answers from the node", (
     record(d.line, "chain-api agent over lightwalletd", { paid: answers.map((l) => l.paidTx), ms: answers.map((l) => l.ms) });
   });
 
+  it("out of confirmed coins the agent says so; split, one block, and it pays in a row", async () => {
+    const lwd = process.env.X402_LWD_URL;
+    const chainArgs = lwd ? ["--lwd", lwd] : ["--devnet", devnetJson, "--node", "0"];
+    const key = join(dir, "split.wif");
+    const k = start(join(REPO, "packages/cli"), ["src/main.ts", "key", "new", key, "--network", NETWORK], {});
+    expect(await k.exited).toBe(0);
+    const address = String(k.lines[0]?.address);
+    if (!lwd) await d.wallet.call("importaddress", [address, "", false]);
+    await d.fund(address, 1_000_000n); // the faucet: one output per address
+    await d.mine(1);
+    const common = ["--wif-file", key, ...chainArgs, "--network", NETWORK, "--reservations", join(dir, "split-res.json"), "--channels", join(dir, "split-ch.json")];
+    const agent = async (): Promise<Proc> => {
+      const a = start(join(REPO, "examples/chain-api"), ["src/agent/main.ts", api.url, ...common, "--budget", "50000"], {});
+      procs.push(a);
+      await a.exited;
+      return a;
+    };
+    const first = await agent();
+    const firstAnswers = first.lines.filter((l) => typeof l.path === "string");
+    expect(firstAnswers[0]).toMatchObject({ status: 200 });
+    expect(firstAnswers[1]).toMatchObject({ error: "no confirmed coin left", hint: expect.stringMatching(/wait for a block or run: x402-ycash split/) });
+    expect(firstAnswers).toHaveLength(2); // the agent stops at the hint
+    await d.mine(1); // the change confirms
+    const sp = start(join(REPO, "packages/cli"), ["src/main.ts", "split", "--count", "6", ...common], {});
+    expect(await sp.exited, sp.stderr.join("")).toBe(0);
+    const split = sp.lines[0] as { txid: string; outputs: number; eachZat: string };
+    expect(split).toMatchObject({ msg: "split", outputs: 6 });
+    expect(BigInt(split.eachZat)).toBeGreaterThanOrEqual(20_000n);
+    await d.mine(1);
+    const second = await agent();
+    const answers = second.lines.filter((l) => typeof l.path === "string");
+    expect(answers, JSON.stringify(second.lines)).toHaveLength(5);
+    expect(answers.every((l) => l.status === 200)).toBe(true);
+    record(d.line, "chain-api split", { split: split.txid, each: split.eachZat, over: lwd ? "lightwalletd" : "node" });
+  });
+
   it("a paid transaction lookup reports the fee from the node's spent index", async () => {
     const txid = await d.fund(agentAddress, 1_000_000n); // a wallet spend: inputs and fee known
     const c = buildClient(loadCliConfig(parseCli(["pay", "x", "--wif-file", keyFile, "--devnet", devnetJson, "--node", "0", "--network", NETWORK, "--reservations", join(dir, "res.json"), "--channels", join(dir, "ch.json")]), {}));
@@ -206,9 +242,9 @@ describeDevnet("chain-data API: an agent pays, the API answers from the node", (
     expect(body).toMatchObject({ txid, inMempool: true, confirmations: 0 });
     expect(body.feeZat).toBe(Math.round(Math.abs(entry.fee ?? 0) * 1e8));
 
-    // The same payment again: refused (one payment buys one request), and nothing is read.
+    // The same payment again: refused (one payment buys one request) with 409, and nothing is read.
     const again = await fetch(`${api.url}/v1/tx/${txid}`, { headers: header });
-    expect(again.status).toBe(402);
+    expect(again.status).toBe(409);
   });
 
   it("refuses an underpayment and a payment for another network", async () => {
@@ -231,6 +267,78 @@ describeDevnet("chain-data API: an agent pays, the API answers from the node", (
     expect(await received(0)).toBe(before); // neither was relayed
   });
 
+  /**
+   * Exactly one response carries a settlement, and that transaction pays payTo the price once; the
+   * faucet's wallet got at least that (other tests' payments may still be reaching its wallet).
+   */
+  async function paidOnce(responses: Response[], before: bigint): Promise<void> {
+    const settled = responses
+      .map((r) => r.headers.get("PAYMENT-RESPONSE"))
+      .filter((h): h is string => h !== null)
+      .map((h) => JSON.parse(Buffer.from(h, "base64").toString("utf8")) as { success: boolean; transaction: string; errorReason?: string })
+      .filter((p) => p.success);
+    expect(settled).toHaveLength(1); // a refused second settle may say so in its header, never success
+    const { transaction } = settled[0] as { transaction: string };
+    const t = tx.parseTx(await d.wallet.call<string>("getrawtransaction", [transaction]));
+    const toPayTo = t.vout.filter((o) => tx.equalBytes(o.scriptPubKey, tx.addressToScript(payTo, NETWORK)));
+    expect(toPayTo.map((o) => o.value)).toEqual([PRICE]);
+    expect((await receivedReaches(before + PRICE)) - before).toBeGreaterThanOrEqual(PRICE);
+  }
+
+  /** A payment signed by the agent's key for the route's 402, as a PAYMENT-SIGNATURE header. */
+  async function signedPayment(path: string): Promise<Record<string, string>> {
+    const c = buildClient(loadCliConfig(parseCli(["pay", "x", "--wif-file", keyFile, "--devnet", devnetJson, "--node", "0", "--network", NETWORK, "--reservations", join(dir, "res.json"), "--channels", join(dir, "ch.json")]), {}));
+    c.client.setSpendControls({ allowedAssets: [{ network: NETWORK, asset: "YEC", maxAmountPerPayment: "20000" }] });
+    const res0 = await fetch(`${api.url}${path}`);
+    expect(res0.status).toBe(402);
+    const pr = decodePaymentRequiredHeader(res0.headers.get("PAYMENT-REQUIRED") as string);
+    return new x402HTTPClient(c.client).encodePaymentSignatureHeader(await c.client.createPaymentPayload(pr));
+  }
+
+  it("one payment on many concurrent requests over mixed routes: exactly one answer, one settlement", async () => {
+    await d.syncMempools();
+    const before = await received(0);
+    const header = await signedPayment("/v1/chain");
+    const tip = await d.tip();
+    const paths = ["/v1/chain", `/v1/block/${tip}`, "/v1/yellowback", `/v1/address/${agentAddress}`];
+    const requests = Array.from({ length: 12 }, (_, i) =>
+      i === 11
+        ? fetch(`${api.url}/v1/broadcast`, { method: "POST", headers: { ...header, "content-type": "application/json" }, body: JSON.stringify({ hex: "00" }) })
+        : fetch(`${api.url}${paths[i % paths.length]}`, { headers: header }),
+    );
+    const responses = await Promise.all(requests);
+    const codes = responses.map((r) => r.status);
+    expect(codes.filter((c) => c === 200), JSON.stringify(codes)).toHaveLength(1);
+    expect(codes.filter((c) => c !== 200).every((c) => c === 409), JSON.stringify(codes)).toBe(true);
+    await paidOnce(responses, before);
+    // Later, the same payment is still refused.
+    expect((await fetch(`${api.url}/v1/chain`, { headers: header })).status).toBe(409);
+    record(d.line, "chain-api parallel replay", { codes });
+  });
+
+  it("one payment sent to two API processes at once (one facilitator): exactly one answer", async () => {
+    const second = await service(join(REPO, "examples/chain-api"), {
+      X402_NETWORK: NETWORK,
+      API_ALLOW_REGTEST: "1",
+      API_DEVNET_JSON: devnetJson,
+      API_DEVNET_NODE: "0",
+      API_PAY_TO: payTo,
+      FACILITATOR_URL: fac.url,
+      PORT: "0",
+    }, "chain api listening");
+    procs.push(second);
+    await d.syncMempools();
+    const before = await received(0);
+    const header = await signedPayment("/v1/chain");
+    const responses = await Promise.all([api.url, second.url, api.url, second.url].map((u) => fetch(`${u}/v1/chain`, { headers: header })));
+    const codes = responses.map((r) => r.status);
+    expect(codes.filter((c) => c === 200), JSON.stringify(codes)).toHaveLength(1);
+    expect(codes.every((c) => c === 200 || c === 402 || c === 409), JSON.stringify(codes)).toBe(true);
+    await paidOnce(responses, before);
+    record(d.line, "chain-api two processes", { codes });
+    await second.stop();
+  });
+
   it("refuses to start on the wrong network: ycash:testnet against a regtest node", async () => {
     const p = start(join(REPO, "examples/chain-api"), ["src/main.ts"], { X402_NETWORK: "ycash:testnet", API_DEVNET_JSON: devnetJson, API_DEVNET_NODE: "0", API_PAY_TO: tx.encodeAddress("ycash:testnet", "p2pkh", tx.hash160(tx.pubkeyFromPriv(tx.randomPrivKey()))), PORT: "0" });
     procs.push(p);
@@ -240,7 +348,7 @@ describeDevnet("chain-data API: an agent pays, the API answers from the node", (
 
   it("rate-limits unpaid requests per client address", async () => {
     const codes: number[] = [];
-    for (let i = 0; i < 15; i++) codes.push((await fetch(`${api.url}/v1/yellowback`)).status);
+    for (let i = 0; i < 40; i++) codes.push((await fetch(`${api.url}/v1/yellowback`)).status);
     expect(codes).toContain(429);
     expect(codes.filter((c) => c !== 402 && c !== 429)).toEqual([]);
   });

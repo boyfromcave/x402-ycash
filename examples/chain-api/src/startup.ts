@@ -67,3 +67,55 @@ export async function checkNode(
   }
   return { chain: info.chain, ...(info.testnetprofile !== undefined ? { testnetProfile: info.testnetprofile } : {}), tip: info.blocks, addressIndex };
 }
+
+/**
+ * The facilitator's /healthz, read from the configured URL (never a client's): it must be healthy,
+ * on the same network, and, where the API needs a testnet profile, enforce that same profile
+ * itself (X402_TESTNET_PROFILE), so a payment can only settle on the fast testnet (D-6).
+ *
+ * @param facilitatorUrl - The facilitator's base URL (configuration).
+ * @param network - The API's network.
+ * @param testnetProfile - The profile the API requires, if any.
+ * @param f - fetch (tests).
+ * @returns undefined when acceptable, else the reason; throws when the facilitator cannot be reached.
+ */
+export async function checkFacilitator(facilitatorUrl: string, network: YcashNetwork, testnetProfile: string | undefined, f: typeof fetch = fetch): Promise<string | undefined> {
+  const res = await f(new URL("/healthz", facilitatorUrl), { signal: AbortSignal.timeout(10_000) });
+  let body: { status?: unknown; network?: unknown; testnetProfile?: unknown; node?: { testnetProfile?: unknown } };
+  try {
+    body = (await res.json()) as typeof body;
+  } catch {
+    return `the facilitator's /healthz answered ${res.status} without JSON`;
+  }
+  if (body.network !== network) return `the facilitator serves ${String(body.network)}, not ${network}`;
+  if (testnetProfile !== undefined && body.testnetProfile !== testnetProfile) {
+    return `the facilitator does not enforce the ${testnetProfile} testnet profile (start it with X402_TESTNET_PROFILE=${testnetProfile})`;
+  }
+  if (!res.ok || body.status !== "ok") return `the facilitator is unhealthy (${String(body.status)})`;
+  return undefined;
+}
+
+/**
+ * Waits for the facilitator at startup: a refusal (wrong network or profile) fails at once; an
+ * unreachable or unhealthy facilitator is retried until `waitMs`.
+ *
+ * @param check - The check (checkFacilitator bound to the configuration).
+ * @param waitMs - How long to wait.
+ * @param sleep - Injected for tests.
+ * @throws WrongNetworkError on a network or profile refusal; Error after the wait.
+ */
+export async function waitForFacilitator(check: () => Promise<string | undefined>, waitMs: number, sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))): Promise<void> {
+  const deadline = Date.now() + waitMs;
+  for (let attempt = 1; ; attempt++) {
+    let reason: string | undefined;
+    try {
+      reason = await check();
+    } catch (e) {
+      reason = `the facilitator does not answer: ${(e as Error).message}`;
+    }
+    if (reason === undefined) return;
+    if (/serves|does not enforce/.test(reason)) throw new WrongNetworkError(reason);
+    if (Date.now() >= deadline) throw new Error(reason);
+    await sleep(Math.min(1000 * attempt, 5000));
+  }
+}

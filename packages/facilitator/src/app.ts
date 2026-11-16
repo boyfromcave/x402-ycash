@@ -29,6 +29,11 @@ export interface AppOptions {
   rateLimit?: RateLimit;
   /** Reverse-proxy hops to trust for the client address (express `trust proxy`, default 0). */
   trustProxy?: number;
+  /**
+   * The enforced testnet profile (X402_TESTNET_PROFILE): /healthz reports it as `testnetProfile`
+   * and answers 503 `profile_mismatch` when the node runs another, so a merchant can require it.
+   */
+  testnetProfile?: string;
 }
 
 export interface FacilitatorApp {
@@ -200,10 +205,12 @@ export function createApp(opts: AppOptions): FacilitatorApp {
     try {
       const [caps, height] = await Promise.all([node.capabilities(), node.getBlockCount()]);
       const chainOk = caps.chain === CHAIN_OF_NETWORK[network];
-      res.status(chainOk ? 200 : 503).json({
-        status: chainOk ? "ok" : "chain_mismatch",
+      const profileOk = opts.testnetProfile === undefined || caps.testnetProfile === opts.testnetProfile;
+      res.status(chainOk && profileOk ? 200 : 503).json({
+        status: !chainOk ? "chain_mismatch" : !profileOk ? "profile_mismatch" : "ok",
         network,
-        node: { line: caps.line, chain: caps.chain, subversion: caps.subversion, yellowback: caps.yellowback, height },
+        ...(opts.testnetProfile !== undefined ? { testnetProfile: opts.testnetProfile } : {}),
+        node: { line: caps.line, chain: caps.chain, subversion: caps.subversion, yellowback: caps.yellowback, height, ...(caps.testnetProfile !== undefined ? { testnetProfile: caps.testnetProfile } : {}) },
         kinds: facilitator.getSupported().kinds.map(k => `${k.scheme}@${k.network}`),
       });
     } catch (e) {

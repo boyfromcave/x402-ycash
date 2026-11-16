@@ -76,6 +76,7 @@ export async function startFacilitator(config: FacilitatorConfig, opts: StartOpt
     bodyLimit: config.bodyLimit,
     rateLimit: config.rateLimit,
     trustProxy: config.trustProxy,
+    ...(config.testnetProfile ? { testnetProfile: config.testnetProfile } : {}),
     ...(config.apiKey ? { apiKey: config.apiKey } : {}),
   });
 

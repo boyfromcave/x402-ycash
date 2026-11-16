@@ -20,6 +20,7 @@ import { ExpressAdapter, paymentMiddlewareFromHTTPServer, x402HTTPResourceServer
 import { ASSET_YEC, exact } from "x402-ycash-mechanism";
 import { broadcastHexOf, invalidParams, patternOf, priceOf, ROUTES, yecOf, type PaidRoute } from "./catalog.js";
 import type { ChainApiConfig } from "./config.js";
+import { PaymentClaims, singleUseFacilitator } from "./claims.js";
 import { ApiError, apiErrorOf, type ChainReader } from "./reader.js";
 
 export interface ChainApiOptions {
@@ -30,6 +31,13 @@ export interface ChainApiOptions {
    * the address route answers 503 before any payment; the other routes are unaffected.
    */
   addressIndex?: boolean;
+  /** The payment claim set (default: a new one from the configuration). */
+  claims?: PaymentClaims;
+  /**
+   * The facilitator's own check, polled with the node (main.ts: its /healthz reports the enforced
+   * fast-testnet profile, D-6). Resolves to undefined when fine, else the reason /healthz fails.
+   */
+  facilitatorCheck?: () => Promise<string | undefined>;
   /** Health poll interval, ms (default 15 s); 0 = no background poll (tests call `health.check()`). */
   healthPollMs?: number;
   log?: (msg: string, fields?: Record<string, unknown>) => void;
@@ -38,6 +46,8 @@ export interface ChainApiOptions {
 export interface Health {
   ok: boolean;
   tip: number | null;
+  /** Why the API is unhealthy, when it is. */
+  reason: string | null;
   checkedAt: number | null;
   check(): Promise<void>;
 }
@@ -45,6 +55,7 @@ export interface Health {
 export interface ChainApi {
   app: express.Express;
   health: Health;
+  claims: PaymentClaims;
   close(): void;
 }
 
@@ -104,7 +115,8 @@ export function pricingDocument(config: ChainApiConfig, features: { addressIndex
         "the answer is the data, with the settlement (txid) in the PAYMENT-RESPONSE header",
       ],
       rules: [
-        "one payment buys one request: a replayed payment is refused",
+        "one payment buys one request: a payment already used, or in use by another request, is refused with 409",
+        "once a request reaches the data, its payment is used even if the answer is an error (an error is not settled, so not charged; sign a new payment to retry)",
         "a request answered with an error (4xx or 5xx) is not settled, so not charged",
         "bad parameters are refused with 400 before any payment",
       ],
@@ -128,6 +140,8 @@ export function pricingDocument(config: ChainApiConfig, features: { addressIndex
     limits: {
       unpaidRequestsPerMinute: config.limits.unpaidPerMinute,
       paidRequestsPerMinute: config.limits.paidPerMinute,
+      paidRelayRequestsPerMinute: config.limits.relayPerMinute,
+      paidRequestsInProgress: config.maxInflight,
       freeRequestsPerMinute: config.limits.freePerMinute,
       addressHistoryBlocks: config.historyWindowBlocks,
       listEntries: 100,
@@ -173,6 +187,8 @@ function sendError(res: express.Response, e: ApiError): void {
 
 function handlerOf(route: PaidRoute, reader: ChainReader): express.RequestHandler {
   return async (req, res) => {
+    // From here the payment is used, whatever the answer (claims.ts).
+    res.locals.handlerRan = true;
     let body: unknown;
     try {
       switch (route.id) {
@@ -215,10 +231,12 @@ function handlerOf(route: PaidRoute, reader: ChainReader): express.RequestHandle
  */
 export function createChainApi(config: ChainApiConfig, opts: ChainApiOptions): ChainApi {
   const log = opts.log ?? ((msg: string, fields?: Record<string, unknown>): void => console.log(JSON.stringify({ msg, ...fields })));
-  const resourceServer = new x402ResourceServer(opts.facilitator);
+  const resourceServer = new x402ResourceServer(singleUseFacilitator(opts.facilitator));
   resourceServer.register(config.network, new exact.ExactYcashServerScheme({ zeroConfCapZat: config.zeroConfCapZat }));
   const httpServer = new x402HTTPResourceServer(resourceServer, routesConfig(config));
   const pay = paymentMiddlewareFromHTTPServer(httpServer);
+  const claims = opts.claims ?? new PaymentClaims(config.claimTtlMs, config.maxClaims);
+  let inflight = 0;
   // Fail closed: run the payment middleware only on a path it charges for; anything else is a 404.
   const guard: express.RequestHandler = (req, res, next) => {
     let decodedPath = req.path;
@@ -231,22 +249,56 @@ export function createChainApi(config: ChainApiConfig, opts: ChainApiOptions): C
       res.status(404).json({ error: "not_found", message: "no such route; see /pricing" });
       return;
     }
+    const header = req.get("payment-signature") ?? req.get("x-payment");
+    const key = header === undefined ? undefined : PaymentClaims.keyOf(header);
+    // No payment (or one that does not decode): the middleware answers 402, nothing to claim.
+    if (key === undefined) return void pay(req, res, next);
+    if (inflight >= config.maxInflight) {
+      res.status(503).json({ error: "busy", message: "too many paid requests in progress; retry in a moment (nothing was charged)" });
+      return;
+    }
+    const got = claims.claim(key);
+    if (got === "full") {
+      res.status(503).json({ error: "busy", message: "the API is remembering too many payments; retry later (nothing was charged)" });
+      return;
+    }
+    if (got !== "claimed") {
+      res.status(409).json({ error: "payment_used", message: `this payment is ${got === "inflight" ? "in use by another request" : "already used"}: one payment buys one request` });
+      return;
+    }
+    inflight++;
+    res.once("close", () => {
+      inflight--;
+      if (res.locals.handlerRan === true) claims.burn(key);
+      else claims.release(key);
+    });
     void pay(req, res, next);
   };
 
   const health: Health = {
     ok: false,
     tip: null,
+    reason: "not checked yet",
     checkedAt: null,
     async check() {
       try {
         this.tip = await opts.reader.tip();
-        this.ok = true;
-        this.checkedAt = Date.now();
       } catch (e) {
         if (this.ok) log("node unreachable", { error: (e as Error).message });
         this.ok = false;
+        this.reason = "the node does not answer";
+        return;
       }
+      const facilitatorProblem = opts.facilitatorCheck ? await opts.facilitatorCheck().catch((e: unknown) => `facilitator: ${(e as Error).message}`) : undefined;
+      if (facilitatorProblem !== undefined) {
+        if (this.ok) log("facilitator unhealthy", { reason: facilitatorProblem });
+        this.ok = false;
+        this.reason = facilitatorProblem;
+        return;
+      }
+      this.ok = true;
+      this.reason = null;
+      this.checkedAt = Date.now();
     },
   };
   const pollMs = opts.healthPollMs ?? 15_000;
@@ -271,11 +323,13 @@ export function createChainApi(config: ChainApiConfig, opts: ChainApiOptions): C
   });
   app.get("/healthz", free, (_req, res) => {
     const fresh = health.ok && health.checkedAt !== null && Date.now() - health.checkedAt < HEALTH_STALE_MS;
-    res.status(fresh ? 200 : 503).json({ ok: fresh, network: config.network, tip: health.tip });
+    res.status(fresh ? 200 : 503).json({ ok: fresh, network: config.network, tip: health.tip, ...(fresh ? {} : { reason: health.reason ?? "stale" }) });
   });
 
   // 1: the paid surface's limits, unpaid and paid counted apart.
   app.use("/v1", limiter(config.limits.unpaidPerMinute, hasPayment, "unpaid"), limiter(config.limits.paidPerMinute, (req) => !hasPayment(req), "paid"));
+  // The relay costs the node the most (a 100 kB transaction to check): its own, lower paid limit.
+  app.use("/v1/broadcast", limiter(config.limits.relayPerMinute, (req) => !hasPayment(req), "relay"));
 
   // 3-5: per route, check the parameters, then the payment, then read the node.
   for (const r of ROUTES) {
@@ -312,6 +366,7 @@ export function createChainApi(config: ChainApiConfig, opts: ChainApiOptions): C
   return {
     app,
     health,
+    claims,
     close: () => {
       if (timer) clearInterval(timer);
     },

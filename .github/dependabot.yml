@@ -40,7 +40,7 @@ updates:
         applies-to: security-updates
         patterns: [ "*" ]
   - package-ecosystem: docker
-    directory: /packages/facilitator
+    directories: [ "/packages/facilitator", "/packages/cli", "/examples/chain-api" ]
     schedule:
       interval: weekly
     open-pull-requests-limit: 0

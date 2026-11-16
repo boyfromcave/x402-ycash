@@ -150,8 +150,65 @@ describe("the paid chain-data API", () => {
     const before = node.calls.length;
     client.replay = true;
     const again = await paid(`${api.url}/v1/chain`);
-    expect(again.status).toBe(402);
+    expect(again.status).toBe(409);
+    expect(await again.json()).toMatchObject({ error: "payment_used" });
     expect(node.calls.length).toBe(before); // the handler never ran
+  });
+
+  /** One signed payment for `path`, as a header, without sending it. */
+  async function oneSignedPayment(path: string): Promise<string> {
+    const pr = await required(path);
+    return encodePaymentSignatureHeader({ x402Version: 2, resource: pr.resource, accepted: pr.accepts[0] as PaymentRequired["accepts"][number], payload: { transaction: `tx-par-${Math.random()}` } });
+  }
+
+  it("M1: one payment on many concurrent requests over mixed routes releases exactly one answer", async () => {
+    facScheme.verifyDelayMs = 30; // all requests are in flight together
+    try {
+      const header = await oneSignedPayment("/v1/chain");
+      const paths = ["/v1/chain", `/v1/tx/${TXID}`, "/v1/block/120", "/v1/yellowback", `/v1/address/${PAY_TO}`];
+      const requests = Array.from({ length: 20 }, (_, i) => {
+        if (i % 6 === 5) return fetch(`${api.url}/v1/broadcast`, { method: "POST", headers: { "PAYMENT-SIGNATURE": header, "content-type": "application/json" }, body: JSON.stringify({ hex: "0400" }) });
+        return fetch(`${api.url}${paths[i % paths.length]}`, { headers: { "PAYMENT-SIGNATURE": header } });
+      });
+      const codes = (await Promise.all(requests)).map((r) => r.status);
+      expect(codes.filter((c) => c === 200)).toHaveLength(1);
+      expect(codes.filter((c) => c !== 200).every((c) => c === 409)).toBe(true);
+      expect(facScheme.calls.filter((c) => c === "verify")).toHaveLength(1);
+      expect(facScheme.calls.filter((c) => c === "settle")).toHaveLength(1);
+    } finally {
+      facScheme.verifyDelayMs = 0;
+    }
+  });
+
+  it("M1, second line: two API processes sharing a facilitator release one answer (a resumed settle is refused)", async () => {
+    const config = loadChainApiConfig(baseEnv(fac.url, { API_UNPAID_PER_MINUTE: "1000", API_PAID_PER_MINUTE: "1000" }));
+    const other = createChainApi(config, { facilitator: new HTTPFacilitatorClient({ url: fac.url }), reader: new ChainReader(node), healthPollMs: 0, log: () => undefined });
+    const s2 = await listen(other.app);
+    facScheme.verifyDelayMs = 50; // both verify before either settles
+    try {
+      const header = await oneSignedPayment("/v1/chain");
+      const [a, b] = await Promise.all([api.url, s2.url].map((u) => fetch(`${u}/v1/chain`, { headers: { "PAYMENT-SIGNATURE": header } })));
+      const codes = [a!.status, b!.status].sort();
+      expect(codes).toEqual([200, 402]);
+      expect(facScheme.calls.filter((c) => c === "settle")).toHaveLength(2); // the second settle resumed, and was refused
+    } finally {
+      facScheme.verifyDelayMs = 0;
+      other.close();
+      await new Promise<void>((r) => s2.server.close(() => r()));
+    }
+  });
+
+  it("S1: a payment whose request reached the node is used even when the answer is an error; a refused payment is not", async () => {
+    const header = await oneSignedPayment(`/v1/tx/${"99".repeat(32)}`);
+    expect((await fetch(`${api.url}/v1/tx/${"99".repeat(32)}`, { headers: { "PAYMENT-SIGNATURE": header } })).status).toBe(404);
+    const reads = node.calls.length;
+    // The same payment for another route: refused, no node work, no second verify.
+    expect((await fetch(`${api.url}/v1/chain`, { headers: { "PAYMENT-SIGNATURE": header } })).status).toBe(409);
+    expect(node.calls.length).toBe(reads);
+    expect(facScheme.calls).toEqual(["verify"]);
+    // A payment the facilitator refused never reached the handler: presenting it again gets 402 again, not 409.
+    const bad = await tampered("/v1/chain", (a) => ({ ...a, amount: "9999" }));
+    expect(bad.status).toBe(402);
   });
 
   async function tampered(path: string, change: (a: PaymentRequired["accepts"][number]) => PaymentRequired["accepts"][number]): Promise<Response> {
@@ -216,6 +273,62 @@ describe("the paid chain-data API", () => {
       expect((await fetch(`${s.url}/v1/chain`, { headers: { "PAYMENT-SIGNATURE": "junk" } })).status).toBe(429);
     } finally {
       small.close();
+      await new Promise<void>((r) => s.server.close(() => r()));
+    }
+  });
+
+  it("S1: caps paid requests in progress, and the relay has its own lower paid limit", async () => {
+    const config = loadChainApiConfig(baseEnv(fac.url, { API_MAX_INFLIGHT: "1", API_RELAY_PER_MINUTE: "1", API_PAID_PER_MINUTE: "1000", API_UNPAID_PER_MINUTE: "1000" }));
+    const small = createChainApi(config, { facilitator: new HTTPFacilitatorClient({ url: fac.url }), reader: new ChainReader(node), healthPollMs: 0, log: () => undefined });
+    const s = await listen(small.app);
+    facScheme.verifyDelayMs = 50;
+    try {
+      const [h1, h2] = [await oneSignedPayment("/v1/chain"), await oneSignedPayment("/v1/chain")];
+      const codes = (await Promise.all([h1, h2].map((h) => fetch(`${s.url}/v1/chain`, { headers: { "PAYMENT-SIGNATURE": h } })))).map((r) => r.status).sort();
+      expect(codes).toEqual([200, 503]);
+      const relay = async (): Promise<number> =>
+        (await fetch(`${s.url}/v1/broadcast`, { method: "POST", headers: { "PAYMENT-SIGNATURE": await oneSignedPayment("/v1/chain"), "content-type": "application/json" }, body: JSON.stringify({ hex: "0400" }) })).status;
+      expect(await relay()).toBe(200);
+      expect(await relay()).toBe(429);
+    } finally {
+      facScheme.verifyDelayMs = 0;
+      small.close();
+      await new Promise<void>((r) => s.server.close(() => r()));
+    }
+  });
+
+  it("S4: behind one trusted proxy the limits count the right-most forwarded address only; without trust, none", async () => {
+    for (const [trust, spoofable] of [["1", false], ["0", false]] as const) {
+      const config = loadChainApiConfig(baseEnv(fac.url, { API_UNPAID_PER_MINUTE: "2", API_TRUST_PROXY: trust }));
+      const t = createChainApi(config, { facilitator: new HTTPFacilitatorClient({ url: fac.url }), reader: new ChainReader(node), healthPollMs: 0, log: () => undefined });
+      const s = await listen(t.app);
+      try {
+        const codes: number[] = [];
+        // The client varies the left part of X-Forwarded-For; the proxy's appended (right-most) entry stays.
+        for (let i = 0; i < 3; i++) codes.push((await fetch(`${s.url}/v1/chain`, { headers: { "X-Forwarded-For": `10.9.9.${i}, 203.0.113.7` } })).status);
+        expect(codes, `trust ${trust}`).toEqual(spoofable ? [402, 402, 402] : [402, 402, 429]);
+      } finally {
+        t.close();
+        await new Promise<void>((r) => s.server.close(() => r()));
+      }
+    }
+  });
+
+  it("S8: /healthz fails while the facilitator does not enforce the fast testnet profile", async () => {
+    const config = loadChainApiConfig(baseEnv(fac.url));
+    let reason: string | undefined = "the facilitator does not enforce the fast testnet profile";
+    const t = createChainApi(config, { facilitator: new HTTPFacilitatorClient({ url: fac.url }), reader: new ChainReader(node), facilitatorCheck: async () => reason, healthPollMs: 0, log: () => undefined });
+    const s = await listen(t.app);
+    try {
+      await t.health.check();
+      const res = await fetch(`${s.url}/healthz`);
+      expect(res.status).toBe(503);
+      expect(await res.json()).toMatchObject({ ok: false, reason: expect.stringMatching(/does not enforce/) });
+      reason = undefined;
+      await t.health.check();
+      expect((await fetch(`${s.url}/healthz`)).status).toBe(200);
+    } finally {
+      t.close();
       await new Promise<void>((r) => s.server.close(() => r()));
     }
   });

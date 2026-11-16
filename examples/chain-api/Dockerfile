@@ -3,13 +3,13 @@
 # The paid chain-data API (x402-ycash-chain-api). Build from the repository root:
 #   docker build -f examples/chain-api/Dockerfile -t x402-ycash-chain-api .
 # Run beside a node (-insightexplorer -txindex) and the facilitator (README "Run the paid API"):
-#   docker run -p 4021:4021 -e API_PAY_TO=sm… -e API_RPC_URL=http://node:18232 \
+#   docker run -p 127.0.0.1:4021:4021 -e API_PAY_TO=sm… -e API_RPC_URL=http://node:18232 \
 #     -e API_RPC_COOKIE_FILE=/node/.cookie -v node-cookie:/node:ro -e FACILITATOR_URL=http://facilitator:4022 \
 #     x402-ycash-chain-api
 # It holds no key: payments go to API_PAY_TO, an address of a wallet kept elsewhere. Read-only root
 # file system friendly: it writes nothing.
 
-FROM node:22-slim AS manifests
+FROM node:22-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS manifests
 WORKDIR /app
 # Every workspace manifest, so `npm ci` matches the lockfile; only the three needed get installed.
 COPY package.json package-lock.json tsconfig.base.json ./
@@ -31,7 +31,7 @@ FROM manifests AS deps
 RUN npm ci --omit=dev --workspace x402-ycash-mechanism --workspace x402-ycash-cli --workspace x402-ycash-chain-api \
  && mkdir -p packages/ycash/node_modules packages/cli/node_modules examples/chain-api/node_modules
 
-FROM node:22-slim
+FROM node:22-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=4021

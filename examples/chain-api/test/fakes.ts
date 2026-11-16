@@ -85,10 +85,18 @@ export class FakeClient implements SchemeNetworkClient {
   }
 }
 
+/**
+ * Behaves like the real exact facilitator (packages/ycash exact/facilitator/scheme.ts): verify only
+ * reads the claim (a payment settled before is a duplicate); settle claims, and a settle of a
+ * transaction already claimed succeeds again with `extra.resumed` (it "resumes observing"). So two
+ * requests carrying one payment both verify while neither has settled.
+ */
 export class FakeFacilitatorScheme implements SchemeNetworkFacilitator {
   readonly scheme = "exact";
   readonly caipFamily = "ycash:*";
   readonly calls: string[] = [];
+  /** Delays every verify (to make two requests overlap). */
+  verifyDelayMs = 0;
   private readonly settled = new Set<string>();
   getExtra(_network: Network): Record<string, unknown> {
     return { assets: ["YEC"], assetTransferMethods: ["transparent"], areFeesSponsored: false, confirmations: { minimum: -1, maximum: 20 } };
@@ -98,6 +106,7 @@ export class FakeFacilitatorScheme implements SchemeNetworkFacilitator {
   }
   async verify(p: PaymentPayload, req: PaymentRequirements): Promise<VerifyResponse> {
     this.calls.push("verify");
+    if (this.verifyDelayMs > 0) await new Promise((r) => setTimeout(r, this.verifyDelayMs));
     const t = String(p.payload.transaction);
     if (this.settled.has(t)) return { isValid: false, invalidReason: "invalid_exact_ycash_replay" };
     if (p.accepted.amount !== req.amount || p.accepted.payTo !== req.payTo || p.accepted.network !== req.network) return { isValid: false, invalidReason: "invalid_exact_ycash_amount" };
@@ -106,8 +115,8 @@ export class FakeFacilitatorScheme implements SchemeNetworkFacilitator {
   async settle(p: PaymentPayload, req: PaymentRequirements): Promise<SettleResponse> {
     this.calls.push("settle");
     const t = String(p.payload.transaction);
-    if (this.settled.has(t)) return { success: false, errorReason: "invalid_exact_ycash_replay", transaction: "", network: req.network };
+    if (this.settled.has(t)) return { success: true, transaction: "ef".repeat(32), network: req.network, payer: "tmAgent", amount: req.amount, extra: { status: "mempool", confirmations: -1, resumed: true } };
     this.settled.add(t);
-    return { success: true, transaction: "ef".repeat(32), network: req.network, payer: "tmAgent", amount: req.amount };
+    return { success: true, transaction: "ef".repeat(32), network: req.network, payer: "tmAgent", amount: req.amount, extra: { status: "mempool", confirmations: -1 } };
   }
 }

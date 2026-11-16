@@ -30,6 +30,12 @@ export const VAULT_BRANCH_ID = "6d5b7a31";
 export const LIST_CAP = 100;
 /** Most mempool entries the fee picture reads. */
 export const MEMPOOL_SCAN_CAP = 5_000;
+/**
+ * The most unspent outputs (and history entries in the window) an address answer is built from.
+ * ycashd's address index offers no cheap count, so the node still reads them all; the API refuses
+ * to ship or sort more than this, answering 422 `too_large` (an error, so not settled or charged).
+ */
+export const ADDRESS_ENTRIES_CAP = 5_000;
 /** Most previous transactions read to price a transaction's fee when the node's spent index is off. */
 export const PREVOUT_LOOKUPS_CAP = 25;
 
@@ -95,6 +101,9 @@ interface RawTx {
   time?: number;
   blocktime?: number;
 }
+
+const tooLarge = (what: string): ApiError =>
+  new ApiError(422, "too_large", `the address has ${what}, more than this API answers (${ADDRESS_ENTRIES_CAP}); narrow the query, e.g. look up its transactions with /v1/tx (not charged)`);
 
 const voutZat = (o: RawVout): number => o.valueZat ?? zatOf(o.value);
 
@@ -205,8 +214,11 @@ export class ChainReader {
       const start = Math.max(1, tip - this.opts.historyWindowBlocks + 1);
       const balance = await this.rpc.call<{ balance: number; received: number }>("getaddressbalance", [q]);
       const utxos = await this.rpc.call<{ txid: string; outputIndex: number; satoshis: number; height: number }[]>("getaddressutxos", [q]);
+      if (utxos.length > ADDRESS_ENTRIES_CAP) throw tooLarge(`${utxos.length} unspent outputs`);
       const txids = await this.rpc.call<string[]>("getaddresstxids", [{ ...q, start, end: tip }]);
+      if (txids.length > ADDRESS_ENTRIES_CAP) throw tooLarge(`${txids.length} transactions in the last ${this.opts.historyWindowBlocks} blocks`);
       const mempool = await this.rpc.call<{ txid: string; satoshis: number }[]>("getaddressmempool", [q]);
+      if (mempool.length > ADDRESS_ENTRIES_CAP) throw tooLarge(`${mempool.length} mempool entries`);
       const sorted = [...utxos].sort((a, b) => b.satoshis - a.satoshis);
       const pendingIn = mempool.filter((m) => m.satoshis > 0).reduce((s, m) => s + m.satoshis, 0);
       const pendingOut = mempool.filter((m) => m.satoshis < 0).reduce((s, m) => s - m.satoshis, 0);

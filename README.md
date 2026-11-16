@@ -230,6 +230,14 @@ be used, with the same keys in camelCase; the environment wins over the file.
 | `X402_TRUST_PROXY` | `0` | Reverse-proxy hops in front of the facilitator, so the limit applies to the client's address from `X-Forwarded-For`, not the proxy's. Leave `0` when clients connect directly. |
 | `X402_BODY_LIMIT`, `X402_LOG_LEVEL`, `X402_SHUTDOWN_TIMEOUT_MS`, `X402_NODE_WAIT_MS`, `X402_RPC_TIMEOUT_MS` | `512kb`, `info`, `30000`, `60000`, `30000` | |
 
+A second settle of a payment already claimed (a retry after `settlement_pending`, or a concurrent request
+carrying the same payment) never broadcasts again; it resumes observing and answers with `extra.resumed: true`.
+A server that serves one request per payment must not serve a request whose settle says `resumed`: under
+concurrency, every request carrying one payment verifies before any of them settles (the chain-data API
+claims payments before verify and refuses a resumed settle). `X402_TESTNET_PROFILE` (fast, slow or legacy,
+`ycash:testnet` only) makes the facilitator refuse to start on another testnet; `/healthz` then reports it as
+`testnetProfile` and answers 503 `profile_mismatch` if the node changes.
+
 ### Examples
 
 - `examples/merchant-express` sells its routes through `@x402/express`: `GET /exact/quote` and
@@ -374,17 +382,29 @@ What it does and does not do:
   the faucet's own wallet, so spent coins flow back to the faucet. The facilitator holds no key either.
 - **Payment first.** Parameters are checked before anything else (a bad request is a 400, never a 402); the
   facilitator verifies the payment before the node is read; the payment is settled only when the answer is
-  below 400, so a 404 (an unknown transaction) or a 503 is not charged. One payment buys one request: a
-  replayed payment is refused by the facilitator's settlement store.
+  below 400, so a 404 (an unknown transaction), a 422 or a 503 is not charged.
+- **One payment buys one request.** The first request carrying a payment claims it in the API before the
+  facilitator verifies it; any other request with the same payment, while the first is in flight or after
+  it, gets **409 `payment_used`** (not 402, so an x402 client does not pay again by reflex). The claim is
+  released only when the payment never reached the data (the facilitator refused it or did not answer);
+  once the request reached the node the payment is used for `API_CLAIM_TTL_SECONDS` (2 hours, longer than a
+  payment's validity) even if the answer was an error: not charged, but not reusable either; sign a new
+  payment to retry. Across API processes, the facilitator marks a settle that did not claim the payment
+  (`extra.resumed`) and the API refuses it, so the buffered answer is withheld. After settlement the
+  facilitator's settlement store refuses the payment for good. The claim set holds at most
+  `API_MAX_CLAIMS` (100,000) payments; when full it refuses new ones with 503 rather than forget one.
 - **Settled at the mempool.** At 0.0001 YEC the payment is under the 0.001 YEC zero-confirmation cap
   (`API_ZERO_CONF_CAP_ZAT`), so the answer comes about a second after the payment reaches the mempool; the
   facilitator must allow it (`X402_CONFIRMATIONS_MIN=-1`). The risk of a double spend is the merchant's,
   bounded by that cap.
-- **Bounded.** Unpaid requests (each 402 costs a challenge), paid attempts (each costs the facilitator a verify)
-  and the free routes have their own per-address limits per minute (`API_UNPAID_PER_MINUTE` 30,
-  `API_PAID_PER_MINUTE` 120, `API_FREE_PER_MINUTE` 120); every list in an answer is cut at 100 entries; the
-  address history looks back `API_HISTORY_WINDOW_BLOCKS` (10,000) blocks. The node's own work for an address
-  with a very large number of unspent outputs is not bounded by the API; the rate limits are.
+- **Bounded.** Unpaid requests (each 402 costs a challenge), paid attempts (each costs the facilitator a verify),
+  paid relays and the free routes have their own per-address limits per minute (`API_UNPAID_PER_MINUTE` 30,
+  `API_PAID_PER_MINUTE` 120, `API_RELAY_PER_MINUTE` 10, `API_FREE_PER_MINUTE` 120); at most
+  `API_MAX_INFLIGHT` (16) paid requests run at once (more get 503, nothing charged); every list in an answer is
+  cut at 100 entries; the address history looks back `API_HISTORY_WINDOW_BLOCKS` (10,000) blocks. An address
+  with more than 5,000 unspent outputs, transactions in that window or mempool entries is answered **422
+  `too_large`** (not charged; the payment is used, see above): ycashd's address index has no cheap count, so
+  the node still reads the entries once before the API refuses to ship them.
 - **Testnet only, and the fast one.** It refuses to start unless the node reports `testnetprofile` = `fast`
   (the three testnets share `ycash:testnet`, D-6). Regtest needs `API_ALLOW_REGTEST=1`; mainnet is refused
   until the X6 runbook has been run (D-9).
@@ -393,14 +413,20 @@ What it does and does not do:
   `getblockcount`, `getaddress*`), `vault_getinfo`, `yed_getinfo`, `yed_getprice`, `yed_getstats`, and
   `sendrawtransaction` for the relay (high fees never allowed). Nothing a client sends picks a method or a URL.
 - **The relay acts before settlement.** `/v1/broadcast` hands the transaction to the node before the payment
-  is settled; if the settlement then fails (the payment was double-spent in the meantime), that relay was
-  free. Any node relays for free, so nothing is lost but the 0.0001.
+  is settled. If the relayed transaction spends the same input as the payment (or the payment is
+  double-spent in the meantime), the settlement fails and that relay was free; the answer is withheld, but
+  the transaction is on the network. Settling first would charge for transactions the node then refuses, so
+  the order stays. Any node relays for free, so nothing is lost but the 0.0001.
 - **The node needs `-txindex -insightexplorer`** (fees from the spent index, the address index). Without the
   address index, `/v1/address` answers 503 before any payment; without `-txindex`, a confirmed transaction
   outside the node's wallet is not found.
 
-Run it beside a node and a facilitator (`X402_TESTNET_PROFILE=fast` makes the facilitator refuse another
-testnet too):
+Run it beside a node and a facilitator. On the testnet the API refuses to start, and `/healthz` fails,
+unless the facilitator's `/healthz` shows it enforces the fast profile (`X402_TESTNET_PROFILE=fast`): the
+option stays optional for every other facilitator user, this deployment requires it. Never expose the API
+port directly: put it behind the reverse proxy (Caddy) and publish it on loopback only
+(`docker run -p 127.0.0.1:4021:4021 …`); with `API_TRUST_PROXY=1` the limits count the right-most
+`X-Forwarded-For` entry, the one the proxy appends, so a client cannot choose its own address.
 
 ```sh
 # the facilitator, settling at the mempool
@@ -431,6 +457,10 @@ You need Node.js 20 or newer and a checkout (`npm ci && npm run build`), or the 
 # 1. a key, written to agent.wif (mode 0600); the command prints only the address
 node packages/cli/dist/main.js key new agent.wif --network ycash:testnet
 # 2. get testnet YEC for that address from the faucet (linked from /pricing), and wait for one block
+#    (the explorer shows it); the faucet pays one output, and over lightwalletd one coin buys one
+#    payment per block, so split it into ten coins of equal value, then wait for one more block
+node packages/cli/dist/main.js split --count 10 --wif-file agent.wif \
+  --lwd fastnet-lightwallet.ycash.team:443 --network ycash:testnet
 
 # 3. the reference agent: reads /pricing, then pays for the chain summary, the tip block, a transaction,
 #    its own address and the Yellowback state, at most 0.001 YEC in all (--budget, in zatoshis)
@@ -442,16 +472,19 @@ node packages/cli/dist/main.js pay https://fastnet-x402.ycash.team/v1/chain --ne
   --lwd fastnet-lightwallet.ycash.team:443 --wif-file agent.wif
 ```
 
-With the image, mount a directory and run as yourself: `docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/w"
+With the image, mount a directory and run as yourself (the same for `split`): `docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/w"
 x402-ycash-cli key new /w/agent.wif --network ycash:testnet`, and `--entrypoint x402-chain-agent` with
 `--wif-file /w/agent.wif --reservations /w/reservations.json` for the agent.
 
 Honest limits:
 
 - **One coin per payment until the next block.** lightwalletd lists confirmed coins only, so each payment spends
-  a coin of its own and its change waits for a block; the fast testnet's blocks come in bursts. Ask the faucet
-  more than once (or split your coins) to make several requests in a row. A payment the agent has signed holds
-  its coins in the reservation file until it expires, so runs do not double-spend each other.
+  a coin of its own and its change waits for a block; the fast testnet's blocks come in bursts. `split
+  --count N` (2 to 50 outputs, each at least 20,000 zatoshis, `--min-output` to raise it) turns the key's
+  confirmed coins into N equal coins to itself in one transaction; one block later the agent can pay N times
+  in a row. When it runs out, the agent stops with "no confirmed coin left; wait for a block or run split". A
+  payment the agent has signed holds its coins in the reservation file until it expires, so runs do not
+  double-spend each other. `fastnet-lightwallet.ycash.team:443` serves native gRPC over TLS.
 - **Network fees are on top** of the prices and of `--budget`, which counts what the agent pays the API.
   `--max-payment` (default 20,000 zatoshis) caps any one payment, and the agent pays only the `payTo` that
   `/pricing` names, in YEC, on the configured network.
@@ -470,6 +503,7 @@ x402-ycash channel open <url> [--deposit ZAT]    open a channel on the route (pa
 x402-ycash channel status [channelId]            every channel in the store, or one, against the node
 x402-ycash channel close <url> [channelId]       the client's close at the charged total; the server broadcasts it
 x402-ycash channel refund <channelId> [--to A]   the client alone, from the refund height t
+x402-ycash split --count N                       the --wif-file key's confirmed coins into N equal outputs to itself (2..50)
 x402-ycash key new <FILE>                        write a new transparent key as WIF (mode 0600) and print its address
 x402-ycash key address                           the address of --wif-file
 x402-ycash yed-key new <FILE>                    write a new Falcon YED key (plaintext, mode 0600) and print its address

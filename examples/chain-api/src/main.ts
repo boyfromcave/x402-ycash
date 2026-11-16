@@ -8,7 +8,7 @@ import { HTTPFacilitatorClient } from "@x402/core/server";
 import { createChainApi } from "./app.js";
 import { ConfigError, describeConfig, loadChainApiConfig, rpcOf, type ChainApiConfig } from "./config.js";
 import { ChainReader } from "./reader.js";
-import { checkNode, WrongNetworkError } from "./startup.js";
+import { checkFacilitator, checkNode, waitForFacilitator, WrongNetworkError } from "./startup.js";
 
 const log = (msg: string, fields?: Record<string, unknown>): void => console.log(JSON.stringify({ msg, ...fields }));
 
@@ -40,8 +40,15 @@ async function main(): Promise<void> {
     log("startup refused", { error: (e as Error).message });
     process.exit(e instanceof WrongNetworkError ? 2 : 1);
   }
+  const facilitatorCheck = (): Promise<string | undefined> => checkFacilitator(config.facilitatorUrl, config.network, config.testnetProfile);
+  try {
+    await waitForFacilitator(facilitatorCheck, 120_000);
+  } catch (e) {
+    log("startup refused", { error: (e as Error).message });
+    process.exit(e instanceof WrongNetworkError ? 2 : 1);
+  }
   if (!facts.addressIndex) log("the node's address index is off: /v1/address answers 503 (start the node with -insightexplorer)");
-  const api = createChainApi(config, { facilitator: facilitatorOf(config), reader: new ChainReader(rpc, { historyWindowBlocks: config.historyWindowBlocks }), addressIndex: facts.addressIndex, log });
+  const api = createChainApi(config, { facilitator: facilitatorOf(config), reader: new ChainReader(rpc, { historyWindowBlocks: config.historyWindowBlocks }), addressIndex: facts.addressIndex, facilitatorCheck, log });
   const server = createServer({ maxHeaderSize: MAX_HEADER_BYTES, requestTimeout: 60_000, headersTimeout: 15_000 }, api.app);
   server.listen(config.port, config.host, () => {
     const addr = server.address();
