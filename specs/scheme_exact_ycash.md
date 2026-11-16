@@ -598,7 +598,11 @@ and the burn would be final.
 
 1. **Check the claim first.** If the txid is already claimed (an earlier settle of the same
    payload, or a settle retried after `settlement_pending`), skip the rules and resume observing
-   it (step 4); never broadcast again.
+   it (step 4); never broadcast again. Such a resumed answer carries `extra.resumed: true`, as does
+   the answer of a settle that lost the claim race (step 2): only the settle that claimed the txid
+   answers without it. A resource server that serves one request per payment MUST NOT serve a
+   request whose settle answered `resumed` (the payment already bought another request; under
+   concurrency, both requests verify before either settles).
 2. Otherwise re-run rules 2 to 9 (and 9Y), since the handler ran in between, then **claim the
    txid** atomically in the settlement store (see
    [Duplicate Settlement Mitigation](#duplicate-settlement-mitigation-required)). A settle that

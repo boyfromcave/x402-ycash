@@ -79,7 +79,17 @@ export interface FacilitatorConfig {
   rateLimit: RateLimit;
   /** Reverse-proxy hops in front of the facilitator (express `trust proxy`); 0 = the socket's peer is the client. */
   trustProxy: number;
+  /**
+   * X402_TESTNET_PROFILE (`testnetProfile`): with ycash:testnet, refuse to start unless the node
+   * reports this `getblockchaininfo.testnetprofile` (fast, slow or legacy). The three testnets share
+   * the id ycash:testnet and the chain name "test" (x402 demonstrations note, decision D-6).
+   */
+  testnetProfile?: TestnetProfile;
 }
+
+/** The testnet profiles a node reports (`-testnetprofile`, ycash-dd and ycash6 chainparamsbase.cpp). */
+export const TESTNET_PROFILES = ["fast", "slow", "legacy"] as const;
+export type TestnetProfile = (typeof TESTNET_PROFILES)[number];
 
 export interface RateLimit {
   windowMs: number;
@@ -135,6 +145,7 @@ const fileSchema = z
     apiKey: z.string().min(16),
     rateLimit: z.object({ windowMs: z.number().int().min(1000).max(3_600_000), max: z.number().int().min(1).max(1_000_000) }).strict(),
     trustProxy: z.number().int().min(0).max(10),
+    testnetProfile: z.enum(TESTNET_PROFILES),
   })
   .partial()
   .strict();
@@ -232,14 +243,19 @@ export function resolveConfig(file: z.output<typeof fileSchema>, env: Env): Faci
       max: intEnv(env, "X402_RATE_LIMIT") ?? file.rateLimit?.max ?? DEFAULTS.rateLimit.max,
     },
     trustProxy: intEnv(env, "X402_TRUST_PROXY") ?? file.trustProxy ?? DEFAULTS.trustProxy,
+    testnetProfile: strEnv(env, "X402_TESTNET_PROFILE") ?? file.testnetProfile,
   };
   // Re-validate the merged values with the file schema so env and file obey one set of rules.
   const checked = fileSchema.safeParse(Object.fromEntries(Object.entries(merged).filter(([, v]) => v !== undefined)));
   if (!checked.success) throw new ConfigError(issues(checked.error));
 
+  if (merged.testnetProfile !== undefined && network !== "ycash:testnet") throw new ConfigError("X402_TESTNET_PROFILE is for ycash:testnet only");
+
+  const { testnetProfile, ...rest } = merged;
   const saplingProof = resolveSaplingProof(file, env, network as YcashNetwork);
   return {
-    ...merged,
+    ...rest,
+    ...(testnetProfile !== undefined ? { testnetProfile: testnetProfile as TestnetProfile } : {}),
     logLevel: merged.logLevel as LogLevel,
     network: network as YcashNetwork,
     rpc,

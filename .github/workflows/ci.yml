@@ -5,7 +5,7 @@
 #   light              the Rust Sapling light client (light/): fmt, clippy (-D warnings), test
 #   python             the Python bindings (python/, its own venv): ruff, mypy, pytest (the Falcon
 #                      signer compiles the node's vendored C with the runner's cc on first use)
-#   facilitator-image  the facilitator's Docker image builds and refuses to start unconfigured
+#   images             the facilitator, chain-data API and CLI images build and refuse to start unconfigured
 # Nightly tier (workflow_dispatch with tier=nightly; component repos carry no schedule, the node
 # lines do):
 #   devnet             `npm run test:devnet` (mechanism + the HTTP path) on a five-node regtest
@@ -105,31 +105,50 @@ jobs:
       - run: cargo test --locked
         working-directory: light
 
-  facilitator-image:
+  # The three service images (facilitator, chain-data API, paying CLI with the reference agent)
+  # build, and each refuses to start unconfigured or prints its usage. Built only, never pushed:
+  # images.yml publishes them by digest when started by hand.
+  images:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: facilitator
+            file: packages/facilitator/Dockerfile
+            expect: X402_NETWORK
+          - name: chain-api
+            file: examples/chain-api/Dockerfile
+            expect: API_PAY_TO
+          - name: cli
+            file: packages/cli/Dockerfile
+            expect: "key new"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
-      - name: build the facilitator image
+      - name: build the image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
-          file: packages/facilitator/Dockerfile
-          tags: x402-ycash-facilitator:ci
+          file: ${{ matrix.file }}
+          tags: x402-ycash-${{ matrix.name }}:ci
           load: true
           push: false
           # Layer cache in the Actions cache, scoped per branch by GitHub; never pushed anywhere.
-          cache-from: type=gha
-          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,mode=max' || '' }}
-      - name: the image starts and refuses to run without a network (config validation)
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: ${{ github.event_name != 'pull_request' && format('type=gha,mode=max,scope={0}', matrix.name) || '' }}
+      - name: the image refuses to run unconfigured (or prints its usage)
+        env:
+          IMAGE: x402-ycash-${{ matrix.name }}:ci
+          EXPECT: ${{ matrix.expect }}
         run: |
           set +e
-          out=$(docker run --rm x402-ycash-facilitator:ci 2>&1); code=$?
+          out=$(docker run --rm "$IMAGE" 2>&1); code=$?
           echo "$out"
-          [ "$code" -ne 0 ] && echo "$out" | grep -q X402_NETWORK
+          [ "$code" -ne 0 ] && echo "$out" | grep -q "$EXPECT"
 
   python:
     runs-on: ubuntu-latest

@@ -38,6 +38,13 @@ export interface ExactYcashSettleExtra {
   status: "mempool" | "confirmed" | "pending";
   /** −1 for mempool, the node's depth when confirmed; null while nothing was observed. */
   confirmations: number | null;
+  /**
+   * Set (true) when this settle did not claim the payment: an earlier or concurrent settle of the
+   * same transaction did, and this one only resumed observing it. A merchant that releases a
+   * resource per successful settle must not release one on a resumed settle: the payment already
+   * bought (or is buying) another request. Absent on the settle that claimed the payment.
+   */
+  resumed?: true;
 }
 
 /**

@@ -35,7 +35,7 @@ interface Harness {
   shutdown: () => void;
 }
 
-async function start(opts: { apiKey?: string; bodyLimit?: string; rateLimit?: { windowMs: number; max: number } } = {}): Promise<Harness> {
+async function start(opts: { apiKey?: string; bodyLimit?: string; rateLimit?: { windowMs: number; max: number }; testnetProfile?: string } = {}): Promise<Harness> {
   const logs: string[] = [];
   const logger: Logger = createLogger("debug", {}, l => logs.push(l));
   const scheme = new FakeFacilitatorScheme();
@@ -231,6 +231,22 @@ describe("facilitator HTTP contract (spec §7)", () => {
       const res = await fetch(`${h.url}/healthz`);
       expect(res.status).toBe(503);
       expect(await res.json()).toEqual({ status: "node_unreachable", network: "ycash:regtest" });
+    });
+
+    it("reports the enforced testnet profile, and is 503 profile_mismatch when the node runs another (D-6)", async () => {
+      const local = await start({ testnetProfile: "fast" });
+      try {
+        local.node.caps = { ...CAPS, chain: "regtest", testnetProfile: "fast" };
+        let res = await fetch(`${local.url}/healthz`);
+        expect(res.status).toBe(200);
+        expect(await res.json()).toMatchObject({ status: "ok", testnetProfile: "fast", node: { testnetProfile: "fast" } });
+        local.node.caps = { ...CAPS, chain: "regtest", testnetProfile: "slow" };
+        res = await fetch(`${local.url}/healthz`);
+        expect(res.status).toBe(503);
+        expect(await res.json()).toMatchObject({ status: "profile_mismatch", testnetProfile: "fast" });
+      } finally {
+        await new Promise<void>(r => local.server.close(() => r()));
+      }
     });
 
     it("is 503 when the node's chain is not the network's", async () => {

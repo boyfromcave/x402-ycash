@@ -1,4 +1,4 @@
-import { mkdtempSync, statSync } from "node:fs";
+import { chmodSync, closeSync, fstatSync, mkdirSync, openSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -73,6 +73,70 @@ describe("configuration", () => {
     const c = loadCliConfig(parseCli(["pay", "x", "--wif", wif, "--yed-key-file", file]), devnetEnv);
     expect(c.yedKey && pq.yedFalconAddress(NET, c.yedKey)).toBe(out[0]!.yedAddress);
     expect(() => loadCliConfig(parseCli(["pay", "x", "--yed-key-file", file]), devnetEnv)).toThrow(/needs --wif/);
+  });
+
+  it("key new writes a WIF key (0600, never over a file) and prints only its address; key address reads it back", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "x402-cli-key-"));
+    const file = join(dir, "agent.wif");
+    const out: Record<string, unknown>[] = [];
+    const errs: string[] = [];
+    const io = { out: (r: Record<string, unknown>) => out.push(r), err: (l: string) => errs.push(l) };
+    expect(await run(["key", "new", file, "--network", "ycash:testnet"], {}, io)).toBe(0);
+    // One descriptor for the mode and the content: the file checked is the file read.
+    const fd = openSync(file, "r");
+    let key: string;
+    try {
+      expect(fstatSync(fd).mode & 0o777).toBe(0o600);
+      key = readFileSync(fd, "utf8").trim();
+    } finally {
+      closeSync(fd);
+    }
+    expect(T.decodeWif(key, "ycash:testnet").compressed).toBe(true);
+    expect(await run(["key", "new", file], {}, io)).toBe(2); // exists: never overwritten
+    expect(errs.join("")).toMatch(/never overwritten/);
+    expect(await run(["key", "address", "--wif-file", file, "--network", "ycash:testnet"], {}, io)).toBe(0);
+    expect(out[0]!.address).toBe(out[1]!.address);
+    expect(String(out[0]!.address)).toMatch(/^sm/);
+    expect(T.decodeAddress(String(out[0]!.address), "ycash:testnet").kind).toBe("p2pkh");
+    // The key appears in no output line and no error.
+    expect(JSON.stringify(out) + errs.join("")).not.toContain(key);
+  });
+
+  it("--wif-file / X402_WIF_FILE: reads a 0600 key, refuses a looser file, a bad key and --wif beside it, never echoing the key", () => {
+    const dir = mkdtempSync(join(tmpdir(), "x402-cli-wiffile-"));
+    const file = join(dir, "k.wif");
+    writeFileSync(file, wif + "\n", { mode: 0o600 });
+    expect(loadCliConfig(parseCli(["pay", "x", "--wif-file", file]), devnetEnv).wif).toBe(wif);
+    expect(loadCliConfig(parseCli(["pay", "x"]), { ...devnetEnv, X402_WIF_FILE: file }).wif).toBe(wif);
+    expect(() => loadCliConfig(parseCli(["pay", "x", "--wif-file", file, "--wif", wif]), devnetEnv)).toThrow(/not both/);
+    chmodSync(file, 0o644);
+    let msg = "";
+    try {
+      loadCliConfig(parseCli(["pay", "x", "--wif-file", file]), devnetEnv);
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toMatch(/accessible by group or others \(mode 0644\); run chmod 600/);
+    expect(msg).not.toContain(wif);
+    chmodSync(file, 0o640);
+    expect(() => loadCliConfig(parseCli(["pay", "x", "--wif-file", file]), devnetEnv)).toThrow(UsageError);
+    const mainnetKey = T.encodeWif(T.hexToBytes("07".repeat(32)), "ycash:mainnet");
+    writeFileSync(join(dir, "m.wif"), mainnetKey, { mode: 0o600 });
+    try {
+      loadCliConfig(parseCli(["pay", "x", "--wif-file", join(dir, "m.wif")]), devnetEnv);
+      msg = "";
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toMatch(/not hold a valid WIF key for ycash:regtest/);
+    expect(msg).not.toContain(mainnetKey);
+    expect(() => loadCliConfig(parseCli(["pay", "x", "--wif-file", join(dir, "absent")]), devnetEnv)).toThrow(/ENOENT/);
+    // A symbolic link is refused (O_NOFOLLOW), even to a 0600 key; a directory is not a key file.
+    chmodSync(file, 0o600);
+    symlinkSync(file, join(dir, "link.wif"));
+    expect(() => loadCliConfig(parseCli(["pay", "x", "--wif-file", join(dir, "link.wif")]), devnetEnv)).toThrow(/symbolic link/);
+    mkdirSync(join(dir, "d"), { mode: 0o700 });
+    expect(() => loadCliConfig(parseCli(["pay", "x", "--wif-file", join(dir, "d")]), devnetEnv)).toThrow(/not a regular file/);
   });
 
   it("refuses a missing node, a bad network, a mainnet WIF on regtest, and bad numbers", () => {
