@@ -120,6 +120,8 @@ export async function runAgent(argv: string[], env: Record<string, string | unde
       throw new UsageError("<api-url> must be an http(s) URL");
     }
     if (base.protocol !== "https:" && base.protocol !== "http:") throw new UsageError("<api-url> must be an http(s) URL");
+    // Plain http only to this machine: elsewhere a network path could rewrite /pricing and the 402s.
+    if (base.protocol === "http:" && !/^(localhost|127(\.\d{1,3}){3}|\[::1\])$/i.test(base.hostname)) throw new UsageError("<api-url> must be https (plain http only for localhost)");
     if (!values["wif-file"] && !env.X402_WIF_FILE) throw new UsageError("--wif-file is required: the agent pays from a key file");
     config = loadCliConfig({ command: ["pay", url], help: false, values: { network: "ycash:testnet", "max-payment": "20000", ...values } as Record<string, string | undefined> }, { ...env, X402_WIF: undefined });
     const budget = new Budget(zatOpt("--budget", budgetRaw, 100_000n));
@@ -129,25 +131,43 @@ export async function runAgent(argv: string[], env: Record<string, string | unde
     io.out({ msg: "pricing", api: base.origin, network: pricing.network, payTo: pricing.payTo, routes: pricing.routes.map((r) => `${r.method} ${r.path} ${r.priceZat} zat`) });
 
     const paying = buildClient(config);
-    // Pay only the advertised recipient, in YEC, on this network, within the budget.
+    // The price /pricing names for the route being requested: a 402 asking more is refused.
+    let routePrice: bigint | undefined;
+    const priceOf = (method: string, template: string): bigint | undefined => {
+      const r = pricing.routes.find((x) => x.method === method && x.path === template);
+      return r && /^\d{1,16}$/.test(r.priceZat) ? BigInt(r.priceZat) : undefined;
+    };
+    // Pay only the advertised recipient, in YEC, on this network, at most the route's advertised price, within the budget.
     paying.client.onBeforePaymentCreation(async ({ selectedRequirements: r }: { selectedRequirements: PaymentRequirements }) => {
       const amount = BigInt(r.amount);
       if (r.network !== config?.network || r.asset !== ASSET_YEC) return { abort: true, reason: `refusing ${r.asset} on ${r.network}` };
       if (r.payTo !== pricing.payTo) return { abort: true, reason: "the 402 names another recipient than /pricing" };
+      if (routePrice === undefined) return { abort: true, reason: "/pricing names no price for this route" };
+      if (amount > routePrice) return { abort: true, reason: `the 402 asks ${amount} zatoshis, /pricing says ${routePrice}` };
       if (!budget.allows(amount)) return { abort: true, reason: `budget: ${budget.spent} of ${budget.limit} zatoshis spent, this payment is ${amount}` };
       budget.spent += amount;
       return undefined;
     });
     const paid = wrapFetchWithPayment(f, paying.client);
     let failed = false;
-    const get = async (path: string): Promise<Record<string, unknown> | undefined> => {
+    let outOfCoins = false;
+    const get = async (path: string, template: string): Promise<Record<string, unknown> | undefined> => {
+      if (outOfCoins) return undefined;
+      routePrice = priceOf("GET", template);
       const t0 = performance.now();
       let res: Response;
       try {
         res = await paid(new URL(path, base), { signal: AbortSignal.timeout(180_000) });
       } catch (e) {
         failed = true;
-        io.out({ path, error: (e as Error).message, spentZat: budget.spent.toString() });
+        const message = (e as Error).message;
+        if (/insufficient funds|no confirmed coin/i.test(message)) {
+          // Over lightwalletd only confirmed coins can be spent, one payment per coin until the next block.
+          outOfCoins = true;
+          io.out({ path, error: "no confirmed coin left", hint: `no confirmed coin left; wait for a block or run: x402-ycash split --count 10 --wif-file <key> ${config?.lwd ? "--lwd <host:port> " : ""}--network ${config?.network}`, spentZat: budget.spent.toString() });
+          return undefined;
+        }
+        io.out({ path, error: message, spentZat: budget.spent.toString() });
         return undefined;
       }
       const h = res.headers.get("PAYMENT-RESPONSE");
@@ -164,13 +184,13 @@ export async function runAgent(argv: string[], env: Record<string, string | unde
       return res.ok && typeof body === "object" && body !== null ? (body as Record<string, unknown>) : undefined;
     };
 
-    const chain = await get("/v1/chain");
+    const chain = await get("/v1/chain", "/v1/chain");
     const tip = typeof chain?.blocks === "number" ? chain.blocks : undefined;
-    const block = tip !== undefined ? await get(`/v1/block/${tip}`) : undefined;
-    const txid = Array.isArray(block?.tx) && typeof block.tx[0] === "string" ? block.tx[0] : undefined;
-    if (txid) await get(`/v1/tx/${txid}`);
-    await get(`/v1/address/${encodeURIComponent(addressFlag ?? own)}`);
-    await get("/v1/yellowback");
+    const block = tip !== undefined ? await get(`/v1/block/${tip}`, "/v1/block/:id") : undefined;
+    const txid = Array.isArray(block?.tx) && typeof block.tx[0] === "string" && /^[0-9a-f]{64}$/i.test(block.tx[0]) ? block.tx[0] : undefined;
+    if (txid) await get(`/v1/tx/${txid}`, "/v1/tx/:txid");
+    await get(`/v1/address/${encodeURIComponent(addressFlag ?? own)}`, "/v1/address/:address");
+    await get("/v1/yellowback", "/v1/yellowback");
     io.out({ msg: "done", spentZat: budget.spent.toString(), budgetZat: budget.limit.toString(), payer: own });
     return failed ? 1 : 0;
   } catch (e) {

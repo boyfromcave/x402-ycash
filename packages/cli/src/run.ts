@@ -1,9 +1,10 @@
 // Dispatch: `run(argv, env)` is the whole CLI, so tests drive it without a process.
 import { randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import { pq, tx, YCASH_NETWORKS, type YcashNetwork, type YcashRpc } from "x402-ycash-mechanism";
+import { exact, LwdChain, LwdUtxoSource, FileCoinReservationStore, pq, tx, YCASH_NETWORKS, type YcashNetwork, type YcashRpc } from "x402-ycash-mechanism";
 import { buildClient } from "./client.js";
 import { channelClose, channelOpen, channelRefund, channelStatus, pay, type Out } from "./commands.js";
+import { buildSplit, DEFAULT_MIN_SPLIT_OUTPUT_ZAT } from "./split.js";
 import { loadCliConfig, parseCli, readWifFile, USAGE, UsageError, type CliConfig, type ParsedArgs } from "./config.js";
 
 export interface RunIo {
@@ -41,6 +42,7 @@ export async function run(argv: string[], env: Record<string, string | undefined
     const client = buildClient(config);
     const f = deps.fetch ?? fetch;
     if (cmd === "pay") return await pay(client, config, need(sub, "<url>"), io.out, f);
+    if (cmd === "split") return await splitCommand(config, args, io);
     if (cmd === "channel") {
       if (!client.batch) throw new UsageError("channels need a transparent payer (--wif or a node wallet): with only --sapling-builder the CLI pays shielded methods");
       switch (sub) {
@@ -65,6 +67,40 @@ export async function run(argv: string[], env: Record<string, string | undefined
   } finally {
     config?.lwd?.close(); // an open gRPC channel would keep the process alive
   }
+}
+
+/**
+ * `split --count N`: spends the WIF key's confirmed coins into N equal outputs to its own address
+ * and broadcasts the transaction (through lightwalletd with --lwd, else the node).
+ *
+ * @param config - The CLI configuration (needs a WIF key).
+ * @param args - The parsed arguments (`--count`, `--min-output`).
+ * @param io - Output.
+ * @returns The exit code.
+ */
+async function splitCommand(config: CliConfig, args: ParsedArgs, io: RunIo): Promise<number> {
+  if (!config.wif) throw new UsageError("split needs --wif-file (or --wif): it splits that key's coins");
+  if (args.values.count === undefined) throw new UsageError("split needs --count N");
+  const raw = args.values["min-output"];
+  if (raw !== undefined && !/^[1-9]\d{0,15}$/.test(raw)) throw new UsageError("--min-output must be a positive whole number of zatoshis");
+  const minOutput = raw === undefined ? DEFAULT_MIN_SPLIT_OUTPUT_ZAT : BigInt(raw);
+  const reservations = new FileCoinReservationStore(config.reservationsPath);
+  const node = config.node;
+  const source = config.lwd ? new LwdUtxoSource(config.lwd, { reservations }) : new exact.RpcUtxoSource(node as YcashRpc, { importAddress: true, reservations });
+  const address = wifAddress(config.wif, config.network);
+  const state = await source.chainState();
+  let plan;
+  try {
+    plan = buildSplit(await source.listCoins(address), { wif: config.wif, network: config.network, count: config.count, minOutput, height: state.height, branchId: state.branchId });
+  } catch (e) {
+    throw new UsageError(`split: ${(e as Error).message}`);
+  }
+  if (source.reserve && !(await source.reserve(plan.inputs, { txid: plan.txid, expiryHeight: plan.expiryHeight }))) {
+    throw new Error("split: another spend of this key holds one of its coins; try again after the next block");
+  }
+  const sent = config.lwd ? await new LwdChain(config.lwd).sendRawTransaction(plan.hex) : await (node as YcashRpc).sendRawTransaction(plan.hex);
+  io.out({ msg: "split", address, txid: sent, outputs: plan.count, eachZat: plan.each.toString(), feeZat: plan.fee.toString(), inputs: plan.inputs.length, note: "the outputs are spendable once a block confirms them" });
+  return 0;
 }
 
 function networkOf(args: ParsedArgs, env: Record<string, string | undefined>): YcashNetwork {

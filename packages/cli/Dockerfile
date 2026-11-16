@@ -9,7 +9,7 @@
 #     https://fastnet-x402.ycash.team --wif-file /w/agent.wif --lwd fastnet-lightwallet.ycash.team:443 --reservations /w/reservations.json
 # The image holds no key: keys live in the mounted directory, mode 0600.
 
-FROM node:22-slim AS manifests
+FROM node:22-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS manifests
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages/ycash/package.json packages/ycash/
@@ -30,7 +30,7 @@ FROM manifests AS deps
 RUN npm ci --omit=dev --workspace x402-ycash-mechanism --workspace x402-ycash-cli --workspace x402-ycash-chain-api \
  && mkdir -p packages/ycash/node_modules packages/cli/node_modules examples/chain-api/node_modules
 
-FROM node:22-slim
+FROM node:22-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
 ENV NODE_ENV=production \
     HOME=/tmp
 WORKDIR /app
