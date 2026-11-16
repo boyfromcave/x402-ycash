@@ -18,17 +18,18 @@ and pool operators do nothing for them. YED is different: it depends on a propos
 upgrade that adds **post-quantum vaults**, YEC locked on chain under rules every node checks. Lock
 YEC in a vault to mint YED (`1 YED = $1`); burn the YED to get the YEC back.
 
-> **Status: in development.** YED runs on regtest and on a one-laptop devnet only. No activation
-> height is set on mainnet or testnet, the upgrade has not been adopted by the Ycash Foundation,
-> and there is no external audit.
+> **Status: in development.** YED runs on regtest and on a one-laptop devnet only (the project's
+> fast test network carries the vault upgrade but has no YED attestor set, so no YED there). No
+> activation height is set on mainnet or the public testnet, the upgrade has not been adopted by
+> the Ycash Foundation, and there is no external audit.
 
 - **What x402 does with YED:** pays YED per request and over YED payment channels, reading
   balances through the node's read-only `yed_*` RPCs. Every signature commits to the consensus
   branch ID of the *next* block, so a payment signed on the block before the upgrade activates
   still verifies after it. x402 does not touch the wYEC or nYEC bridges.
 - **Node it needs:** any `ycashd` for YEC; for YED, a `ycashd` built from the
-  `upgrade/quantum-vaults` branch of [ycash-dd](https://github.com/boyfromcave/ycash-dd) or
-  [ycash6](https://github.com/boyfromcave/ycash6) (this line joins `upgrade/vault` at release),
+  `upgrade/vault` branch of [ycash-dd](https://github.com/boyfromcave/ycash-dd) or
+  [ycash6](https://github.com/boyfromcave/ycash6) (the ycash6 pre-releases, `v6.22.0-beta2` on),
   speaking Yellowback `rpcversion` 9 (the scheme-visible post-quantum prefixes, decision D-9: ycash-dd and
   ycash6 6.22.x from that change on; an older node prints and takes the pre-D-9 post-quantum form, which
   these SDKs refuse) or 10 (beta3: `getcoinbasetemplatefor`, `transparentPools`, input addresses for
@@ -118,7 +119,7 @@ Four terminals, one command each, from the repository root of a
 [Yellowback workspace](https://github.com/boyfromcave/yellowback) checkout. The devnet is a local
 test network of five regtest nodes, run by the node repository's devnet script: `dd` uses
 ycash-dd, `6` ycash6. Point `YCASH_DD` (or `YCASH6`) at a node tree built from
-`upgrade/quantum-vaults` (otherwise the workspace's own `ycash-dd` / `ycash6` is used); its devnet
+`upgrade/vault` (otherwise the workspace's own `ycash-dd` / `ycash6` is used); its devnet
 activates the vault upgrade by itself, with Falcon active as on mainnet.
 
 ```
