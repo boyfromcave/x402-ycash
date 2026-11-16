@@ -192,9 +192,17 @@ describeLight("the private agent: a Sapling key and lightwalletd, paying sapling
 
     // The light agent: a fresh key, birthday at the tip, served on loopback by scripts/light-agent.sh.
     const birthday = await d.tip();
+    // The devnet activates the vault upgrade (-nuparams=6d5b7a31:<h>); x402-light's regtest knows only
+    // the upgrades through Canopy unless told (light/src/net.rs), so it is given the node's height.
+    const vault = (await d.stock.getBlockchainInfo()).upgrades["6d5b7a31"]?.activationheight;
     const out = execFileSync(script, ["start", "--data", lightData, "--lwd", LWD as string, "--network", "regtest", "--birthday", String(birthday), "--sync-every", "5", ...(PARAMS ? ["--params", PARAMS] : [])], {
       encoding: "utf8",
-      env: { ...process.env, X402_LIGHT_BIN: LIGHT_BIN as string, X402_LIGHT_KEY: masterSpendingKey(tx.randomPrivKey()) },
+      env: {
+        ...process.env,
+        X402_LIGHT_BIN: LIGHT_BIN as string,
+        X402_LIGHT_KEY: masterSpendingKey(tx.randomPrivKey()),
+        ...(vault !== undefined ? { X402_LIGHT_UPGRADES: `vault=${vault}` } : {}),
+      },
     });
     lightUrl = /AGENT_SAPLING_BUILDER=(\S+)/.exec(out)?.[1] as string;
     expect(lightUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
