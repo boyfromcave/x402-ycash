@@ -46,6 +46,9 @@ def draft(script_sig_bytes: int) -> Tx:
 def test_network_fees_of():
     assert FEES.plain_zat_per_kb == 5_000_000 and FEES.yellowback_zat_per_kb == 12_500_000
     assert FEES.max_tx_fee_zat == 10_000_000 and FEES.yellowback_max_tx_fee_zat == 1_000_000_000 and FEES.flat_zat == 1000
+    # a beta2 (9) and a beta3 (10) node: the same block, read the same
+    for version in (9, 10):
+        assert network_fees_of({"rpcversion": version, "params": {"fees": {"network": NETWORK_FEES}}}) == FEES
     assert network_fees_of({"rpcversion": 7, "params": {"fees": {"network": NETWORK_FEES}}}) is None
     assert network_fees_of({"rpcversion": 8, "params": {}}) is None
     fb = network_fees_of({"rpcversion": 8, "params": {"fees": {"network": {**NETWORK_FEES, "priceMicroUsd": None, "priceSource": "fallback"}}}})
