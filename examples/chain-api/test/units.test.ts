@@ -106,8 +106,8 @@ describe("reader degradations", () => {
   });
   it("a transaction's fee is unknown, not wrong, when a previous transaction cannot be read", async () => {
     const n = new FakeNode();
-    const real = n.answers.getrawtransaction as (p: readonly unknown[]) => unknown;
-    n.answers.getrawtransaction = (p: readonly unknown[]) => (p[0] === TXID ? real(p) : (() => { throw new RpcError(-5, "No information", "getrawtransaction"); })());
+    const real = n.rawTransaction;
+    n.rawTransaction = (p: readonly unknown[]) => (p[0] === TXID ? real(p) : (() => { throw new RpcError(-5, "No information", "getrawtransaction"); })());
     await expect(new ChainReader(n).transaction(TXID)).resolves.toMatchObject({ feeZat: null, feeNote: expect.stringMatching(/-txindex/) });
   });
   it("the fee picture: rates per 1000 bytes, bounded", () => {

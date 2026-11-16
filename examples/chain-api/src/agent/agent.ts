@@ -98,6 +98,17 @@ async function pricingOf(base: URL, network: string, f: typeof fetch): Promise<P
  * @param f - fetch (tests).
  * @returns The exit code: 0 when every request was answered, 1 on a failed request, 2 on bad usage.
  */
+/**
+ * The command that splits the agent's coins, as plain text (a hint printed in a JSON line); the
+ * placeholders KEY_FILE and HOST:PORT stand for the caller's key file and lightwalletd server.
+ */
+function splitHint(config: CliConfig | undefined): string {
+  const words = ["no confirmed coin left; wait for a block or run: x402-ycash split --count 10 --wif-file KEY_FILE"];
+  if (config?.lwd) words.push("--lwd HOST:PORT");
+  words.push("--network", String(config?.network));
+  return words.join(" ");
+}
+
 export async function runAgent(argv: string[], env: Record<string, string | undefined> = process.env, io: AgentIo, f: typeof fetch = fetch): Promise<number> {
   let config: CliConfig | undefined;
   try {
@@ -164,7 +175,7 @@ export async function runAgent(argv: string[], env: Record<string, string | unde
         if (/insufficient funds|no confirmed coin/i.test(message)) {
           // Over lightwalletd only confirmed coins can be spent, one payment per coin until the next block.
           outOfCoins = true;
-          io.out({ path, error: "no confirmed coin left", hint: `no confirmed coin left; wait for a block or run: x402-ycash split --count 10 --wif-file <key> ${config?.lwd ? "--lwd <host:port> " : ""}--network ${config?.network}`, spentZat: budget.spent.toString() });
+          io.out({ path, error: "no confirmed coin left", hint: splitHint(config), spentZat: budget.spent.toString() });
           return undefined;
         }
         io.out({ path, error: message, spentZat: budget.spent.toString() });

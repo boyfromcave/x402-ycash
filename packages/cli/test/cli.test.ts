@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, fstatSync, mkdirSync, openSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -82,8 +82,15 @@ describe("configuration", () => {
     const errs: string[] = [];
     const io = { out: (r: Record<string, unknown>) => out.push(r), err: (l: string) => errs.push(l) };
     expect(await run(["key", "new", file, "--network", "ycash:testnet"], {}, io)).toBe(0);
-    expect(statSync(file).mode & 0o777).toBe(0o600);
-    const key = readFileSync(file, "utf8").trim();
+    // One descriptor for the mode and the content: the file checked is the file read.
+    const fd = openSync(file, "r");
+    let key: string;
+    try {
+      expect(fstatSync(fd).mode & 0o777).toBe(0o600);
+      key = readFileSync(fd, "utf8").trim();
+    } finally {
+      closeSync(fd);
+    }
     expect(T.decodeWif(key, "ycash:testnet").compressed).toBe(true);
     expect(await run(["key", "new", file], {}, io)).toBe(2); // exists: never overwritten
     expect(errs.join("")).toMatch(/never overwritten/);

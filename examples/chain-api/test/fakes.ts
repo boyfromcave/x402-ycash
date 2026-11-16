@@ -3,6 +3,7 @@
 // Test doubles: a node answering the read RPCs from canned data, and a fake `exact` client and
 // facilitator scheme (the real Ycash server scheme runs in the API). The fake facilitator refuses
 // a transaction it has settled before, as the real one's settlement store does.
+import { randomUUID } from "node:crypto";
 import type { Network, PaymentPayload, PaymentPayloadResult, PaymentRequirements, SchemeNetworkClient, SchemeNetworkFacilitator, SettleResponse, VerifyResponse } from "@x402/core/types";
 import { RpcError } from "x402-ycash-mechanism";
 import type { RpcCaller } from "../src/reader.js";
@@ -11,7 +12,7 @@ export const TXID = "ab".repeat(32);
 export const PREV = "cd".repeat(32);
 export const BLOCK = "00".repeat(31) + "0f";
 
-/** A node: every call is recorded; `answers` maps a method to a value or a function of the params. */
+/** A node: every call is recorded; `answers` maps a method to its value, `rawTransaction` answers getrawtransaction. */
 export class FakeNode implements RpcCaller {
   readonly calls: { method: string; params: readonly unknown[] }[] = [];
   readonly answers: Record<string, unknown> = {
@@ -32,25 +33,6 @@ export class FakeNode implements RpcCaller {
     getrawmempool: { [TXID]: { fee: 0.0001, size: 250 }, [PREV]: { fee: 0.00002, size: 200 } },
     getblockhash: BLOCK,
     getblock: { hash: BLOCK, height: 120, confirmations: 1, tx: [TXID], valuePools: [], blockfee: 0, solution: "ff".repeat(1000) },
-    getrawtransaction: (params: readonly unknown[]) => {
-      if (params[0] === PREV) return { txid: PREV, version: 4, locktime: 0, vin: [{ coinbase: "00" }], vout: [{ n: 0, value: 1, valueZat: 100_000_000 }] };
-      if (params[0] === TXID) {
-        return {
-          txid: TXID,
-          version: 4,
-          overwintered: true,
-          locktime: 0,
-          expiryheight: 140,
-          vin: [{ txid: PREV, vout: 0 }],
-          vout: [{ n: 0, value: 0.9999, valueZat: 99_990_000, scriptPubKey: { type: "pubkeyhash", addresses: ["tmX"] } }],
-          valueBalanceZat: 0,
-          blockhash: BLOCK,
-          height: 120,
-          confirmations: 1,
-        };
-      }
-      throw new RpcError(-5, "No information available about transaction", "getrawtransaction");
-    },
     getaddressbalance: { balance: 5, received: 7 },
     getaddressutxos: [{ txid: TXID, outputIndex: 0, satoshis: 5, height: 100 }],
     getaddresstxids: [PREV, TXID],
@@ -58,12 +40,34 @@ export class FakeNode implements RpcCaller {
     sendrawtransaction: TXID,
   };
 
+  /** `getrawtransaction`, a function of its params (tests may replace it). */
+  rawTransaction: (params: readonly unknown[]) => unknown = (params) => {
+    if (params[0] === PREV) return { txid: PREV, version: 4, locktime: 0, vin: [{ coinbase: "00" }], vout: [{ n: 0, value: 1, valueZat: 100_000_000 }] };
+    if (params[0] === TXID) {
+      return {
+        txid: TXID,
+        version: 4,
+        overwintered: true,
+        locktime: 0,
+        expiryheight: 140,
+        vin: [{ txid: PREV, vout: 0 }],
+        vout: [{ n: 0, value: 0.9999, valueZat: 99_990_000, scriptPubKey: { type: "pubkeyhash", addresses: ["tmX"] } }],
+        valueBalanceZat: 0,
+        blockhash: BLOCK,
+        height: 120,
+        confirmations: 1,
+      };
+    }
+    throw new RpcError(-5, "No information available about transaction", "getrawtransaction");
+  };
+
   async call<T>(method: string, params: readonly unknown[] = []): Promise<T> {
     this.calls.push({ method, params });
-    if (!(method in this.answers)) throw new RpcError(-32601, "Method not found", method);
-    const a = this.answers[method];
+    if (method === "getrawtransaction") return this.rawTransaction(params) as T;
+    if (!Object.hasOwn(this.answers, method)) throw new RpcError(-32601, "Method not found", method);
+    const a: unknown = this.answers[method];
     if (a instanceof Error) throw a;
-    return (typeof a === "function" ? (a as (p: readonly unknown[]) => unknown)(params) : a) as T;
+    return a as T;
   }
 
   methods(): string[] {
@@ -77,7 +81,7 @@ export class FakeClient implements SchemeNetworkClient {
   n = 0;
   last = "";
   /** Distinct per client, so two clients never sign the same "transaction". */
-  readonly id = Math.random().toString(36).slice(2);
+  readonly id = randomUUID();
   replay = false;
   async createPaymentPayload(x402Version: number, _req: PaymentRequirements): Promise<PaymentPayloadResult> {
     if (!this.replay) this.last = `tx-${this.id}-${++this.n}`;

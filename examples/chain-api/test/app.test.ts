@@ -2,6 +2,7 @@
 //
 // The API over real HTTP: the payment middleware with the real Ycash `exact` server scheme, the
 // facilitator service (x402-ycash-facilitator) with a fake scheme behind it, and a fake node.
+import { randomUUID } from "node:crypto";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -158,7 +159,7 @@ describe("the paid chain-data API", () => {
   /** One signed payment for `path`, as a header, without sending it. */
   async function oneSignedPayment(path: string): Promise<string> {
     const pr = await required(path);
-    return encodePaymentSignatureHeader({ x402Version: 2, resource: pr.resource, accepted: pr.accepts[0] as PaymentRequired["accepts"][number], payload: { transaction: `tx-par-${Math.random()}` } });
+    return encodePaymentSignatureHeader({ x402Version: 2, resource: pr.resource, accepted: pr.accepts[0] as PaymentRequired["accepts"][number], payload: { transaction: `tx-par-${randomUUID()}` } });
   }
 
   it("M1: one payment on many concurrent requests over mixed routes releases exactly one answer", async () => {
@@ -214,7 +215,7 @@ describe("the paid chain-data API", () => {
   async function tampered(path: string, change: (a: PaymentRequired["accepts"][number]) => PaymentRequired["accepts"][number]): Promise<Response> {
     const pr = await required(path);
     const accepted = change(pr.accepts[0] as PaymentRequired["accepts"][number]);
-    const header = encodePaymentSignatureHeader({ x402Version: 2, resource: pr.resource, accepted, payload: { transaction: `tx-tampered-${Math.random()}` } });
+    const header = encodePaymentSignatureHeader({ x402Version: 2, resource: pr.resource, accepted, payload: { transaction: `tx-tampered-${randomUUID()}` } });
     return fetch(`${api.url}${path}`, { headers: { "PAYMENT-SIGNATURE": header } });
   }
 
