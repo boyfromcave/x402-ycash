@@ -51,6 +51,9 @@ describe("networkFeesOf", () => {
       flatZat: 1000n, maxTxFeeZat: 10_000_000n, yellowbackMaxTxFeeZat: 1_000_000_000n,
     });
   });
+  it("reads the same block from a beta2 (9) and a beta3 (10) node: the shape did not change", () => {
+    for (const rpcversion of [9, 10]) expect(networkFeesOf({ rpcversion, params: { fees: { network: NETWORK_FEES } } })).toEqual(fees);
+  });
   it("ignores an older node or a missing or malformed block (the S-6 floor then applies)", () => {
     expect(networkFeesOf({ rpcversion: 7, params: { fees: { network: NETWORK_FEES } } })).toBeUndefined();
     expect(networkFeesOf({ rpcversion: 8, params: {} })).toBeUndefined();
