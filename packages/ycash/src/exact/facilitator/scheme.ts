@@ -183,7 +183,8 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
   /**
    * Settlement (spec "Settlement"): re-run the rules, claim the txid atomically, broadcast once,
    * then observe the payTo outpoint with `gettxout(…, true)` until the policy depth or the wait
-   * ends. A settle of an already-claimed txid never broadcasts: it resumes observing.
+   * ends. A settle of an already-claimed txid never broadcasts: it resumes observing, and its
+   * answer carries `extra.resumed: true` so a merchant can tell it from the settle that claimed.
    *
    * @param payload - The client's payment payload.
    * @param requirements - The server's payment requirements.
@@ -200,14 +201,14 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
     if (!resolved.ok) return failure(resolved.reason, network, "", resolved.message);
     const s = resolved.state;
     try {
-      if (await this.store.isClaimed(s.key)) return this.observe(s, requirements, this.resumedPayer(s));
+      if (await this.store.isClaimed(s.key)) return this.observe(s, requirements, this.resumedPayer(s), true);
 
       const v = await verifyTransparent(this.rpc, this.store, payload, requirements, this.limits);
-      if (!v.ok && v.reason === ERR_DUPLICATE_SETTLEMENT) return this.observe(s, requirements, v.payer ?? this.resumedPayer(s));
+      if (!v.ok && v.reason === ERR_DUPLICATE_SETTLEMENT) return this.observe(s, requirements, v.payer ?? this.resumedPayer(s), true);
       if (!v.ok) return failure(v.reason, network, s.txid, v.message, v.payer);
       // The claim is taken before the first await on submission; losing the race means another
       // settle owns the broadcast, so this one only observes.
-      if (!(await this.store.claim(s.key, retainUntilForExpiry(s.tx.expiryHeight)))) return this.observe(s, requirements, v.state.payer);
+      if (!(await this.store.claim(s.key, retainUntilForExpiry(s.tx.expiryHeight)))) return this.observe(s, requirements, v.state.payer, true);
       await this.store.prune(await this.rpc.getBlockCount()); // drops claims past expiry + 10 blocks
 
       const rejected = await this.submit(s, v.state.allowHighFees === true);
@@ -256,15 +257,16 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
    * @param s - The resolved payment being settled.
    * @param req - The payment requirements (network and timeout).
    * @param payer - The payer address to report.
+   * @param resumed - This settle did not claim the payment (another settle did): flagged in `extra`.
    * @returns Success, `settlement_pending`, or an expiry failure.
    */
-  private async observe(s: ResolvedPayment, req: PaymentRequirements, payer: string): Promise<SettleResponse> {
+  private async observe(s: ResolvedPayment, req: PaymentRequirements, payer: string, resumed = false): Promise<SettleResponse> {
     const deadline = Date.now() + Math.min(this.confirmationTimeoutMs, req.maxTimeoutSeconds * 1000);
     let seen: Evidence = null;
     for (;;) {
       seen = await this.evidence(s);
       if (seen !== null && confirmationsSatisfy(seen, s.required)) {
-        const extra: ExactYcashSettleExtra = { status: seen < 0 ? "mempool" : "confirmed", confirmations: seen };
+        const extra: ExactYcashSettleExtra = { status: seen < 0 ? "mempool" : "confirmed", confirmations: seen, ...(resumed ? { resumed: true as const } : {}) };
         return { success: true, transaction: s.txid, network: req.network, payer, extra: { ...extra } };
       }
       if (Date.now() + this.confirmationPollMs >= deadline) break;
@@ -274,7 +276,7 @@ export class ExactYcashFacilitatorScheme implements SchemeNetworkFacilitator {
     if ((seen === null || seen < 0) && (await this.rpc.getBlockCount()) > s.tx.expiryHeight) {
       return failure(ERR_EXPIRY, req.network, s.txid, `the chain passed nExpiryHeight ${s.tx.expiryHeight} without the transaction`, payer);
     }
-    const extra: ExactYcashSettleExtra = { status: "pending", confirmations: seen };
+    const extra: ExactYcashSettleExtra = { status: "pending", confirmations: seen, ...(resumed ? { resumed: true as const } : {}) };
     return {
       success: false,
       errorReason: ERR_SETTLEMENT_PENDING,
