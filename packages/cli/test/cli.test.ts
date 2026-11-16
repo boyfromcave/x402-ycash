@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -124,6 +124,12 @@ describe("configuration", () => {
     expect(msg).toMatch(/not hold a valid WIF key for ycash:regtest/);
     expect(msg).not.toContain(mainnetKey);
     expect(() => loadCliConfig(parseCli(["pay", "x", "--wif-file", join(dir, "absent")]), devnetEnv)).toThrow(/ENOENT/);
+    // A symbolic link is refused (O_NOFOLLOW), even to a 0600 key; a directory is not a key file.
+    chmodSync(file, 0o600);
+    symlinkSync(file, join(dir, "link.wif"));
+    expect(() => loadCliConfig(parseCli(["pay", "x", "--wif-file", join(dir, "link.wif")]), devnetEnv)).toThrow(/symbolic link/);
+    mkdirSync(join(dir, "d"), { mode: 0o700 });
+    expect(() => loadCliConfig(parseCli(["pay", "x", "--wif-file", join(dir, "d")]), devnetEnv)).toThrow(/not a regular file/);
   });
 
   it("refuses a missing node, a bad network, a mainnet WIF on regtest, and bad numbers", () => {

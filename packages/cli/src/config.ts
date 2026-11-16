@@ -1,7 +1,7 @@
 // The CLI's configuration: flags first, then the environment, then defaults. The chain is read from
 // a node (a yellowback-devnet devnet.json entry or an RPC URL with credentials) or from a
 // lightwalletd server (--lwd); the payer is a WIF key or the node's own wallet.
-import { readFileSync, statSync } from "node:fs";
+import { closeSync, constants as fsConstants, fstatSync, openSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
@@ -72,6 +72,8 @@ export const USAGE = `usage:
   x402-ycash channel status [channelId]
   x402-ycash channel close <url> [channelId] [--asset YEC|YED]
   x402-ycash channel refund <channelId> [--to ADDRESS]
+  x402-ycash split --count N [--min-output ZAT]  (with --wif-file: the key's confirmed coins into N equal outputs to itself,
+                                       2..50, each at least 20000 zatoshis; then N payments in a row once a block confirms it)
   x402-ycash key new <FILE>            (writes a new transparent WIF key, mode 0600; prints its address, never the key)
   x402-ycash key address               (the address of --wif-file)
   x402-ycash yed-key new <FILE>        (writes a new Falcon YED key, mode 0600; prints its address)
@@ -134,6 +136,7 @@ const OPTIONS = {
   asset: { type: "string" },
   reservations: { type: "string" },
   count: { type: "string" },
+  "min-output": { type: "string" },
   to: { type: "string" },
   help: { type: "boolean", short: "h" },
 } as const;
@@ -235,20 +238,30 @@ function yedKeyOf(f: Record<string, string | undefined>, env: Env): pq.YedFalcon
  * @throws UsageError when the file is missing, too open, or holds no valid key for `network`.
  */
 export function readWifFile(path: string, network: YcashNetwork): string {
-  let mode: number;
+  // Open once, without following a symbolic link, and check and read that same descriptor: the
+  // file cannot be swapped between the check and the read.
+  let fd: number;
   try {
-    mode = statSync(path).mode;
+    fd = openSync(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
   } catch (e) {
-    throw new UsageError(`--wif-file: cannot read ${path}: ${(e as NodeJS.ErrnoException).code ?? "error"}`);
-  }
-  if (process.platform !== "win32" && (mode & 0o077) !== 0) {
-    throw new UsageError(`--wif-file: ${path} is accessible by group or others (mode ${(mode & 0o777).toString(8).padStart(4, "0")}); run chmod 600 ${path}`);
+    const code = (e as NodeJS.ErrnoException).code ?? "error";
+    if (code === "ELOOP" || code === "EMLINK") throw new UsageError(`--wif-file: ${path} is a symbolic link; give the key file itself`);
+    throw new UsageError(`--wif-file: cannot read ${path}: ${code}`);
   }
   let text: string;
   try {
-    text = readFileSync(path, "utf8");
+    const st = fstatSync(fd);
+    if (!st.isFile()) throw new UsageError(`--wif-file: ${path} is not a regular file`);
+    if (process.platform !== "win32" && (st.mode & 0o077) !== 0) {
+      throw new UsageError(`--wif-file: ${path} is accessible by group or others (mode ${(st.mode & 0o777).toString(8).padStart(4, "0")}); run chmod 600 ${path}`);
+    }
+    if (st.size > 1024) throw new UsageError(`--wif-file: ${path} does not hold one WIF key`);
+    text = readFileSync(fd, "utf8");
   } catch (e) {
+    if (e instanceof UsageError) throw e;
     throw new UsageError(`--wif-file: cannot read ${path}: ${(e as NodeJS.ErrnoException).code ?? "error"}`);
+  } finally {
+    closeSync(fd);
   }
   const wif = text.trim();
   if (wif.length === 0 || wif.length > 64 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(wif)) throw new UsageError(`--wif-file: ${path} does not hold one WIF key`);
