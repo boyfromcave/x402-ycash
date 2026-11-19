@@ -1,7 +1,8 @@
 // Copyright (c) 2026 The Ycash developers. MIT License.
 //
 // The chain-data API: paid reads of a Ycash node for agents, each paid per request in transparent
-// YEC through x402 (`exact`, settled by the facilitator). The order of the Express stack is the
+// YEC through x402 (`exact`, settled by the facilitator), and, with the shielded setup, the same reads
+// under /v1/private paid in shielded YEC (`exact` `sapling-proof`, settled before the answer). The order of the Express stack is the
 // security design:
 //   1. rate limits per client address: free routes, unpaid requests (each 402 costs us a challenge)
 //      and paid attempts (each costs the facilitator a verify) are counted apart;
@@ -17,15 +18,21 @@ import { rateLimit } from "express-rate-limit";
 import { decodePaymentSignatureHeader } from "@x402/core/http";
 import type { FacilitatorClient, RoutesConfig } from "@x402/core/server";
 import { ExpressAdapter, paymentMiddlewareFromHTTPServer, x402HTTPResourceServer, x402ResourceServer } from "@x402/express";
-import { ASSET_YEC, exact } from "x402-ycash-mechanism";
-import { broadcastHexOf, invalidParams, patternOf, priceOf, ROUTES, yecOf, type PaidRoute } from "./catalog.js";
+import { ASSET_YEC, exact, type shielded } from "x402-ycash-mechanism";
+import { broadcastHexOf, invalidParams, patternOf, priceOf, PRIVATE_PREFIX, routesOf, yecOf, type PaidRoute } from "./catalog.js";
 import type { ChainApiConfig } from "./config.js";
 import { PaymentClaims, singleUseFacilitator } from "./claims.js";
 import { ApiError, apiErrorOf, type ChainReader } from "./reader.js";
+import { PrivateRouteIssuer, SHIELDED_TIMEOUT_SECONDS } from "./shielded.js";
 
 export interface ChainApiOptions {
   facilitator: FacilitatorClient;
   reader: ChainReader;
+  /**
+   * The node's wallet, which issues the private routes' addresses (z_getnewdiversifiedaddress);
+   * required when the configuration has `shielded`.
+   */
+  wallet?: shielded.ShieldedServerRpc;
   /**
    * Whether the node keeps the address index (-insightexplorer), found at startup (main.ts). Off,
    * the address route answers 503 before any payment; the other routes are unaffected.
@@ -64,9 +71,26 @@ const MAX_TIMEOUT_SECONDS = 300;
 /** /healthz says unhealthy when the last good node answer is older than this. */
 const HEALTH_STALE_MS = 60_000;
 
-function routesConfig(config: ChainApiConfig): RoutesConfig {
+function routesConfig(config: ChainApiConfig, issuer: PrivateRouteIssuer | undefined): RoutesConfig {
   const all: RoutesConfig = {};
-  for (const r of ROUTES) {
+  for (const r of routesOf(config)) {
+    if (r.transfer === "sapling-proof") {
+      if (!issuer) continue;
+      const amount = priceOf(r, config);
+      all[patternOf(r)] = {
+        accepts: {
+          scheme: "exact",
+          network: config.network,
+          payTo: issuer.payToFor(amount),
+          // The scheme adds the per-request memo and expiresAt from the issued record.
+          price: { amount: amount.toString(), asset: ASSET_YEC, extra: { assetTransferMethod: "sapling-proof", paymentFlow: "upfront" } },
+          maxTimeoutSeconds: SHIELDED_TIMEOUT_SECONDS,
+        },
+        description: r.description,
+        mimeType: "application/json",
+      };
+      continue;
+    }
     all[patternOf(r)] = {
       accepts: {
         scheme: "exact",
@@ -89,6 +113,7 @@ function routesConfig(config: ChainApiConfig): RoutesConfig {
  * @returns The document.
  */
 export function pricingDocument(config: ChainApiConfig, features: { addressIndex?: boolean } = {}): Record<string, unknown> {
+  const sp = config.shielded;
   return {
     service: "Ycash chain data for agents, paid per request over x402",
     network: config.network,
@@ -108,6 +133,22 @@ export function pricingDocument(config: ChainApiConfig, features: { addressIndex
               ? `on mempool acceptance (about a second) for payments up to ${config.zeroConfCapZat} zatoshis; otherwise after one block`
               : "after one block",
         },
+        ...(sp
+          ? [
+              {
+                scheme: "exact",
+                assetTransferMethod: "sapling-proof",
+                paymentFlow: "upfront",
+                routes: `${PRIVATE_PREFIX}/…`,
+                description:
+                  "private: the 402 names a fresh Sapling address for this one request and a memo; the client sends shielded YEC there with that memo, then repeats the request with the txid; the facilitator finds the note in the wallet that issued the address",
+                payTo: "a fresh Sapling address per request, in the 402 (never reused)",
+                settlement: sp.confirmations < 0 ? "on mempool acceptance (the note reaches this node's wallet in seconds)" : `after ${Math.max(sp.confirmations, 1)} block${Math.max(sp.confirmations, 1) === 1 ? "" : "s"}`,
+                charged: "upfront: the payment is settled before the answer, so a request answered with an error (404, 422) is still charged; parameters are checked before any payment",
+                clients: "x402-ycash with a Sapling key and no node: x402-light serve (scripts/light-agent.sh) as --sapling-builder; or a ycashd wallet (--shielded-from)",
+              },
+            ]
+          : []),
       ],
       flow: [
         "request the route: the answer is 402 with the price in the PAYMENT-REQUIRED header (base64 JSON)",
@@ -122,9 +163,10 @@ export function pricingDocument(config: ChainApiConfig, features: { addressIndex
       ],
       clients: "x402-ycash (CLI, `x402-ycash pay <url> --lwd <host:port> --wif-file <key>`) or any x402 client with the Ycash `exact` scheme",
     },
-    routes: ROUTES.map((r) => ({
+    routes: routesOf(config).map((r) => ({
       method: r.method,
       path: r.path,
+      payment: r.transfer ?? "transparent",
       priceZat: priceOf(r, config).toString(),
       priceYec: yecOf(priceOf(r, config)),
       description: r.description,
@@ -231,9 +273,11 @@ function handlerOf(route: PaidRoute, reader: ChainReader): express.RequestHandle
  */
 export function createChainApi(config: ChainApiConfig, opts: ChainApiOptions): ChainApi {
   const log = opts.log ?? ((msg: string, fields?: Record<string, unknown>): void => console.log(JSON.stringify({ msg, ...fields })));
+  if (config.shielded && !opts.wallet) throw new Error("the private routes need the node's wallet (ChainApiOptions.wallet)");
+  const issuer = config.shielded && opts.wallet ? new PrivateRouteIssuer(config.network, config.shielded, opts.wallet) : undefined;
   const resourceServer = new x402ResourceServer(singleUseFacilitator(opts.facilitator));
-  resourceServer.register(config.network, new exact.ExactYcashServerScheme({ zeroConfCapZat: config.zeroConfCapZat }));
-  const httpServer = new x402HTTPResourceServer(resourceServer, routesConfig(config));
+  resourceServer.register(config.network, new exact.ExactYcashServerScheme({ zeroConfCapZat: config.zeroConfCapZat, ...(issuer ? { shielded: issuer.hook() } : {}) }));
+  const httpServer = new x402HTTPResourceServer(resourceServer, routesConfig(config, issuer));
   const pay = paymentMiddlewareFromHTTPServer(httpServer);
   const claims = opts.claims ?? new PaymentClaims(config.claimTtlMs, config.maxClaims);
   let inflight = 0;
@@ -332,7 +376,7 @@ export function createChainApi(config: ChainApiConfig, opts: ChainApiOptions): C
   app.use("/v1/broadcast", limiter(config.limits.relayPerMinute, (req) => !hasPayment(req), "relay"));
 
   // 3-5: per route, check the parameters, then the payment, then read the node.
-  for (const r of ROUTES) {
+  for (const r of routesOf(config)) {
     const check: express.RequestHandler = (req, res, next) => {
       if (r.id === "broadcast") {
         const parsed = broadcastHexOf(req.body);

@@ -362,7 +362,8 @@ scripts/light-agent.sh stop --data ~/.x402-light
 ## Run the paid API
 
 `examples/chain-api` is a small API that sells chain data to agents, one request at a time, for transparent
-YEC over x402. It is the first public demonstration (`docs/plans/x402-demonstrations.md` in the workspace,
+YEC over x402, and, with the shielded setup, the same reads paid privately in shielded YEC
+([Private routes](#private-routes-shielded-yec)). It is the first public demonstration (`docs/plans/x402-demonstrations.md` in the workspace,
 §3.2): on the fast testnet at `fastnet-x402.ycash.team`, where coins have no value.
 
 | Route | Price (D-10) | Answer |
@@ -445,7 +446,37 @@ Other settings: `HOST` (default 127.0.0.1; the image binds 0.0.0.0), `PORT` (402
 `API_RPC_PASSWORD` instead of the cookie, `API_RPC_TIMEOUT_MS`, `FACILITATOR_API_KEY`, `API_PRICE_ZAT` and
 `API_PRICE_BROADCAST_ZAT` (10000), `API_TRUST_PROXY` (reverse-proxy hops: 1 behind Caddy, so the limits count
 the client and not the proxy), `API_LINK_EXPLORER`, `API_LINK_SOURCE`. The node RPC needs only the read calls
-above and `sendrawtransaction`; the API never calls a wallet RPC.
+above and `sendrawtransaction`; without the private routes the API never calls a wallet RPC.
+
+### Private routes: shielded YEC
+
+With `API_ISSUED_REGISTRY` set, the API also sells every read route under `/v1/private/…`
+(`/v1/private/tx/:txid`, `/v1/private/address/:address`, `/v1/private/block/:id`, `/v1/private/chain`,
+`/v1/private/yellowback`; not the relay), paid with `exact` / `sapling-proof`: the 402 names a fresh
+diversified Sapling address and a memo for that one request; the client sends shielded YEC there with that
+memo and repeats the request with the txid; the facilitator, on the same wallet node, finds the note and
+checks memo, amount and depth, records the payment once and signs a receipt (`offer-receipt` in the
+`PAYMENT-RESPONSE` header), and only then does the API answer. `/pricing` lists the routes with `payment:
+"sapling-proof"` and the second kind. What differs from the transparent routes:
+
+- **The API's node must be the merchant's wallet.** Each 402 calls `z_getnewdiversifiedaddress` on
+  `API_SAPLING_BASE_ADDRESS` (a Sapling address whose spending key the node's wallet holds; checked with
+  `z_validateaddress` at startup); the facilitator (`X402_RECEIPT_KEY`, `X402_ISSUED_REGISTRY` = the same file
+  as `API_ISSUED_REGISTRY`, `X402_SHIELDED_METHODS=sapling-proof`) reads the notes on that node. On the x402
+  host the node holds the faucet's wallet already; the base address is one of its own, so what agents pay
+  privately stays apart from the faucet's balance.
+- **Paid upfront.** The payment is on chain before the request is answered, so a request answered with an
+  error (an unknown transaction, `too_large`) is still charged; parameters are checked before any address is
+  issued. If the facilitator does not see the note within `X402_SAPLING_NOTE_WAIT_MS` the answer is a 402 and
+  the same payment can be presented again for the same request until it expires (600 s).
+- **One payment, one request**, as for the transparent routes: the same payment again is 409, and the
+  facilitator's settlement store refuses it across API restarts (`duplicate_settlement`).
+- **Each unpaid private request issues an address.** `API_SHIELDED_MAX_OUTSTANDING` (1000) caps the issued
+  requests held at once (each held about 75 minutes); past it new private 402s fail until records expire.
+
+Settings: `API_ISSUED_REGISTRY`, `API_SAPLING_BASE_ADDRESS`, `API_SHIELDED_CONFIRMATIONS` (−1 the mempool to
+20, default 1; within the facilitator's range), `API_PRICE_SHIELDED_ZAT` (default `API_PRICE_ZAT`),
+`API_SHIELDED_MAX_OUTSTANDING`.
 
 ## Pay it from an agent in five minutes
 
@@ -491,6 +522,26 @@ Honest limits:
 - **The key file is plaintext.** It is protected by its mode (the CLI refuses a file group or others can read)
   and by your machine. Use testnet keys only.
 - **Testnet coins only.** This is a demonstration; the mainnet service waits for the X6 runbook.
+
+**Privately, from just a Sapling key.** A light-wallet server holds no Sapling wallet, so the agent pays the
+private routes through the Rust light client ([Private agents](#private-agents-a-sapling-key-and-lightwalletd)):
+one Sapling spending key, no node, no WIF.
+
+```sh
+# 1. a Sapling key (a secret-extended-key-… from z_exportkey, or a BIP-39 phrase) in a 0600 file; the light
+#    client imports it and prints the URL the agent takes (it keeps syncing in the background)
+X402_LIGHT_KEY_FILE=agent.zkey scripts/light-agent.sh start --data ~/.x402-light \
+  --lwd fastnet-lightwallet.ycash.team:443 --network testnet --birthday <a recent height>
+# 2. testnet YEC for its Sapling address (printed as "imported: ytestsapling1…") from the faucet
+# 3. the private tour: the same five reads under /v1/private, each paid in shielded YEC
+node examples/chain-api/dist/agent/main.js https://fastnet-x402.ycash.team \
+  --sapling-builder http://127.0.0.1:PORT --budget 100000
+scripts/light-agent.sh stop --data ~/.x402-light
+```
+
+The light client spends confirmed notes only: after a payment its change is spendable one block later, so the
+agent waits for a spendable note before each payment (`--wait`, default 300 s) and syncs first. Each private
+payment also pays the network fee (10,000 zatoshis, ZIP 317), on top of `--budget`.
 
 ## CLI
 

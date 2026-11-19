@@ -119,3 +119,22 @@ export async function waitForFacilitator(check: () => Promise<string | undefined
     await sleep(Math.min(1000 * attempt, 5000));
   }
 }
+
+/**
+ * The private routes' base address: the node's wallet must hold its spending key, or
+ * z_getnewdiversifiedaddress refuses and every private 402 would fail.
+ *
+ * @param rpc - The node.
+ * @param baseAddress - API_SAPLING_BASE_ADDRESS.
+ * @throws Error when the wallet does not answer or does not own the address.
+ */
+export async function checkShieldedBase(rpc: RpcCaller, baseAddress: string): Promise<void> {
+  let v: { isvalid?: boolean; ismine?: boolean; type?: string };
+  try {
+    v = await rpc.call("z_validateaddress", [baseAddress]);
+  } catch (e) {
+    throw new Error(`the private routes need the node's wallet, but z_validateaddress failed: ${(e as Error).message}`);
+  }
+  if (v.isvalid !== true || v.type !== "sapling") throw new Error(`API_SAPLING_BASE_ADDRESS is not a Sapling address of this network`);
+  if (v.ismine !== true) throw new Error(`the node's wallet does not hold the spending key of API_SAPLING_BASE_ADDRESS ${baseAddress}`);
+}

@@ -7,6 +7,14 @@ import type { ChainApiConfig } from "./config.js";
 
 export type RouteId = "tx" | "address" | "block" | "chain" | "yellowback" | "broadcast";
 
+/**
+ * How a route is paid: `transparent` (the client signs a transparent transaction to payTo; the
+ * facilitator relays it once the answer is ready) or `sapling-proof` (shielded YEC sent upfront to a
+ * fresh diversified address issued with the 402; the facilitator, on the wallet node that issued the
+ * address, finds the note before the answer).
+ */
+export type Transfer = "transparent" | "sapling-proof";
+
 export interface PaidRoute {
   id: RouteId;
   method: "GET" | "POST";
@@ -17,6 +25,8 @@ export interface PaidRoute {
   params: Record<string, string>;
   /** An example request path an agent can try. */
   example: string;
+  /** How it is paid; absent = transparent. */
+  transfer?: Transfer;
 }
 
 export const ROUTES: readonly PaidRoute[] = [
@@ -70,6 +80,30 @@ export const ROUTES: readonly PaidRoute[] = [
   },
 ];
 
+/** Where the private (shielded) copies of the read routes live. */
+export const PRIVATE_PREFIX = "/v1/private";
+
+/**
+ * The private routes: every read route (not the relay) again under /v1/private, paid in shielded
+ * YEC (`sapling-proof`). Same handler, same parameters, a price of their own.
+ */
+export const PRIVATE_ROUTES: readonly PaidRoute[] = ROUTES.filter((r) => r.method === "GET").map((r) => ({
+  ...r,
+  path: PRIVATE_PREFIX + r.path.slice("/v1".length),
+  example: PRIVATE_PREFIX + r.example.slice("/v1".length),
+  description: `${r.description}. Paid privately: shielded YEC to a fresh address per request`,
+  transfer: "sapling-proof" as const,
+}));
+
+/**
+ * The routes a configuration sells: the private ones only when the shielded setup is configured.
+ *
+ * @param c - The configuration.
+ * @param c.shielded - The private routes' setup, if any.
+ * @returns The paid routes.
+ */
+export const routesOf = (c: { shielded?: unknown }): readonly PaidRoute[] => (c.shielded ? [...ROUTES, ...PRIVATE_ROUTES] : ROUTES);
+
 /** The largest transaction the relay accepts, bytes (the node's standard-size limit). */
 export const MAX_TX_BYTES = 100_000;
 
@@ -77,7 +111,8 @@ export const MAX_TX_BYTES = 100_000;
 export const patternOf = (r: PaidRoute): string => `${r.method} ${r.path}`;
 
 /** The price of a route, zatoshis. */
-export const priceOf = (r: PaidRoute, c: Pick<ChainApiConfig, "priceZat" | "priceBroadcastZat">): bigint => (r.id === "broadcast" ? c.priceBroadcastZat : c.priceZat);
+export const priceOf = (r: PaidRoute, c: Pick<ChainApiConfig, "priceZat" | "priceBroadcastZat"> & { shielded?: { priceZat: bigint } }): bigint =>
+  r.transfer === "sapling-proof" ? (c.shielded?.priceZat ?? c.priceZat) : r.id === "broadcast" ? c.priceBroadcastZat : c.priceZat;
 
 /** Zatoshis as a YEC decimal string ("0.0001"). */
 export function yecOf(z: bigint): string {

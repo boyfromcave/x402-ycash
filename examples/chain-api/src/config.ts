@@ -3,7 +3,9 @@
 // The chain-data API's configuration, from the environment, validated once at startup. The service
 // holds no spending key: `payTo` is an address of a wallet the operator controls elsewhere (on the
 // fast testnet, the faucet's wallet, so spent coins flow back to it; x402 demonstrations note D-4).
-import { tx, YCASH_MAINNET, YCASH_NETWORKS, YCASH_REGTEST, YCASH_TESTNET, YcashRpc, type YcashNetwork } from "x402-ycash-mechanism";
+// The private routes (`sapling-proof`) need that wallet on the API's node: the node issues each
+// request's Sapling address from a base address it holds; the API itself still holds no key.
+import { shielded, tx, YCASH_MAINNET, YCASH_NETWORKS, YCASH_REGTEST, YCASH_TESTNET, YcashRpc, type YcashNetwork } from "x402-ycash-mechanism";
 
 /** Where the API reads the chain: the host node over JSON-RPC (cookie or user + password), or a devnet node (tests). */
 export type NodeSource =
@@ -63,6 +65,26 @@ export interface ChainApiConfig {
   /** Reverse-proxy hops in front of the API (Caddy on the host: 1). */
   trustProxy: number;
   links: Links;
+  /** The private routes (`sapling-proof`); undefined = not sold. */
+  shielded?: ShieldedApiConfig;
+}
+
+/**
+ * The private routes' setup (`sapling-proof`, x402-ycash README "Private payments"). The node is the
+ * merchant's wallet: it issues a fresh diversified address of `baseAddress` per request
+ * (`z_getnewdiversifiedaddress`), and the self-hosted facilitator on the same wallet finds the note.
+ */
+export interface ShieldedApiConfig {
+  /** The issued-address registry file, shared with the facilitator (its X402_ISSUED_REGISTRY). */
+  registryPath: string;
+  /** A Sapling address whose spending key the node's wallet holds (checked at startup). */
+  baseAddress: string;
+  /** The confirmation policy each request carries: −1 (the mempool) to 20. */
+  confirmations: number;
+  /** The price of each private read, zatoshis. */
+  priceZat: bigint;
+  /** The most issued requests held at once (each unpaid 402 issues one); then 503. */
+  maxOutstanding: number;
 }
 
 export class ConfigError extends Error {
@@ -140,6 +162,39 @@ function linksOf(env: Env): Links {
 }
 
 /**
+ * The private routes' setup: on when API_ISSUED_REGISTRY is set; the base address is then required.
+ *
+ * @param env - The environment.
+ * @param network - The API's network.
+ * @param priceZat - The transparent price, the default of the private one.
+ * @returns The setup, or undefined when the private routes are off.
+ */
+function shieldedOf(env: Env, network: YcashNetwork, priceZat: bigint): ShieldedApiConfig | undefined {
+  const registryPath = str(env, "API_ISSUED_REGISTRY");
+  const baseAddress = str(env, "API_SAPLING_BASE_ADDRESS");
+  if (!registryPath) {
+    for (const name of ["API_SAPLING_BASE_ADDRESS", "API_SHIELDED_CONFIRMATIONS", "API_PRICE_SHIELDED_ZAT", "API_SHIELDED_MAX_OUTSTANDING"]) {
+      if (str(env, name) !== undefined) throw new ConfigError(`${name} is for the private routes, which need API_ISSUED_REGISTRY (the facilitator's X402_ISSUED_REGISTRY)`);
+    }
+    return undefined;
+  }
+  if (!baseAddress) throw new ConfigError("the private routes (API_ISSUED_REGISTRY) need API_SAPLING_BASE_ADDRESS, a Sapling address of the node's wallet");
+  const hrp = shielded.SAPLING_HRP[network] + "1";
+  if (!baseAddress.startsWith(hrp) || !/^[a-z0-9]{1,200}$/.test(baseAddress)) throw new ConfigError(`API_SAPLING_BASE_ADDRESS must be a ${network} Sapling address (${hrp}…)`);
+  const rawConf = str(env, "API_SHIELDED_CONFIRMATIONS");
+  if (rawConf !== undefined && !/^(-1|\d{1,2})$/.test(rawConf)) throw new ConfigError("API_SHIELDED_CONFIRMATIONS must be an integer in -1..20");
+  const confirmations = rawConf === undefined ? 1 : Number(rawConf);
+  if (confirmations > 20) throw new ConfigError("API_SHIELDED_CONFIRMATIONS must be an integer in -1..20");
+  return {
+    registryPath,
+    baseAddress,
+    confirmations,
+    priceZat: zat(env, "API_PRICE_SHIELDED_ZAT", priceZat.toString()),
+    maxOutstanding: int(env, "API_SHIELDED_MAX_OUTSTANDING", 1000, 1, 1_000_000),
+  };
+}
+
+/**
  * Reads and checks the configuration.
  *
  * @param env - The environment.
@@ -168,6 +223,7 @@ export function loadChainApiConfig(env: Env = process.env): ChainApiConfig {
   const zeroConfCapZat = zat(env, "API_ZERO_CONF_CAP_ZAT", "100000");
   const facilitatorUrl = httpUrl("FACILITATOR_URL", str(env, "FACILITATOR_URL") ?? "http://127.0.0.1:4022");
   const apiKey = str(env, "FACILITATOR_API_KEY");
+  const shieldedConfig = shieldedOf(env, network, priceZat);
   return {
     host: str(env, "HOST") ?? "127.0.0.1",
     port,
@@ -194,6 +250,7 @@ export function loadChainApiConfig(env: Env = process.env): ChainApiConfig {
     maxClaims: int(env, "API_MAX_CLAIMS", 100_000, 10, 10_000_000),
     trustProxy: int(env, "API_TRUST_PROXY", 0, 0, 10),
     links: linksOf(env),
+    ...(shieldedConfig ? { shielded: shieldedConfig } : {}),
   };
 }
 
@@ -201,7 +258,8 @@ export function loadChainApiConfig(env: Env = process.env): ChainApiConfig {
  * The RPC client for the configured node.
  *
  * @param c - The configuration.
- * @returns A client; it holds no wallet role here (the API calls read RPCs and sendrawtransaction only).
+ * @returns A client: read RPCs and sendrawtransaction, and with the private routes the two wallet calls
+ *   that issue addresses (z_validateaddress at startup, z_getnewdiversifiedaddress per 402).
  */
 export function rpcOf(c: ChainApiConfig): YcashRpc {
   const timeout = { timeoutMs: c.rpcTimeoutMs };
@@ -229,5 +287,8 @@ export function describeConfig(c: ChainApiConfig): Record<string, unknown> {
     zeroConfCapZat: c.zeroConfCapZat.toString(),
     limits: c.limits,
     trustProxy: c.trustProxy,
+    shielded: c.shielded
+      ? { registry: c.shielded.registryPath, baseAddress: c.shielded.baseAddress, confirmations: c.shielded.confirmations, priceZat: c.shielded.priceZat.toString(), maxOutstanding: c.shielded.maxOutstanding }
+      : "(off)",
   };
 }
