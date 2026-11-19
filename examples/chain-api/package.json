@@ -2,7 +2,7 @@
   "name": "x402-ycash-chain-api",
   "version": "0.0.0",
   "private": true,
-  "description": "A paid chain-data API for agents on Ycash (x402, transparent YEC per request), and the reference agent that pays it from a key file and a lightwalletd server",
+  "description": "A paid chain-data API for agents on Ycash (x402, transparent or shielded YEC per request), and the reference agent that pays it from a key file and a lightwalletd server, or from a Sapling key through x402-light",
   "license": "MIT",
   "type": "module",
   "bin": { "x402-ycash-chain-api": "./dist/main.js", "x402-chain-agent": "./dist/agent/main.js" },
