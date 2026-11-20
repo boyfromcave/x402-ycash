@@ -15,7 +15,7 @@
 #                      signer against a regtest kogany node (the third node line, workspace kogany
 #                      plan W9-c) and its ycash6 test rig (scripts/kogany-rig.py). koganyd is kogany's
 #                      koganyd-bin artifact at KOGANY_REF, else built at that commit; ycashd is
-#                      ycash6's node-bin of vaults/kogany-compat.
+#                      ycash6's node-bin of upgrade/vault (beta4: kogany #49, ycash6 #145).
 #
 # Third-party actions are pinned by commit, never by tag; the comment carries the tag (bump both).
 name: ci
@@ -298,10 +298,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
-      # kogany vaults/kogany-compat at W5-f (the YED module registered: the real index answers)
-      KOGANY_REF: dd834da8b77e882b9e6a00b3ce70f2b30b930c37
+      # kogany upgrade/vault at the beta4 consensus merge (kogany #49: tag v2, rpcversion 11)
+      KOGANY_REF: 09a4c14084411c92af275994fc3b2e61d0f57118
       YCASH6_REPO: boyfromcave/ycash6
-      YCASH6_BRANCH: vaults/kogany-compat
+      YCASH6_BRANCH: upgrade/vault
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -334,7 +334,7 @@ jobs:
         with:
           repository: boyfromcave/kogany
           # The literal of KOGANY_REF (bump both): a fixed commit, checked in "koganyd runs here".
-          ref: dd834da8b77e882b9e6a00b3ce70f2b30b930c37
+          ref: 09a4c14084411c92af275994fc3b2e61d0f57118
           path: kogany
           persist-credentials: false
           sparse-checkout: ${{ steps.koganyd.outputs.got == 'true' && '.github/actions/setup-zakura-build' || '' }}
@@ -358,7 +358,7 @@ jobs:
           [ "$(git -C kogany rev-parse HEAD)" = "$KOGANY_REF" ] || { echo "::error::the kogany checkout differs from KOGANY_REF"; exit 1; }
           if ldd "$KOGANYD" | grep 'not found'; then echo "::error::koganyd needs a library this runner lacks"; exit 1; fi
           "$KOGANYD" --version
-      - name: ycashd from ycash6's node-bin (vaults/kogany-compat)
+      - name: ycashd from ycash6's node-bin (upgrade/vault)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -378,7 +378,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ env.YCASH6_REPO }}
-          ref: vaults/kogany-compat # the literal of YCASH6_BRANCH
+          ref: upgrade/vault # the literal of YCASH6_BRANCH
           path: ycash6
           persist-credentials: false
           sparse-checkout: zcutil

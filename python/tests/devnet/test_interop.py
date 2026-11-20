@@ -184,7 +184,8 @@ async def test_ts_client_payment_python_facilitator_one_confirmation(devnet: Dev
     assert first.extra == {"status": "pending", "confirmations": -1}
     await d.mine()
     retry = await f.asettle(payload(req, hex_tx), req)
-    assert retry.success and retry.extra == {"status": "confirmed", "confirmations": 1}
+    # the retry resumes the pending settlement (single-use payments, #26: "resumed", as the unit tests say)
+    assert retry.success and retry.extra == {"status": "confirmed", "confirmations": 1, "resumed": True}
 
 
 async def test_python_client_payment_ts_facilitator(devnet: Devnet, tmp_path: Path):

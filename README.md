@@ -33,8 +33,10 @@ YEC in a vault to mint YED (`1 YED = $1`); burn the YED to get the YEC back.
   speaking Yellowback `rpcversion` 9 (the scheme-visible post-quantum prefixes, decision D-9: ycash-dd and
   ycash6 6.22.x from that change on; an older node prints and takes the pre-D-9 post-quantum form, which
   these SDKs refuse) or 10 (beta3: `getcoinbasetemplatefor`, `transparentPools`, input addresses for
-  post-quantum spends, the `gettransaction` fee, the `-ydf` default; the SDKs use none of them, and read
-  `rpcversion` only as a minimum, `FEES_RPC_VERSION` 8, so a 10 node needs no SDK change).
+  post-quantum spends, the `gettransaction` fee, the `-ydf` default) or 11 (beta4: the v2 coinbase price
+  tag with a post-quantum payout key, fee payees that may be post-quantum, the bonded attestor set). The
+  SDKs use none of the 10 and 11 additions (x402 never mints, redeems or reads a price tag) and read
+  `rpcversion` only as a minimum, `FEES_RPC_VERSION` 8, so a 10 or 11 node needs no SDK change.
 - **Try it:** [Quick start on the devnet](#quick-start-on-the-devnet) below.
 
 The binding specs are in [`specs/`](specs/), language-neutral test vectors in

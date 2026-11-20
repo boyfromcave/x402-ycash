@@ -1,5 +1,39 @@
 # Regression of record
 
+## 2026-11-19: beta4 (rpcversion 11), both C++ lines
+
+Every devnet suite against the beta4 consensus line of both C++ lines (tag v2, post-quantum fee payees,
+SCHEMA_VERSION 16), one devnet at a time, on the vault-upgrade devnet (`scripts/devnet.sh up <line> <seed>`,
+upgrade `6d5b7a31` active at 103, Falcon active):
+
+| | |
+|---|---|
+| x402-ycash | `upgrade/vault` at `221cb3a` plus this branch (`up/b4-compat`) |
+| 6.22 line | ycash6 #145 head `6ff5b5c4e` (merged as `d50e3b843`), `rpcversion` 11; seed 611 |
+| v4.5.0 line | ycash-dd #207 head `de2e5928b` (merged as `c0130e4fb`), `rpcversion` 11; seed 613 |
+| toolchain | node 23.3.0, vitest 3.2.7, the x402 Python venv |
+
+| Suite | Tests | ycash6 beta4 | ycash-dd beta4 |
+|---|---|---|---|
+| unit, `npm test` (all workspaces) | 986 | pass (no node) | |
+| package devnet, `npm run test:devnet` with `X402_X4M=1` | 74 | 59 pass, 15 skipped | 59 pass, 15 skipped |
+| chain-api devnet | 9 | 8 pass, 1 skipped | 8 pass, 1 skipped |
+| `test:devnet:http` (merchant-express) | 30 | 20 pass, 10 skipped (`viewkey` rerun) | 20 pass, 10 skipped (`yed.http` rerun) |
+| Python `python/tests/devnet` | 8 | pass (after the test fix below) | pass |
+
+Skipped as in the beta3 record (`yed_falcon`, `kogany`, one `yed_pq` case), plus `lwd.http` and `light.http`,
+which need a lightwalletd-dd that accepts `rpcversion` 11 (beta4 item 10, part A) and were not run.
+
+Two first-run failures passed on a rerun on the same devnet, with no change. Neither involves beta4 code:
+- `viewkey.http` (ycash6): node A's restart caught up to 160 of 486 blocks and then waited out the
+  120 s limit. The test's own comment describes the same 6.x catch-up stall.
+- `yed.http` (ycash-dd): the 150-request YED channel got `invalid_payment_requirements` after its first
+  paid request.
+
+Found and fixed (test only): `python/tests/devnet/test_interop.py` expected a resumed settlement's `extra`
+without `"resumed": True`. The SDK added that key with single-use payments (#26), and the unit tests
+already expect it.
+
 ## 2026-11-16: beta3 (rpcversion 10), both C++ lines
 
 Every suite against the beta3 release candidates of both C++ lines, one devnet at a time, on the vault-upgrade

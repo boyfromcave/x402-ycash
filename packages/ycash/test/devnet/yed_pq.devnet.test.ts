@@ -72,7 +72,7 @@ describeDevnet("the quantum line: post-quantum YED addresses, exact payees and T
 
   it("the 53-character yr… form is the node's: vault_getnewowner's address re-encodes byte for byte", async () => {
     const info = await d.wallet.call<{ rpcversion: number; params: { pq: { schemes: number[]; falconActive: boolean } } }>("yed_getinfo");
-    // the scheme-visible post-quantum prefixes (rpcversion 9, D-9); a minimum, as the SDKs read it: beta3 is 10
+    // the scheme-visible post-quantum prefixes (rpcversion 9, D-9); a minimum, as the SDKs read it: beta3 is 10, beta4 11
     expect(info.rpcversion).toBeGreaterThanOrEqual(9);
     expect(info.params.pq.falconActive).toBe(falcon);
     const o = await d.wallet.call<{ scheme: 1 | 2; keyhash: string; owner: string; address: string }>("vault_getnewowner");
