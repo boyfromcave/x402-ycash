@@ -40,6 +40,8 @@ impl YcashNetwork {
             // The Ycash Vault upgrade (branch 0x6d5b7a31): unset unless the devnet's
             // `-nuparams=6d5b7a31:<h>` is mirrored with `--upgrades vault=<h>`.
             vault: None,
+            // Yugen (branch 0x59474e30): unset unless mirrored with `--upgrades yugen=<h>`.
+            yugen: None,
         })
     }
 
@@ -83,6 +85,7 @@ impl YcashNetwork {
                 "nu6_1" | "nu6.1" => &mut local.nu6_1,
                 "nu6_2" | "nu6.2" => &mut local.nu6_2,
                 "vault" | "6d5b7a31" => &mut local.vault,
+                "yugen" | "59474e30" => &mut local.yugen,
                 other => return Err(format!("unknown upgrade {other:?}")),
             };
             *slot = height;
