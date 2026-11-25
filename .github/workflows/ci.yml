@@ -26,7 +26,7 @@ on:
     # upgrade/quantum-vaults (post-quantum owners, rpcversion 7), main (the branch of record, AGENTS.md
     # rule 2), vaults/kogany-compat (the kogany work's integration branch, workspace kogany plan
     # section 4.2 rule 0).
-    branches: &branches [main, harden/yellowback, upgrade/vault, upgrade/quantum-vaults, vaults/kogany-compat]
+    branches: &branches [main, harden/yellowback, upgrade/vault, upgrade/yugen, upgrade/quantum-vaults, vaults/kogany-compat]
   pull_request:
     branches: *branches
   workflow_dispatch:
