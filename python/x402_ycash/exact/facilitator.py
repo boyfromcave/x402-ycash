@@ -166,16 +166,16 @@ class ExactYcashFacilitatorScheme:
             return _failure(s.reason, network, "", s.message)
         try:
             if await self._store.is_claimed(s.key):  # step 1
-                return await self._observe(s, requirements, s.resumed_payer())
+                return await self._observe(s, requirements, s.resumed_payer(), resumed=True)
             v = await verify_transparent(self._rpc, self._store, payload, requirements, self.limits)  # step 2
             if isinstance(v, Failure):
                 if v.reason == ERR_DUPLICATE_SETTLEMENT:
-                    return await self._observe(s, requirements, v.payer or s.resumed_payer())
+                    return await self._observe(s, requirements, v.payer or s.resumed_payer(), resumed=True)
                 return _failure(v.reason, network, s.txid, v.message, v.payer)
             # The claim is taken before the first await on submission; losing the race means another
             # settle owns the broadcast, so this one only observes.
             if not await self._store.claim(s.key, retain_until_for_expiry(s.tx.expiry_height)):
-                return await self._observe(s, requirements, v.payer)
+                return await self._observe(s, requirements, v.payer, resumed=True)
             await self._store.prune(await self._rpc.get_block_count())  # drops claims past expiry + 10
 
             rejected = await self._submit(s, v.allow_high_fees)  # step 3
@@ -211,7 +211,7 @@ class ExactYcashFacilitatorScheme:
             raise RuntimeError(f"node returned txid {sent}, expected {s.txid}")
         return None
 
-    async def _observe(self, s: ResolvedPayment, req: PaymentRequirements, payer: str) -> SettleResponse:
+    async def _observe(self, s: ResolvedPayment, req: PaymentRequirements, payer: str, resumed: bool = False) -> SettleResponse:
         """Waits (bounded) for the policy depth; success, ``settlement_pending``, or expiry."""
         deadline = time.monotonic() + min(self._timeout, float(req.max_timeout_seconds))
         seen: int | None = None
@@ -219,7 +219,8 @@ class ExactYcashFacilitatorScheme:
             seen = await self._evidence(s)
             if seen is not None and confirmations_satisfy(seen, s.required):
                 return SettleResponse(success=True, transaction=s.txid, network=req.network, payer=payer,
-                                      extra={"status": "mempool" if seen < 0 else "confirmed", "confirmations": seen})
+                                      extra={"status": "mempool" if seen < 0 else "confirmed", "confirmations": seen,
+                                             **({"resumed": True} if resumed else {})})
             if time.monotonic() + self._poll >= deadline:
                 break
             await asyncio.sleep(self._poll)
@@ -229,7 +230,7 @@ class ExactYcashFacilitatorScheme:
                             f"the chain passed nExpiryHeight {s.tx.expiry_height} without the transaction", payer)
         return SettleResponse(success=False, error_reason=ERR_SETTLEMENT_PENDING,
                               error_message=f"awaiting {s.required} confirmation(s)", transaction=s.txid,
-                              network=req.network, payer=payer, extra={"status": "pending", "confirmations": seen})
+                              network=req.network, payer=payer, extra={"status": "pending", "confirmations": seen, **({"resumed": True} if resumed else {})})
 
     async def _evidence(self, s: ResolvedPayment) -> int | None:
         """−1 in the mempool, the depth when mined, None when not seen."""

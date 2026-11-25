@@ -1,0 +1,35 @@
+{
+  "name": "x402-ycash-chain-api",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A paid chain-data API for agents on Ycash (x402, transparent or shielded YEC per request), and the reference agent that pays it from a key file and a lightwalletd server, or from a Sapling key through x402-light",
+  "license": "MIT",
+  "type": "module",
+  "bin": { "x402-ycash-chain-api": "./dist/main.js", "x402-chain-agent": "./dist/agent/main.js" },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --dir test --exclude '**/devnet/**'",
+    "test:devnet": "vitest run --dir test/devnet --passWithNoTests --no-file-parallelism --testTimeout=600000 --hookTimeout=600000",
+    "start": "tsx src/main.ts",
+    "agent": "tsx src/agent/main.ts"
+  },
+  "dependencies": {
+    "@x402/core": "~2.28.0",
+    "@x402/express": "~2.28.0",
+    "@x402/fetch": "~2.28.0",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.7.1",
+    "x402-ycash-cli": "0.0.0",
+    "x402-ycash-mechanism": "0.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.13.4",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.2.7",
+    "x402-ycash-facilitator": "0.0.0"
+  }
+}

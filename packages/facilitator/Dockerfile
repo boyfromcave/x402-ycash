@@ -1,10 +1,10 @@
 # The x402 Ycash facilitator. Build from the repository root:
 #   docker build -f packages/facilitator/Dockerfile -t x402-ycash-facilitator .
 # Run against a node (see the README's "Facilitator" for every variable):
-#   docker run -p 4022:4022 -v x402-data:/data -e X402_NETWORK=ycash:mainnet \
+#   docker run -p 127.0.0.1:4022:4022 -v x402-data:/data -e X402_NETWORK=ycash:mainnet \
 #     -e X402_RPC_URL=http://node:8232 -e X402_RPC_USER=… -e X402_RPC_PASSWORD=… x402-ycash-facilitator
 
-FROM node:22-slim AS manifests
+FROM node:22-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS manifests
 WORKDIR /app
 # Every workspace manifest, so `npm ci` matches the lockfile; only two workspaces get installed.
 COPY package.json package-lock.json tsconfig.base.json ./
@@ -13,6 +13,7 @@ COPY packages/facilitator/package.json packages/facilitator/
 COPY packages/cli/package.json packages/cli/
 COPY examples/merchant-express/package.json examples/merchant-express/
 COPY examples/agent-client/package.json examples/agent-client/
+COPY examples/chain-api/package.json examples/chain-api/
 
 FROM manifests AS build
 RUN npm ci --workspace x402-ycash-mechanism --workspace x402-ycash-facilitator
@@ -24,7 +25,7 @@ FROM manifests AS deps
 RUN npm ci --omit=dev --workspace x402-ycash-mechanism --workspace x402-ycash-facilitator \
  && mkdir -p packages/ycash/node_modules packages/facilitator/node_modules
 
-FROM node:22-slim
+FROM node:22-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
 ENV NODE_ENV=production \
     X402_HOST=0.0.0.0 \
     X402_PORT=4022 \

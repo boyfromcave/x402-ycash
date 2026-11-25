@@ -18,20 +18,25 @@ and pool operators do nothing for them. YED is different: it depends on a propos
 upgrade that adds **post-quantum vaults**, YEC locked on chain under rules every node checks. Lock
 YEC in a vault to mint YED (`1 YED = $1`); burn the YED to get the YEC back.
 
-> **Status: in development.** YED runs on regtest and on a one-laptop devnet only. No activation
-> height is set on mainnet or testnet, the upgrade has not been adopted by the Ycash Foundation,
-> and there is no external audit.
+> **Status: in development.** YED runs on regtest and on a one-laptop devnet only (the project's
+> fast test network carries the vault upgrade but has no YED attestor set, so no YED there). No
+> activation height is set on mainnet or the public testnet, the upgrade has not been adopted by
+> the Ycash Foundation, and there is no external audit.
 
 - **What x402 does with YED:** pays YED per request and over YED payment channels, reading
   balances through the node's read-only `yed_*` RPCs. Every signature commits to the consensus
   branch ID of the *next* block, so a payment signed on the block before the upgrade activates
   still verifies after it. x402 does not touch the wYEC or nYEC bridges.
 - **Node it needs:** any `ycashd` for YEC; for YED, a `ycashd` built from the
-  `upgrade/quantum-vaults` branch of [ycash-dd](https://github.com/boyfromcave/ycash-dd) or
-  [ycash6](https://github.com/boyfromcave/ycash6) (this line joins `upgrade/vault` at release),
+  `upgrade/vault` branch of [ycash-dd](https://github.com/boyfromcave/ycash-dd) or
+  [ycash6](https://github.com/boyfromcave/ycash6) (the ycash6 pre-releases, `v6.22.0-beta2` on),
   speaking Yellowback `rpcversion` 9 (the scheme-visible post-quantum prefixes, decision D-9: ycash-dd and
   ycash6 6.22.x from that change on; an older node prints and takes the pre-D-9 post-quantum form, which
-  these SDKs refuse).
+  these SDKs refuse) or 10 (beta3: `getcoinbasetemplatefor`, `transparentPools`, input addresses for
+  post-quantum spends, the `gettransaction` fee, the `-ydf` default) or 11 (beta4: the v2 coinbase price
+  tag with a post-quantum payout key, fee payees that may be post-quantum, the bonded attestor set). The
+  SDKs use none of the 10 and 11 additions (x402 never mints, redeems or reads a price tag) and read
+  `rpcversion` only as a minimum, `FEES_RPC_VERSION` 8, so a 10 or 11 node needs no SDK change.
 - **Try it:** [Quick start on the devnet](#quick-start-on-the-devnet) below.
 
 The binding specs are in [`specs/`](specs/), language-neutral test vectors in
@@ -86,7 +91,8 @@ transaction that the node refuses only for exceeding `-maxtxfee` is resubmitted 
 packages/ycash/   the x402 mechanism (TypeScript, on @x402/core v2): tx, yed, channel, exact, batch, node, store, lwd
 packages/facilitator/  the standalone facilitator service: /verify, /settle, /supported, /healthz
 packages/cli/     the `x402-ycash` command: pay a route, open, list, close and refund channels
-examples/         merchant-express (an @x402/express server) and agent-client (an @x402/fetch agent)
+examples/         merchant-express (an @x402/express server), agent-client (an @x402/fetch agent) and
+                  chain-api (a paid chain-data API for agents, with its reference agent)
 light/            x402-light, the Rust Sapling light client for private agents
 python/           x402_ycash, the Python mirror of the SDK
 specs/            the binding specifications (x402 Foundation templates)
@@ -116,7 +122,7 @@ Four terminals, one command each, from the repository root of a
 [Yellowback workspace](https://github.com/boyfromcave/yellowback) checkout. The devnet is a local
 test network of five regtest nodes, run by the node repository's devnet script: `dd` uses
 ycash-dd, `6` ycash6. Point `YCASH_DD` (or `YCASH6`) at a node tree built from
-`upgrade/quantum-vaults` (otherwise the workspace's own `ycash-dd` / `ycash6` is used); its devnet
+`upgrade/vault` (otherwise the workspace's own `ycash-dd` / `ycash6` is used); its devnet
 activates the vault upgrade by itself, with Falcon active as on mainnet.
 
 ```
@@ -225,6 +231,14 @@ be used, with the same keys in camelCase; the environment wins over the file.
 | `X402_RATE_LIMIT`, `X402_RATE_LIMIT_WINDOW_MS` | `1200`, `60000` | Per client address, at most this many `/verify` + `/settle` requests per window (failed bearer attempts count); then `429`. |
 | `X402_TRUST_PROXY` | `0` | Reverse-proxy hops in front of the facilitator, so the limit applies to the client's address from `X-Forwarded-For`, not the proxy's. Leave `0` when clients connect directly. |
 | `X402_BODY_LIMIT`, `X402_LOG_LEVEL`, `X402_SHUTDOWN_TIMEOUT_MS`, `X402_NODE_WAIT_MS`, `X402_RPC_TIMEOUT_MS` | `512kb`, `info`, `30000`, `60000`, `30000` | |
+
+A second settle of a payment already claimed (a retry after `settlement_pending`, or a concurrent request
+carrying the same payment) never broadcasts again; it resumes observing and answers with `extra.resumed: true`.
+A server that serves one request per payment must not serve a request whose settle says `resumed`: under
+concurrency, every request carrying one payment verifies before any of them settles (the chain-data API
+claims payments before verify and refuses a resumed settle). `X402_TESTNET_PROFILE` (fast, slow or legacy,
+`ycash:testnet` only) makes the facilitator refuse to start on another testnet; `/healthz` then reports it as
+`testnetProfile` and answers 503 `profile_mismatch` if the node changes.
 
 ### Examples
 
@@ -347,6 +361,190 @@ scripts/light-agent.sh stop --data ~/.x402-light
   `sapling` stays opt-in on the facilitator (`X402_SHIELDED_METHODS`) and gated on mainnet
   (`X402_SAPLING_MAINNET_OK=1`) until it has run on mainnet ([runbook](docs/mainnet-runbook.md)).
 
+## Run the paid API
+
+`examples/chain-api` is a small API that sells chain data to agents, one request at a time, for transparent
+YEC over x402, and, with the shielded setup, the same reads paid privately in shielded YEC
+([Private routes](#private-routes-shielded-yec)). It is the first public demonstration (`docs/plans/x402-demonstrations.md` in the workspace,
+§3.2): on the fast testnet at `fastnet-x402.ycash.team`, where coins have no value.
+
+| Route | Price (D-10) | Answer |
+|---|---|---|
+| `GET /v1/tx/:txid` | 0.0001 YEC | the transaction decoded: inputs, outputs by script type, Sapling and Sprout counts, confirmations, fee |
+| `GET /v1/address/:address` | 0.0001 YEC | balance, received, unspent outputs (largest 100), the last 100 txids of the last 10,000 blocks, mempool activity |
+| `GET /v1/block/:id` | 0.0001 YEC | a block by height or hash: header, txids (first 100), `valuePools`, `transparentPools` (beta3 nodes), `chainSupply`, `blockfee` |
+| `GET /v1/chain` | 0.0001 YEC | tip, difficulty, network solution rate, upgrades, value pools, mempool size and fee rates |
+| `GET /v1/yellowback` | 0.0001 YEC | the vault upgrade's status, `vault_getinfo` and the YED reads; `active: false` with the reason where the network lacks it |
+| `POST /v1/broadcast` | 0.0001 YEC | relays `{"hex": "…"}` (at most 100,000 bytes) and answers its txid, or 422 with the node's reason |
+| `GET /`, `GET /pricing` | free | every route, price, parameter and payment kind, as JSON an agent reads |
+| `GET /healthz` | free | whether the API reaches its node (polled, never a node call per request) |
+
+What it does and does not do:
+
+- **It holds no key.** Payments go to `API_PAY_TO`, an address of a wallet kept elsewhere; on the fast testnet,
+  the faucet's own wallet, so spent coins flow back to the faucet. The facilitator holds no key either.
+- **Payment first.** Parameters are checked before anything else (a bad request is a 400, never a 402); the
+  facilitator verifies the payment before the node is read; the payment is settled only when the answer is
+  below 400, so a 404 (an unknown transaction), a 422 or a 503 is not charged.
+- **One payment buys one request.** The first request carrying a payment claims it in the API before the
+  facilitator verifies it; any other request with the same payment, while the first is in flight or after
+  it, gets **409 `payment_used`** (not 402, so an x402 client does not pay again by reflex). The claim is
+  released only when the payment never reached the data (the facilitator refused it or did not answer);
+  once the request reached the node the payment is used for `API_CLAIM_TTL_SECONDS` (2 hours, longer than a
+  payment's validity) even if the answer was an error: not charged, but not reusable either; sign a new
+  payment to retry. Across API processes, the facilitator marks a settle that did not claim the payment
+  (`extra.resumed`) and the API refuses it, so the buffered answer is withheld. After settlement the
+  facilitator's settlement store refuses the payment for good. The claim set holds at most
+  `API_MAX_CLAIMS` (100,000) payments; when full it refuses new ones with 503 rather than forget one.
+- **Settled at the mempool.** At 0.0001 YEC the payment is under the 0.001 YEC zero-confirmation cap
+  (`API_ZERO_CONF_CAP_ZAT`), so the answer comes about a second after the payment reaches the mempool; the
+  facilitator must allow it (`X402_CONFIRMATIONS_MIN=-1`). The risk of a double spend is the merchant's,
+  bounded by that cap.
+- **Bounded.** Unpaid requests (each 402 costs a challenge), paid attempts (each costs the facilitator a verify),
+  paid relays and the free routes have their own per-address limits per minute (`API_UNPAID_PER_MINUTE` 30,
+  `API_PAID_PER_MINUTE` 120, `API_RELAY_PER_MINUTE` 10, `API_FREE_PER_MINUTE` 120); at most
+  `API_MAX_INFLIGHT` (16) paid requests run at once (more get 503, nothing charged); every list in an answer is
+  cut at 100 entries; the address history looks back `API_HISTORY_WINDOW_BLOCKS` (10,000) blocks. An address
+  with more than 5,000 unspent outputs, transactions in that window or mempool entries is answered **422
+  `too_large`** (not charged; the payment is used, see above): ycashd's address index has no cheap count, so
+  the node still reads the entries once before the API refuses to ship them.
+- **Testnet only, and the fast one.** It refuses to start unless the node reports `testnetprofile` = `fast`
+  (the three testnets share `ycash:testnet`, D-6). Regtest needs `API_ALLOW_REGTEST=1`; mainnet is refused
+  until the X6 runbook has been run (D-9).
+- **Read-only node calls, by name.** Only stock reads (`getrawtransaction`, `getblock`, `getblockhash`,
+  `getblockchaininfo`, `getnetworksolps`, `getmempoolinfo`, `getrawmempool`, `getnetworkinfo`,
+  `getblockcount`, `getaddress*`), `vault_getinfo`, `yed_getinfo`, `yed_getprice`, `yed_getstats`, and
+  `sendrawtransaction` for the relay (high fees never allowed). Nothing a client sends picks a method or a URL.
+- **The relay acts before settlement.** `/v1/broadcast` hands the transaction to the node before the payment
+  is settled. If the relayed transaction spends the same input as the payment (or the payment is
+  double-spent in the meantime), the settlement fails and that relay was free; the answer is withheld, but
+  the transaction is on the network. Settling first would charge for transactions the node then refuses, so
+  the order stays. Any node relays for free, so nothing is lost but the 0.0001.
+- **The node needs `-txindex -insightexplorer`** (fees from the spent index, the address index). Without the
+  address index, `/v1/address` answers 503 before any payment; without `-txindex`, a confirmed transaction
+  outside the node's wallet is not found.
+
+Run it beside a node and a facilitator. On the testnet the API refuses to start, and `/healthz` fails,
+unless the facilitator's `/healthz` shows it enforces the fast profile (`X402_TESTNET_PROFILE=fast`): the
+option stays optional for every other facilitator user, this deployment requires it. Never expose the API
+port directly: put it behind the reverse proxy (Caddy) and publish it on loopback only
+(`docker run -p 127.0.0.1:4021:4021 …`); with `API_TRUST_PROXY=1` the limits count the right-most
+`X-Forwarded-For` entry, the one the proxy appends, so a client cannot choose its own address.
+
+```sh
+# the facilitator, settling at the mempool
+X402_NETWORK=ycash:testnet X402_TESTNET_PROFILE=fast X402_CONFIRMATIONS_MIN=-1 \
+X402_RPC_URL=http://127.0.0.1:18832 X402_RPC_COOKIE_FILE=$HOME/.ycash/testnet3/.cookie \
+  npm start -s -w x402-ycash-facilitator              # or the image x402-ycash-facilitator
+
+# the API on :4021, paid to the faucet's wallet
+X402_NETWORK=ycash:testnet API_PAY_TO=sm… FACILITATOR_URL=http://127.0.0.1:4022 \
+API_RPC_URL=http://127.0.0.1:18832 API_RPC_COOKIE_FILE=$HOME/.ycash/testnet3/.cookie \
+API_LINK_FAUCET=https://fastnet-x402.ycash.team/faucet API_LINK_LIGHTWALLETD=fastnet-lightwallet.ycash.team:443 \
+  npm start -s -w x402-ycash-chain-api                # or: docker build -f examples/chain-api/Dockerfile .
+```
+
+Other settings: `HOST` (default 127.0.0.1; the image binds 0.0.0.0), `PORT` (4021), `API_RPC_USER` and
+`API_RPC_PASSWORD` instead of the cookie, `API_RPC_TIMEOUT_MS`, `FACILITATOR_API_KEY`, `API_PRICE_ZAT` and
+`API_PRICE_BROADCAST_ZAT` (10000), `API_TRUST_PROXY` (reverse-proxy hops: 1 behind Caddy, so the limits count
+the client and not the proxy), `API_LINK_EXPLORER`, `API_LINK_SOURCE`. The node RPC needs only the read calls
+above and `sendrawtransaction`; without the private routes the API never calls a wallet RPC.
+
+### Private routes: shielded YEC
+
+With `API_ISSUED_REGISTRY` set, the API also sells every read route under `/v1/private/…`
+(`/v1/private/tx/:txid`, `/v1/private/address/:address`, `/v1/private/block/:id`, `/v1/private/chain`,
+`/v1/private/yellowback`; not the relay), paid with `exact` / `sapling-proof`: the 402 names a fresh
+diversified Sapling address and a memo for that one request; the client sends shielded YEC there with that
+memo and repeats the request with the txid; the facilitator, on the same wallet node, finds the note and
+checks memo, amount and depth, records the payment once and signs a receipt (`offer-receipt` in the
+`PAYMENT-RESPONSE` header), and only then does the API answer. `/pricing` lists the routes with `payment:
+"sapling-proof"` and the second kind. What differs from the transparent routes:
+
+- **The API's node must be the merchant's wallet.** Each 402 calls `z_getnewdiversifiedaddress` on
+  `API_SAPLING_BASE_ADDRESS` (a Sapling address whose spending key the node's wallet holds; checked with
+  `z_validateaddress` at startup); the facilitator (`X402_RECEIPT_KEY`, `X402_ISSUED_REGISTRY` = the same file
+  as `API_ISSUED_REGISTRY`, `X402_SHIELDED_METHODS=sapling-proof`) reads the notes on that node. On the x402
+  host the node holds the faucet's wallet already; the base address is one of its own, so what agents pay
+  privately stays apart from the faucet's balance.
+- **Paid upfront.** The payment is on chain before the request is answered, so a request answered with an
+  error (an unknown transaction, `too_large`) is still charged; parameters are checked before any address is
+  issued. If the facilitator does not see the note within `X402_SAPLING_NOTE_WAIT_MS` the answer is a 402 and
+  the same payment can be presented again for the same request until it expires (600 s).
+- **One payment, one request**, as for the transparent routes: the same payment again is 409, and the
+  facilitator's settlement store refuses it across API restarts (`duplicate_settlement`).
+- **Each unpaid private request issues an address.** `API_SHIELDED_MAX_OUTSTANDING` (1000) caps the issued
+  requests held at once (each held about 75 minutes); past it new private 402s fail until records expire.
+
+Settings: `API_ISSUED_REGISTRY`, `API_SAPLING_BASE_ADDRESS`, `API_SHIELDED_CONFIRMATIONS` (−1 the mempool to
+20, default 1; within the facilitator's range), `API_PRICE_SHIELDED_ZAT` (default `API_PRICE_ZAT`),
+`API_SHIELDED_MAX_OUTSTANDING`.
+
+## Pay it from an agent in five minutes
+
+You need Node.js 20 or newer and a checkout (`npm ci && npm run build`), or the CLI image
+(`docker build -f packages/cli/Dockerfile -t x402-ycash-cli .`; published images, by digest, come from the
+`images` workflow). No node: the agent reads its coins from the public light-wallet server.
+
+```sh
+# 1. a key, written to agent.wif (mode 0600); the command prints only the address
+node packages/cli/dist/main.js key new agent.wif --network ycash:testnet
+# 2. get testnet YEC for that address from the faucet (linked from /pricing), and wait for one block
+#    (the explorer shows it); the faucet pays one output, and over lightwalletd one coin buys one
+#    payment per block, so split it into ten coins of equal value, then wait for one more block
+node packages/cli/dist/main.js split --count 10 --wif-file agent.wif \
+  --lwd fastnet-lightwallet.ycash.team:443 --network ycash:testnet
+
+# 3. the reference agent: reads /pricing, then pays for the chain summary, the tip block, a transaction,
+#    its own address and the Yellowback state, at most 0.001 YEC in all (--budget, in zatoshis)
+node examples/chain-api/dist/agent/main.js https://fastnet-x402.ycash.team --wif-file agent.wif \
+  --lwd fastnet-lightwallet.ycash.team:443 --budget 100000
+
+# or one route with the CLI
+node packages/cli/dist/main.js pay https://fastnet-x402.ycash.team/v1/chain --network ycash:testnet \
+  --lwd fastnet-lightwallet.ycash.team:443 --wif-file agent.wif
+```
+
+With the image, mount a directory and run as yourself (the same for `split`): `docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/w"
+x402-ycash-cli key new /w/agent.wif --network ycash:testnet`, and `--entrypoint x402-chain-agent` with
+`--wif-file /w/agent.wif --reservations /w/reservations.json` for the agent.
+
+Honest limits:
+
+- **One coin per payment until the next block.** lightwalletd lists confirmed coins only, so each payment spends
+  a coin of its own and its change waits for a block; the fast testnet's blocks come in bursts. `split
+  --count N` (2 to 50 outputs, each at least 20,000 zatoshis, `--min-output` to raise it) turns the key's
+  confirmed coins into N equal coins to itself in one transaction; one block later the agent can pay N times
+  in a row. When it runs out, the agent stops with "no confirmed coin left; wait for a block or run split". A
+  payment the agent has signed holds its coins in the reservation file until it expires, so runs do not
+  double-spend each other. `fastnet-lightwallet.ycash.team:443` serves native gRPC over TLS.
+- **Network fees are on top** of the prices and of `--budget`, which counts what the agent pays the API.
+  `--max-payment` (default 20,000 zatoshis) caps any one payment, and the agent pays only the `payTo` that
+  `/pricing` names, in YEC, on the configured network.
+- **The key file is plaintext.** It is protected by its mode (the CLI refuses a file group or others can read)
+  and by your machine. Use testnet keys only.
+- **Testnet coins only.** This is a demonstration; the mainnet service waits for the X6 runbook.
+
+**Privately, from just a Sapling key.** A light-wallet server holds no Sapling wallet, so the agent pays the
+private routes through the Rust light client ([Private agents](#private-agents-a-sapling-key-and-lightwalletd)):
+one Sapling spending key, no node, no WIF.
+
+```sh
+# 1. a Sapling key (a secret-extended-key-… from z_exportkey, or a BIP-39 phrase) in a 0600 file; the light
+#    client imports it and prints the URL the agent takes (it keeps syncing in the background)
+X402_LIGHT_KEY_FILE=agent.zkey scripts/light-agent.sh start --data ~/.x402-light \
+  --lwd fastnet-lightwallet.ycash.team:443 --network testnet --birthday <a recent height>
+# 2. testnet YEC for its Sapling address (printed as "imported: ytestsapling1…") from the faucet
+# 3. the private tour: the same five reads under /v1/private, each paid in shielded YEC
+node examples/chain-api/dist/agent/main.js https://fastnet-x402.ycash.team \
+  --sapling-builder http://127.0.0.1:PORT --budget 100000
+scripts/light-agent.sh stop --data ~/.x402-light
+```
+
+The light client spends confirmed notes only: after a payment its change is spendable one block later, so the
+agent waits for a spendable note before each payment (`--wait`, default 300 s) and syncs first. Each private
+payment also pays the network fee (10,000 zatoshis, ZIP 317), on top of `--budget`.
+
 ## CLI
 
 `packages/cli` is the `x402-ycash` command (`npm start -s -w x402-ycash-cli -- <args>` with absolute paths, or `x402-ycash`
@@ -358,14 +556,19 @@ x402-ycash channel open <url> [--deposit ZAT]    open a channel on the route (pa
 x402-ycash channel status [channelId]            every channel in the store, or one, against the node
 x402-ycash channel close <url> [channelId]       the client's close at the charged total; the server broadcasts it
 x402-ycash channel refund <channelId> [--to A]   the client alone, from the refund height t
+x402-ycash split --count N                       the --wif-file key's confirmed coins into N equal outputs to itself (2..50)
+x402-ycash key new <FILE>                        write a new transparent key as WIF (mode 0600) and print its address
+x402-ycash key address                           the address of --wif-file
 x402-ycash yed-key new <FILE>                    write a new Falcon YED key (plaintext, mode 0600) and print its address
 x402-ycash yed-key address                       the YED address of --yed-key-file
 ```
 
 It reads its node from `--devnet devnet.json [--node N]` or `--rpc-url` with `--rpc-user` and
 `--rpc-password` (or `--rpc-cookie`), or a lightwalletd server from `--lwd host:port` (with `--wif`;
-see "Light agents" above), and pays with `--wif` (plus `--yed-key-file` for YED) or the node's wallet; the same
-settings come from `X402_DEVNET_JSON`, `X402_RPC_*`, `X402_LWD_URL`, `X402_WIF`, `X402_SHIELDED_FROM`,
+see "Light agents" above), and pays with `--wif-file` (a WIF key in a file that only its owner can read: a
+looser mode is refused, and the key is never printed) or `--wif` (the key on the command line, visible in the
+process list), plus `--yed-key-file` for YED, or the node's wallet; the same
+settings come from `X402_DEVNET_JSON`, `X402_RPC_*`, `X402_LWD_URL`, `X402_WIF_FILE`, `X402_WIF`, `X402_SHIELDED_FROM`,
 `X402_CHANNEL_STORE` (default `~/.x402-ycash/channels.json`, a wallet file: it holds channel keys),
 `X402_MAX_PAYMENT_ZAT`, `X402_MAX_DEPOSIT_ZAT` (`--max-deposit`, the most one channel may lock;
 default 1 YEC), `X402_MAX_CLOSE_FEE_ZAT` (`--max-close-fee`, the largest server `closeFee` a channel

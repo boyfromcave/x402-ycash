@@ -54,7 +54,7 @@ describe("settle", () => {
     const req = policy(3);
     expect((await facilitator.settle(paymentPayload(req, hex), req)).errorReason).toBe(exact.ERR_SETTLEMENT_PENDING);
     node.mine(4);
-    expect((await facilitator.settle(paymentPayload(req, hex), req)).extra).toEqual({ status: "confirmed", confirmations: 4 });
+    expect((await facilitator.settle(paymentPayload(req, hex), req)).extra).toEqual({ status: "confirmed", confirmations: 4, resumed: true });
   });
 
   it("observes while it waits: a block found during the wait settles the first call", async () => {

@@ -1,5 +1,83 @@
 # Regression of record
 
+## 2026-11-19: beta4 (rpcversion 11), both C++ lines
+
+Every devnet suite against the beta4 consensus line of both C++ lines (tag v2, post-quantum fee payees,
+SCHEMA_VERSION 16), one devnet at a time, on the vault-upgrade devnet (`scripts/devnet.sh up <line> <seed>`,
+upgrade `6d5b7a31` active at 103, Falcon active):
+
+| | |
+|---|---|
+| x402-ycash | `upgrade/vault` at `221cb3a` plus this branch (`up/b4-compat`) |
+| 6.22 line | ycash6 #145 head `6ff5b5c4e` (merged as `d50e3b843`), `rpcversion` 11; seed 611 |
+| v4.5.0 line | ycash-dd #207 head `de2e5928b` (merged as `c0130e4fb`), `rpcversion` 11; seed 613 |
+| toolchain | node 23.3.0, vitest 3.2.7, the x402 Python venv |
+
+| Suite | Tests | ycash6 beta4 | ycash-dd beta4 |
+|---|---|---|---|
+| unit, `npm test` (all workspaces) | 986 | pass (no node) | |
+| package devnet, `npm run test:devnet` with `X402_X4M=1` | 74 | 59 pass, 15 skipped | 59 pass, 15 skipped |
+| chain-api devnet | 9 | 8 pass, 1 skipped | 8 pass, 1 skipped |
+| `test:devnet:http` (merchant-express) | 30 | 20 pass, 10 skipped (`viewkey` rerun) | 20 pass, 10 skipped (`yed.http` rerun) |
+| Python `python/tests/devnet` | 8 | pass (after the test fix below) | pass |
+
+Skipped as in the beta3 record (`yed_falcon`, `kogany`, one `yed_pq` case), plus `lwd.http` and `light.http`,
+which need a lightwalletd-dd that accepts `rpcversion` 11 (beta4 item 10, part A) and were not run.
+
+Two first-run failures passed on a rerun on the same devnet, with no change. Neither involves beta4 code:
+- `viewkey.http` (ycash6): node A's restart caught up to 160 of 486 blocks and then waited out the
+  120 s limit. The test's own comment describes the same 6.x catch-up stall.
+- `yed.http` (ycash-dd): the 150-request YED channel got `invalid_payment_requirements` after its first
+  paid request.
+
+Found and fixed (test only): `python/tests/devnet/test_interop.py` expected a resumed settlement's `extra`
+without `"resumed": True`. The SDK added that key with single-use payments (#26), and the unit tests
+already expect it.
+
+## 2026-11-16: beta3 (rpcversion 10), both C++ lines
+
+Every suite against the beta3 release candidates of both C++ lines, one devnet at a time, on the vault-upgrade
+devnet (`scripts/devnet.sh up <line> <seed>`, upgrade `6d5b7a31` active, Falcon active):
+
+| | |
+|---|---|
+| x402-ycash | `upgrade/vault` at `4681d1b` plus the two test fixes below (branch `up/b3-compat`) |
+| 6.22 line | ycash6 `up/b3-cut` at `611469fd2`: `Ycash Daemon version v6.22.0-beta3-611469fd2`, `rpcversion` 10; seed 587 |
+| v4.5.0 line | ycash-dd `up/b3-cut` at `7084dbabf`: `v4.5.0-7084dbabf`, `rpcversion` 10; seed 589 |
+| lightwalletd | lightwalletd-dd `up/b3-clients-final` at `345da1e` (accepts `rpcversion` 9 and 10), `--yellowback` |
+| toolchain | node 23.3.0, vitest 3.2.7, Python 3.13.2 (the workspace `.venv`), x402-light `cargo build --release` |
+
+| Suite | Tests | ycash6 beta3 | ycash-dd beta3 |
+|---|---|---|---|
+| unit, `npm test` (all workspaces) | 958 | pass (no node) | |
+| unit, `pytest python/tests/unit` | 600 | pass (no node) | |
+| package devnet, `npm run test:devnet` with `X402_X4M=1` | 74 | 59 pass, 15 skipped (`yed_pq` rerun after its fix) | 59 pass, 15 skipped |
+| `test:devnet:http`, all six files (lightwalletd and x402-light set) | 30 | 30 pass (`lwd`, `light` rerun after the fixes below) | 30 pass, first time |
+| Python `python/tests/devnet` | 8 | pass | pass |
+
+The 15 skipped are by design: `yed_falcon` (9) runs only when the Falcon height is at least 60 blocks
+above the tip (this devnet activates Falcon), `kogany` (5) needs `X402_KOGANY_JSON`
+(`scripts/kogany-leg.sh`), and one `yed_pq` case runs only before the Falcon height.
+
+Found and fixed (tests only; no SDK change):
+
+- `yed_pq`'s first case required `rpcversion` to be exactly 9; it now checks at least 9, as the SDKs
+  do (`FEES_RPC_VERSION` 8 is the only version the SDKs read). Against a beta3 node it failed with
+  `expected 10 to be 9`.
+- `light.http` did not tell x402-light the devnet's vault activation height, so its sync stopped at
+  the first Vault block (`branch id mismatch … lightwalletd says Vault (6d5b7a31), our parameters say
+  Canopy`). It now passes `X402_LIGHT_UPGRADES=vault=<h>` from `getblockchaininfo`. Not a beta3 change:
+  every vault-upgrade devnet has it, and the suite had not run on one since this record's 2026-10-04 run.
+
+Not a defect of x402: lightwalletd-dd `upgrade/vault` (`6b7a28f`) accepts exactly `rpcversion` 9, so
+against a beta3 node its Yellowback service does not start and `lwd.http`'s YED case fails (the light
+agent cannot read the Falcon height). With lightwalletd-dd `up/b3-clients-final` it passes.
+
+Not run: `light/scripts/regtest.sh` (its own devnet) and the kogany leg (`scripts/kogany-leg.sh`,
+which needs a `koganyd` build).
+
+## 2026-10-04: both lines, before the vault upgrade
+
 Every devnet suite on both node lines, run one devnet at a time on 2026-10-04, now including the
 shielded `sapling` suites (`light.http`, `sapling.http`) and the light client's own regtest test.
 Each line is a fresh light five-node devnet (`scripts/devnet.sh up <line> <seed>`), with the suites
@@ -13,7 +91,7 @@ transaction vectors in `ycash-dd-vault.json` and the devnet suites' Vault-branch
 rerun of this record on that line has not been written up here. The light client's regtest test brings up its own devnet
 (`light/scripts/regtest.sh`), so it ran after that devnet was down.
 
-## What was tested
+### What was tested
 
 | | |
 |---|---|
@@ -37,7 +115,7 @@ python/.venv/bin/python -m pytest python/tests/devnet          # test_interop, t
 X402_LIGHT_LWD_BIN=<lightwalletd-dd> X402_LIGHT_PARAMS=<params dir> light/scripts/regtest.sh <line> <seed>
 ```
 
-## Results
+### Results
 
 Durations are wall time for the whole command (vitest start-up and the suite's own setup
 included); the HTTP files are vitest's per-file times inside the one `test:devnet:http` command.
@@ -70,7 +148,7 @@ The 6.21.0 line still takes longer for most suites (its Sapling proving and bloc
 slower on this machine). Other agents' devnets (two eight-node yew-core devnets and a ycash6 one)
 ran on the machine throughout, so durations are looser than in the previous record.
 
-## The one failure: v4.5.0 drops peers that relay expired transactions, and the mesh split
+### The one failure: v4.5.0 drops peers that relay expired transactions, and the mesh split
 
 The first full run on v4.5.0 (seed 371) passed every package suite and four of the six HTTP files,
 then failed `sapling.http`'s last test and all of `viewkey.http` with `timed out waiting for
@@ -96,7 +174,7 @@ expired transactions to its peers is ordinary on a regtest that mines this fast.
 suite's `Devnet.mine` (`python/tests/devnet/test_interop.py`) waits only for the pool and the stock
 node and has no such heal; it passed, running last.
 
-## A run lost to a port-seed collision
+### A run lost to a port-seed collision
 
 The second v4.5.0 run (seed 371 again) was cut off during `x4m`: the parallel review chunk
 (`x402-spendreview`) was also given seed 371, started its devnet on the same ports, and its
@@ -104,7 +182,7 @@ cleanup stopped this devnet's nodes (all five logged a clean shutdown at the sam
 record above uses seeds 391 and 393 instead. Not a test defect; seeds handed to parallel chunks
 must differ.
 
-## Notes
+### Notes
 
 - The OP-3 case (one payment mined through the yolo stratum pool) ran on both lines (2 stratum
   blocks each).

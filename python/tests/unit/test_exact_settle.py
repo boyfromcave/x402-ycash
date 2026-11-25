@@ -56,7 +56,7 @@ async def test_block_policies_pend_then_settle_without_rebroadcast(c):
     assert first.transaction == txid(hex_tx) and first.extra == {"status": "pending", "confirmations": -1}
     node.mine()
     retry = await settle(f, hex_tx, policy(c))
-    assert retry.success and retry.payer == payer.address and retry.extra == {"status": "confirmed", "confirmations": 1}
+    assert retry.success and retry.payer == payer.address and retry.extra == {"status": "confirmed", "confirmations": 1, "resumed": True}
     assert sends(node) == 1
 
 
@@ -66,7 +66,7 @@ async def test_reports_the_actual_depth():
     hex_tx, _ = standard_payment(node, payer, merchant.address)
     assert (await settle(f, hex_tx, policy(3))).error_reason == C.ERR_SETTLEMENT_PENDING
     node.mine(4)
-    assert (await settle(f, hex_tx, policy(3))).extra == {"status": "confirmed", "confirmations": 4}
+    assert (await settle(f, hex_tx, policy(3))).extra == {"status": "confirmed", "confirmations": 4, "resumed": True}
 
 
 async def test_observes_while_it_waits():
@@ -185,6 +185,9 @@ async def test_upstream_async_facilitator_routes_to_the_scheme():
     assert r.success and r.extra == {"status": "mempool", "confirmations": -1}
     dup = await fac.verify(payment_payload(req, hex_tx), req)
     assert dup.invalid_reason == C.ERR_DUPLICATE_SETTLEMENT
+    # A second settle of the claimed txid resumes observing and says so (extra.resumed).
+    again = await fac.settle(payment_payload(req, hex_tx), req)
+    assert again.success and again.extra == {"status": "mempool", "confirmations": -1, "resumed": True}
 
 
 def test_upstream_sync_facilitator():

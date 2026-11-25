@@ -70,9 +70,13 @@ describe("exact on Ycash through x402Client / x402ResourceServer / x402Facilitat
     });
     const payload = await client.createPaymentPayload(await server.createPaymentRequiredResponse(accepts, resource));
     const accepted = server.findMatchingRequirements(accepts, payload)!;
-    expect((await server.settlePayment(payload, accepted)).success).toBe(true);
+    const first = await server.settlePayment(payload, accepted);
+    expect(first.success).toBe(true);
+    expect(first.extra?.resumed).toBeUndefined(); // the settle that claimed the payment
     expect(await server.verifyPayment(payload, accepted)).toMatchObject({ isValid: false, invalidReason: "duplicate_settlement" });
-    expect((await server.settlePayment(payload, accepted)).success).toBe(true);
+    const again = await server.settlePayment(payload, accepted);
+    expect(again.success).toBe(true);
+    expect(again.extra).toMatchObject({ resumed: true }); // a resumed settle says so
     expect(node.calls.filter((c) => c === "sendrawtransaction")).toHaveLength(1);
   });
 

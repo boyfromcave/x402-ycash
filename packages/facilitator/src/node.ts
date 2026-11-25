@@ -37,8 +37,21 @@ export class ChainMismatchError extends Error {
   }
 }
 
-export function assertChain(network: YcashNetwork, caps: NodeCapabilities): void {
+export function assertChain(network: YcashNetwork, caps: NodeCapabilities, testnetProfile?: string): void {
   if (caps.chain !== CHAIN_OF_NETWORK[network]) throw new ChainMismatchError(network, caps.chain);
+  if (testnetProfile !== undefined && caps.testnetProfile !== testnetProfile) throw new TestnetProfileMismatchError(testnetProfile, caps.testnetProfile);
+}
+
+/** The node runs another testnet than the configured profile (the three share chain "test"). */
+export class TestnetProfileMismatchError extends ChainMismatchError {
+  constructor(
+    readonly expected: string,
+    readonly reported: string | undefined,
+  ) {
+    super(YCASH_TESTNET, "test");
+    this.message = `the testnet profile must be "${expected}" but the node reports ${reported === undefined ? "none (an older node, or not -testnet)" : `"${reported}"`}`;
+    this.name = "TestnetProfileMismatchError";
+  }
 }
 
 /** The minimal node surface the service itself uses (schemes take the full YcashRpc). */
@@ -54,12 +67,13 @@ export async function waitForNode(
   waitMs: number,
   log: Logger,
   sleep: (ms: number) => Promise<void> = ms => new Promise(r => setTimeout(r, ms)),
+  testnetProfile?: string,
 ): Promise<NodeCapabilities> {
   const deadline = Date.now() + waitMs;
   for (let attempt = 1; ; attempt++) {
     try {
       const caps = await rpc.capabilities();
-      assertChain(network, caps);
+      assertChain(network, caps, testnetProfile);
       return caps;
     } catch (e) {
       if (e instanceof ChainMismatchError || Date.now() >= deadline) throw e;

@@ -1,6 +1,6 @@
 # Mainnet runbook (X6)
 
-For the owner. This is the first run of x402 payments on Ycash mainnet: a YEC `exact` payment and a
+For the Yellowback lead architect. This is the first run of x402 payments on Ycash mainnet: a YEC `exact` payment and a
 short YEC channel on each node line, with small amounts, then shielded payments. YED comes later
 (below). Nothing here changes a node. Every step can be stopped, and
 [Roll back](#roll-back) undoes it.

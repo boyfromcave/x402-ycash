@@ -1,0 +1,99 @@
+# images: build the three x402-ycash service images and push them to ghcr.io/<owner>/ with build
+# provenance, tagged by commit, and print each one's digest (x402 demonstrations note, decision D-5).
+#
+#   x402-ycash-facilitator  the facilitator (packages/facilitator/Dockerfile)
+#   x402-ycash-chain-api    the paid chain-data API (examples/chain-api/Dockerfile)
+#   x402-ycash-cli          the paying CLI and the reference agent (packages/cli/Dockerfile)
+#
+# It runs only when started by hand, from upgrade/vault, as ycash-infra's image jobs do. Deploys
+# happen elsewhere (ycash-infra takes the printed digests); this job only publishes and prints.
+# No image holds a key, password or token: keys are mounted at run time. The packages must be made
+# public once (package settings) for anonymous pulls.
+name: images
+on:
+  workflow_dispatch: {}
+permissions: {}
+concurrency:
+  group: images-${{ github.sha }}
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.ref == 'refs/heads/upgrade/vault'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: facilitator
+            file: packages/facilitator/Dockerfile
+            description: The x402 facilitator for Ycash (verify and settle YEC and YED payments against a node). Holds no key.
+          - name: chain-api
+            file: examples/chain-api/Dockerfile
+            description: A paid chain-data API for agents on Ycash, paid per request in YEC over x402. Holds no key.
+          - name: cli
+            file: packages/cli/Dockerfile
+            description: The x402-ycash paying CLI and the chain-data API's reference agent. Keys are mounted at run time.
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    env:
+      REPO_OWNER: ${{ github.repository_owner }}
+      SHA: ${{ github.sha }}
+      NAME: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: the tag
+        id: meta
+        run: |
+          set -euo pipefail
+          owner=$(echo "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')
+          {
+            echo "image=ghcr.io/$owner/x402-ycash-$NAME"
+            echo "tag=ghcr.io/$owner/x402-ycash-$NAME:${SHA:0:12}"
+          } >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: build and push
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: ${{ steps.meta.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=x402-ycash-${{ matrix.name }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=MIT
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.meta.outputs.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - name: digest
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          echo "image: $IMAGE@$DIGEST"
+          {
+            echo "## $NAME at $SHA"
+            echo
+            echo "- tag: \`$TAG\`"
+            echo "- by digest (what a deployment takes): \`$IMAGE@$DIGEST\`"
+            echo "- verify: \`gh attestation verify oci://$IMAGE@$DIGEST -R $GITHUB_REPOSITORY\`"
+          } >> "$GITHUB_STEP_SUMMARY"

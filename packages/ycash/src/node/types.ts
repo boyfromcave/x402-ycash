@@ -11,6 +11,11 @@ export interface NodeCapabilities {
   /** The `yed_*` RPCs answer (`-experimentalfeatures -yellowback`); a stock node gives -32601. */
   yellowback: boolean;
   chain: string;
+  /**
+   * `getblockchaininfo.testnetprofile` on a testnet node (fast, slow or legacy: the three testnets
+   * share chain "test"); absent on mainnet, regtest and older nodes.
+   */
+  testnetProfile?: string;
 }
 
 export interface NetworkInfo {
@@ -23,6 +28,8 @@ export interface NetworkInfo {
 export interface BlockchainInfo {
   /** "main", "test" or "regtest". */
   chain: string;
+  /** On a testnet node only: the profile it runs (fast, slow or legacy). */
+  testnetprofile?: string;
   blocks: number;
   headers: number;
   bestblockhash: string;
